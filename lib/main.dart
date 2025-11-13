@@ -1,122 +1,280 @@
+import 'package:absensimassal/pages/login.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-void main() {
+// Import halaman yang diperlukan
+// import 'pages/join_organization_screen.dart';
+// import 'pages/main_dashboard.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Supabase.initialize(
+    url: 'https://oxkuxwkehinhyxfsauqe.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94a3V4d2tlaGluaHl4ZnNhdXFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc5NDYxOTMsImV4cCI6MjA3MzUyMjE5M30.g3BjGtZCSFxnBDwMWkaM2mEcnCkoDL92fvTP_gUgR20',
+  );
+  
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      debugShowCheckedModeBanner: false,
+      title: 'Absensi',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6366F1)),
+        useMaterial3: true,
+        fontFamily: 'Roboto',
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const SplashScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _fadeAnimation;
+  late Animation<double> _rotateAnimation;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  @override
+  void initState() {
+    super.initState();
+    
+    // Initialize animations
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+    
+    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeOutBack,
+      ),
+    );
+    
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeIn,
+      ),
+    );
+    
+    _rotateAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeInOut,
+      ),
+    );
+    
+    _animationController.forward();
+    _navigateToNextScreen();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkMembershipAndNavigate() async {
+    if (!mounted) return;
+
+    final session = Supabase.instance.client.auth.currentSession;
+
+    // Jika tidak ada session, arahkan ke Login
+    if (session == null) {
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
+      );
+      return;
+    }
+
+    try {
+      final userId = session.user.id;
+      
+      // Check apakah user sudah join organization
+      final memberResponse = await Supabase.instance.client
+          .from('organization_members')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      if (memberResponse != null) {
+        // User sudah punya organization, ke Dashboard
+        // TODO: Uncomment dan sesuaikan dengan nama class Dashboard Anda
+        // Navigator.of(context).pushReplacement(
+        //   MaterialPageRoute(builder: (context) => const MainDashboard()),
+        // );
+        
+        // Sementara ke Login (ganti nanti)
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
+        );
+        
+        debugPrint('✅ User has organization - should navigate to Dashboard');
+      } else {
+        // User belum punya organization, ke Join Organization
+        // TODO: Uncomment dan sesuaikan dengan nama class Join Organization Anda
+        // Navigator.of(context).pushReplacement(
+        //   MaterialPageRoute(builder: (context) => const JoinOrganizationScreen()),
+        // );
+        
+        // Sementara ke Login (ganti nanti)
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
+        );
+        
+        debugPrint('⚠️ User has no organization - should navigate to Join Organization');
+      }
+    } catch (e) {
+      debugPrint('❌ Error checking organization membership: $e');
+      
+      if (!mounted) return;
+      
+      // Jika error, arahkan ke Join Organization untuk aman
+      // Navigator.of(context).pushReplacement(
+      //   MaterialPageRoute(builder: (context) => const JoinOrganizationScreen()),
+      // );
+      
+      // Sementara ke Login
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
+      );
+    }
+  }
+
+  Future<void> _navigateToNextScreen() async {
+    // Tampilkan splash selama 2.5 detik
+    await Future.delayed(const Duration(milliseconds: 2500));
+    
+    if (!mounted) return;
+    
+    // Check membership dan navigate
+    await _checkMembershipAndNavigate();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Color(0xFF6366F1),
+              Color(0xFF8B5CF6),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(
+          child: FadeTransition(
+            opacity: _fadeAnimation,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Animated Logo
+                ScaleTransition(
+                  scale: _scaleAnimation,
+                  child: RotationTransition(
+                    turns: _rotateAnimation,
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(30),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 30,
+                            offset: const Offset(0, 15),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.fingerprint,
+                        size: 70,
+                        color: Color(0xFF6366F1),
+                      ),
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 40),
+                
+                // App Name
+                const Text(
+                  'ABSENSI',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 8,
+                  ),
+                ),
+                
+                const SizedBox(height: 12),
+                
+                // Tagline
+                Text(
+                  'Sistem Absensi Modern',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withOpacity(0.9),
+                    letterSpacing: 2,
+                  ),
+                ),
+                
+                const SizedBox(height: 60),
+                
+                // Loading Indicator
+                SizedBox(
+                  width: 50,
+                  height: 50,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Colors.white.withOpacity(0.8),
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 20),
+                
+                // Loading Text
+                Text(
+                  'Memuat...',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withOpacity(0.8),
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
