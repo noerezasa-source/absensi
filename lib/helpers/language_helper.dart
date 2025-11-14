@@ -10,16 +10,39 @@ class LanguageHelper {
   static const String indonesian = 'id';
   static const String english = 'en';
   
+  // Default language
+  static const String defaultLanguage = indonesian; // English sebagai default
+  
+  static String _currentLanguage = defaultLanguage;
+  
+  // ValueNotifier untuk notify perubahan bahasa ke semua halaman
+  static final ValueNotifier<String> languageNotifier = ValueNotifier<String>(defaultLanguage);
+  
+  static String get currentLanguage => _currentLanguage;
+  
   // Get saved language
   static Future<String> getSavedLanguage() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_languageKey) ?? indonesian; // Default to Indonesian
+    final savedLang = prefs.getString(_languageKey);
+    
+    if (savedLang != null) {
+      _currentLanguage = savedLang;
+      languageNotifier.value = savedLang;
+      return savedLang;
+    }
+    
+    // If no saved language, use default
+    _currentLanguage = defaultLanguage;
+    languageNotifier.value = defaultLanguage;
+    return defaultLanguage;
   }
   
   // Save language
   static Future<void> saveLanguage(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_languageKey, languageCode);
+    _currentLanguage = languageCode;
+    languageNotifier.value = languageCode;
   }
   
   // Get all translations
@@ -104,6 +127,98 @@ class LanguageHelper {
       'en': 'Already have an Account? ',
     },
     
+    // Join Organization Screen
+    'join_org_welcome': {
+      'id': 'Selamat Datang',
+      'en': 'Welcome',
+    },
+    'join_org_title': {
+      'id': 'Kode Organisasi',
+      'en': 'Organization Code',
+    },
+    'join_org_subtitle': {
+      'id': 'Masukkan kode undangan yang diberikan oleh HR atau admin Anda',
+      'en': 'Enter the invitation code provided by your HR or admin',
+    },
+    'join_org_input_hint': {
+      'id': 'MASUKKAN-KODE',
+      'en': 'ENTER-CODE',
+    },
+    'join_org_info': {
+      'id': 'Tanyakan HR atau admin organisasi untuk kode undangan',
+      'en': 'Ask your HR or organization admin for the invitation code',
+    },
+    'join_org_button': {
+      'id': 'Gabung Organisasi',
+      'en': 'Join Organization',
+    },
+    'join_org_button_short': {
+      'id': 'Bergabung',
+      'en': 'Join',
+    },
+    'join_org_logout': {
+      'id': 'Keluar',
+      'en': 'Logout',
+    },
+    'join_org_logout_title': {
+      'id': 'Konfirmasi Keluar',
+      'en': 'Confirm Logout',
+    },
+    'join_org_logout_message': {
+      'id': 'Apakah Anda yakin ingin keluar?',
+      'en': 'Are you sure you want to logout?',
+    },
+    'join_org_cancel': {
+      'id': 'Batal',
+      'en': 'Cancel',
+    },
+    'join_org_continue': {
+      'id': 'Lanjutkan',
+      'en': 'Continue',
+    },
+    
+    // Join Organization Success & Error Messages
+    'join_org_success_title': {
+      'id': 'Berhasil Bergabung',
+      'en': 'Successfully Joined',
+    },
+    'join_org_success_message': {
+      'id': 'Anda telah bergabung dengan\n{org}',
+      'en': 'You have joined\n{org}',
+    },
+    'join_org_already_member': {
+      'id': 'Anda sudah tergabung di {org}',
+      'en': 'You are already a member of {org}',
+    },
+    'join_org_enter_code': {
+      'id': 'Silakan masukkan kode undangan',
+      'en': 'Please enter invitation code',
+    },
+    'join_org_error': {
+      'id': 'Gagal bergabung dengan organisasi',
+      'en': 'Failed to join organization',
+    },
+    'join_org_invalid_code': {
+      'id': 'Kode undangan tidak valid',
+      'en': 'Invalid invitation code',
+    },
+    'join_org_already_joined': {
+      'id': 'Anda sudah tergabung di organisasi ini',
+      'en': 'You are already a member of this organization',
+    },
+    'join_org_not_authenticated': {
+      'id': 'Pengguna tidak terautentikasi',
+      'en': 'User not authenticated',
+    },
+    'join_org_logout_failed': {
+      'id': 'Gagal keluar',
+      'en': 'Failed to logout',
+    },
+    'join_org_dashboard_todo': {
+      'id': 'MainDashboard belum dibuat',
+      'en': 'MainDashboard not yet created',
+    },
+    
     // Validation Messages
     'email_required': {
       'id': 'Email harus diisi',
@@ -182,8 +297,8 @@ class LanguageHelper {
       'en': 'Login successful! User already has an organization.',
     },
     'signup_success_title': {
-      'id': 'Pendaftaran Berhasil! 🎉',
-      'en': 'Registration Successful! 🎉',
+      'id': 'Pendaftaran Berhasil',
+      'en': 'Registration Successful',
     },
     'signup_success_message': {
       'id': 'Akun Anda telah berhasil dibuat.\nSilakan masuk untuk melanjutkan.',
@@ -217,7 +332,7 @@ class LanguageHelper {
 
 // Simple helper method to get translation with current language
 class AppLanguage {
-  static String _currentLang = LanguageHelper.indonesian;
+  static String _currentLang = LanguageHelper.defaultLanguage;
   
   static Future<void> init() async {
     _currentLang = await LanguageHelper.getSavedLanguage();
