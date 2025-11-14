@@ -1,6 +1,7 @@
 import 'package:absensimassal/pages/login.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../helpers/language_helper.dart'; // Import language helper
 
 class ModernSignupScreen extends StatefulWidget {
   const ModernSignupScreen({super.key});
@@ -113,22 +114,22 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
       
       if (errorString.contains('already registered') ||
           errorString.contains('user_already_exists')) {
-        return 'Email sudah terdaftar';
+        return AppLanguage.tr('email_already_registered');
       }
       if (errorString.contains('invalid email')) {
-        return 'Format email tidak valid';
+        return AppLanguage.tr('email_invalid');
       }
       if (errorString.contains('weak password')) {
-        return 'Password terlalu lemah';
+        return AppLanguage.tr('weak_password');
       }
       if (errorString.contains('network') ||
           errorString.contains('connection')) {
-        return 'Kesalahan koneksi jaringan';
+        return AppLanguage.tr('network_error');
       }
       
-      return 'Terjadi kesalahan saat mendaftar';
+      return AppLanguage.tr('signup_error');
     } catch (e) {
-      return 'Terjadi kesalahan saat mendaftar';
+      return AppLanguage.tr('signup_error');
     }
   }
 
@@ -139,7 +140,7 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     if (!_agreeToTerms) {
-      _showSnackBar('Anda harus menyetujui syarat dan ketentuan', false);
+      _showSnackBar(AppLanguage.tr('terms_required'), false);
       return;
     }
 
@@ -180,7 +181,7 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
         _showSuccessDialog();
       } else {
         if (!mounted) return;
-        _showSnackBar('Gagal membuat akun', false);
+        _showSnackBar(AppLanguage.tr('failed_create_account'), false);
       }
     } catch (e) {
       if (!mounted) return;
@@ -246,9 +247,9 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                const Text(
-                  'Pendaftaran Berhasil! 🎉',
-                  style: TextStyle(
+                Text(
+                  AppLanguage.tr('signup_success_title'),
+                  style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                     color: textPrimary,
@@ -257,8 +258,8 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Akun Anda telah berhasil dibuat.\nSilakan login untuk melanjutkan.',
-                  style: TextStyle(
+                  AppLanguage.tr('signup_success_message'),
+                  style: const TextStyle(
                     fontSize: 15,
                     color: textSecondary,
                     height: 1.5,
@@ -290,9 +291,9 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
                       ),
                       elevation: 0,
                     ),
-                    child: const Text(
-                      'Lanjut ke Login',
-                      style: TextStyle(
+                    child: Text(
+                      AppLanguage.tr('continue_to_login'),
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -308,76 +309,86 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
   }
 
   @override
-Widget build(BuildContext context) {
-  return Scaffold(
-    body: Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [
-            Colors.white,
-            Color.fromARGB(255, 120, 210, 240),
-          ],
-          stops: [0.20, 1.2],
-        ),
-      ),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 60),
-              _buildHeader(),
-              const SizedBox(height: 40),
-              _buildSignupForm(),
+  Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    
+    return Scaffold(
+      body: Container(
+        height: screenHeight,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              Colors.white,
+              Color.fromARGB(255, 120, 210, 240),
             ],
+            stops: [0.20, 1.2],
+          ),
+        ),
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight,
+                  ),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      children: [
+                        SizedBox(height: screenHeight * 0.06),
+                        _buildHeader(),
+                        SizedBox(height: screenHeight * 0.04),
+                        _buildSignupForm(),
+                        const Spacer(),
+                        const SizedBox(height: 20),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildHeader() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        RichText(
-          text: const TextSpan(
-            children: [
-              TextSpan(
-                text: 'Create Your\n',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w600,
-                  color: textPrimary,
-                  height: 1.2,
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: '${AppLanguage.tr('create_your')}\n',
+                  style: const TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w600,
+                    color: textPrimary,
+                    height: 1.2,
+                  ),
                 ),
-              ),
-              TextSpan(
-                text: 'FaceGate Account ',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w600,
-                  color: textPrimary,
-                  height: 1.2,
+                TextSpan(
+                  text: AppLanguage.tr('facegate_account'),
+                  style: const TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w600,
+                    color: textPrimary,
+                    height: 1.2,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Join us and start your journey to better\nattendance management.',
-          style: TextStyle(
-            fontSize: 14,
-            color: textSecondary,
-            height: 1.5,
-          ),
-        ),
-      ],
+          const SizedBox(height: 8),
+        ],
+      ),
     );
   }
 
@@ -387,21 +398,21 @@ Widget build(BuildContext context) {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Full Name',
-            style: TextStyle(
+          Text(
+            AppLanguage.tr('full_name'),
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           TextFormField(
             controller: _nameController,
             enabled: !_isLoading,
             textCapitalization: TextCapitalization.words,
             decoration: InputDecoration(
-              hintText: 'Enter your full name',
+              hintText: AppLanguage.tr('full_name_hint'),
               hintStyle: TextStyle(color: Colors.grey.shade400),
               suffixIcon: Icon(Icons.person_outline, color: Colors.grey.shade400),
               filled: true,
@@ -428,35 +439,35 @@ Widget build(BuildContext context) {
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 16,
+                vertical: 18,
               ),
             ),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
-                return 'Nama lengkap harus diisi';
+                return AppLanguage.tr('name_required');
               }
               if (value.trim().length < 3) {
-                return 'Nama minimal 3 karakter';
+                return AppLanguage.tr('name_min_length');
               }
               return null;
             },
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Email Address',
-            style: TextStyle(
+          const SizedBox(height: 16),
+          Text(
+            AppLanguage.tr('email_address'),
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           TextFormField(
             controller: _emailController,
             enabled: !_isLoading,
             keyboardType: TextInputType.emailAddress,
             decoration: InputDecoration(
-              hintText: 'Enter your email',
+              hintText: AppLanguage.tr('email_hint_signup'),
               hintStyle: TextStyle(color: Colors.grey.shade400),
               suffixIcon: Icon(Icons.email_outlined, color: Colors.grey.shade400),
               filled: true,
@@ -483,35 +494,35 @@ Widget build(BuildContext context) {
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 16,
+                vertical: 18,
               ),
             ),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
-                return 'Email harus diisi';
+                return AppLanguage.tr('email_required');
               }
               if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
-                return 'Format email tidak valid';
+                return AppLanguage.tr('email_invalid');
               }
               return null;
             },
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Password',
-            style: TextStyle(
+          const SizedBox(height: 16),
+          Text(
+            AppLanguage.tr('password'),
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           TextFormField(
             controller: _passwordController,
             enabled: !_isLoading,
             obscureText: _obscurePassword,
             decoration: InputDecoration(
-              hintText: 'Create password',
+              hintText: AppLanguage.tr('password_hint_signup'),
               hintStyle: TextStyle(color: Colors.grey.shade400),
               suffixIcon: IconButton(
                 icon: Icon(
@@ -550,61 +561,20 @@ Widget build(BuildContext context) {
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 16,
+                vertical: 18,
               ),
             ),
             validator: (value) {
               if (value == null || value.isEmpty) {
-                return 'Password harus diisi';
+                return AppLanguage.tr('password_required');
               }
               if (value.length < 6) {
-                return 'Password minimal 6 karakter';
+                return AppLanguage.tr('password_min_length');
               }
               return null;
             },
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: Checkbox(
-                  value: _agreeToTerms,
-                  onChanged: _isLoading ? null : (value) {
-                    setState(() {
-                      _agreeToTerms = value ?? false;
-                    });
-                  },
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  side: BorderSide(color: Colors.grey.shade400),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: RichText(
-                  text: const TextSpan(
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: textSecondary,
-                    ),
-                    children: [
-                      TextSpan(text: 'I agree to the '),
-                      TextSpan(
-                        text: 'Terms & Conditions',
-                        style: TextStyle(
-                          color: Color(0xFF00A3E0),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
@@ -629,9 +599,9 @@ Widget build(BuildContext context) {
                         valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     )
-                  : const Text(
-                      'Sign Up',
-                      style: TextStyle(
+                  : Text(
+                      AppLanguage.tr('sign_up'),
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -644,10 +614,11 @@ Widget build(BuildContext context) {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  'Already have an Account? ',
-                  style: TextStyle(
-                    color: textSecondary,
+                  AppLanguage.tr('already_have_account'),
+                  style: const TextStyle(
+                    color: textPrimary,
                     fontSize: 14,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 TextButton(
@@ -666,9 +637,9 @@ Widget build(BuildContext context) {
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text(
-                    'Login',
-                    style: TextStyle(
+                  child: Text(
+                    AppLanguage.tr('login'),
+                    style: const TextStyle(
                       color: Color(0xFF00A3E0),
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -678,7 +649,6 @@ Widget build(BuildContext context) {
               ],
             ),
           ),
-          const SizedBox(height: 24),
         ],
       ),
     );

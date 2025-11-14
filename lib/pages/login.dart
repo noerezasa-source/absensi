@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'signup.dart';
 import 'join_organization_screen.dart';
+import '../helpers/language_helper.dart'; // Import language helper
 
 class ModernLoginScreen extends StatefulWidget {
   const ModernLoginScreen({super.key});
@@ -19,7 +20,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
-  bool _rememberMe = false;
   
   final supabase = Supabase.instance.client;
 
@@ -169,7 +169,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
       if (!mounted) return;
 
       if (hasOrganization) {
-        _showSnackBar('Login berhasil! User sudah punya organisasi.', true);
+        _showSnackBar(AppLanguage.tr('login_success'), true);
         debugPrint('✓ User has organization - should navigate to MainDashboard');
       } else {
         Navigator.pushAndRemoveUntil(
@@ -188,7 +188,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
         Navigator.of(context).pop();
       }
       
-      _showSnackBar('Gagal memeriksa organisasi: ${e.toString()}', false);
+      _showSnackBar('${AppLanguage.tr('check_organization_failed')}: ${e.toString()}', false);
     }
   }
 
@@ -227,14 +227,14 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
       debugPrint('❌ Login error: $e');
       if (!mounted) return;
       
-      String errorMessage = 'Terjadi kesalahan saat login';
+      String errorMessage = AppLanguage.tr('login_error');
       
       if (e is AuthException) {
         if (e.message.toLowerCase().contains('invalid login credentials') ||
             e.message.toLowerCase().contains('invalid_credentials')) {
-          errorMessage = 'Email atau password salah';
+          errorMessage = AppLanguage.tr('invalid_credentials');
         } else if (e.message.toLowerCase().contains('email not confirmed')) {
-          errorMessage = 'Email belum dikonfirmasi';
+          errorMessage = AppLanguage.tr('email_not_confirmed');
         } else {
           errorMessage = e.message;
         }
@@ -258,8 +258,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
 
       const webClientId = '210380129521-9kb8of23fk2jrf6p09do71v4df4asehf.apps.googleusercontent.com';
       const androidClientIds = [
-        '210380129521-9qcqse1mqa96aqo6liereotg82bquv8d.apps.googleusercontent.com',
-        '210380129521-lto171n9tpf699ihsga5skrjm908j0si.apps.googleusercontent.com',
         '210380129521-tt2solatsiu1ieo6547kmgu6pfl19t7a.apps.googleusercontent.com',
         '210380129521-lr442btemji6k32tnh4a29llllapc8q9.apps.googleusercontent.com',
       ];
@@ -339,7 +337,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     } catch (e) {
       debugPrint('❌ Error during Google Sign In: $e');
       if (!mounted) return;
-      _showSnackBar('Gagal login dengan Google: ${e.toString()}', false);
+      _showSnackBar('${AppLanguage.tr('google_signin_failed')}: ${e.toString()}', false);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -362,8 +360,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    
     return Scaffold(
       body: Container(
+        height: screenHeight,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.bottomCenter,
@@ -376,17 +377,29 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 60),
-                _buildHeader(),
-                const SizedBox(height: 40),
-                _buildLoginForm(),
-              ],
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight,
+                  ),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      children: [
+                        SizedBox(height: screenHeight * 0.08),
+                        _buildHeader(),
+                        SizedBox(height: screenHeight * 0.05),
+                        _buildLoginForm(),
+                        const Spacer(),
+                        const SizedBox(height: 20),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -394,43 +407,38 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   }
 
   Widget _buildHeader() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        RichText(
-          text: const TextSpan(
-            children: [
-              TextSpan(
-                text: 'Welcome\n',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w600,
-                  color: textPrimary,
-                  height: 1.2,
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: '${AppLanguage.tr('welcome')}\n',
+                  style: const TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w600,
+                    color: textPrimary,
+                    height: 1.2,
+                  ),
                 ),
-              ),
-              TextSpan(
-                text: 'To FaceGate',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w600,
-                  color: textPrimary,
-                  height: 1.2,
+                TextSpan(
+                  text: AppLanguage.tr('to_facegate'),
+                  style: const TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w600,
+                    color: textPrimary,
+                    height: 1.2,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Enter your credentials to access your\nThink Board account.',
-          style: TextStyle(
-            fontSize: 14,
-            color: textSecondary,
-            height: 1.5,
-          ),
-        ),
-      ],
+          const SizedBox(height: 8),
+        ],
+      ),
     );
   }
 
@@ -440,22 +448,22 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Email Address',
-            style: TextStyle(
+          Text(
+            AppLanguage.tr('email_address'),
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           TextFormField(
             controller: _emailController,
             enabled: !_isLoading,
             keyboardType: TextInputType.emailAddress,
             decoration: InputDecoration(
-              hintText: 'Uttam@gmail.com',
-              hintStyle: TextStyle(color: Colors.grey.shade400),
+              hintText: AppLanguage.tr('email_hint'),
+              hintStyle: const TextStyle(color: Color.fromARGB(255, 222, 221, 221)),
               suffixIcon: Icon(Icons.email_outlined, color: Colors.grey.shade400),
               filled: true,
               fillColor: inputFillColor,
@@ -473,36 +481,36 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 16,
+                vertical: 18,
               ),
             ),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
-                return 'Email harus diisi';
+                return AppLanguage.tr('email_required');
               }
               if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
-                return 'Format email tidak valid';
+                return AppLanguage.tr('email_invalid');
               }
               return null;
             },
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Password',
-            style: TextStyle(
+          const SizedBox(height: 16),
+          Text(
+            AppLanguage.tr('password'),
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           TextFormField(
             controller: _passwordController,
             enabled: !_isLoading,
             obscureText: _obscurePassword,
             decoration: InputDecoration(
-              hintText: '••••••••',
-              hintStyle: TextStyle(color: const Color.fromARGB(255, 222, 221, 221)),
+              hintText: AppLanguage.tr('password_hint'),
+              hintStyle: const TextStyle(color: Color.fromARGB(255, 222, 221, 221)),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePassword
@@ -532,62 +540,15 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 16,
+                vertical: 18,
               ),
             ),
             validator: (value) {
               if (value == null || value.isEmpty) {
-                return 'Password harus diisi';
+                return AppLanguage.tr('password_required');
               }
               return null;
             },
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: Checkbox(
-                      value: _rememberMe,
-                      onChanged: _isLoading ? null : (value) {
-                        setState(() {
-                          _rememberMe = value ?? false;
-                        });
-                      },
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      side: BorderSide(color: Colors.grey.shade400),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Remember Me',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-              TextButton(
-                onPressed: _isLoading ? null : () {
-                  // Forgot password action
-                },
-                child: const Text(
-                  'Forget Password',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF00A3E0),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
           ),
           const SizedBox(height: 24),
           SizedBox(
@@ -613,9 +574,9 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
                         valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     )
-                  : const Text(
-                      'Login',
-                      style: TextStyle(
+                  : Text(
+                      AppLanguage.tr('login'),
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -625,24 +586,24 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: Divider(color: Colors.grey.shade300)),
+              Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Text(
-                  'Or',
-                  style: TextStyle(
+                  AppLanguage.tr('or'),
+                  style: const TextStyle(
                     color: textSecondary,
                     fontSize: 14,
                   ),
                 ),
               ),
-              Expanded(child: Divider(color: Colors.grey.shade300)),
+              Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
             ],
           ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
-            height: 48,
+            height: 52,
             child: OutlinedButton(
               onPressed: _isLoading ? null : _signInWithGoogle,
               style: OutlinedButton.styleFrom(
@@ -661,9 +622,9 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
                     height: 24,
                   ),
                   const SizedBox(width: 12),
-                  const Text(
-                    'Sign in with Google',
-                    style: TextStyle(
+                  Text(
+                    AppLanguage.tr('sign_in_with_google'),
+                    style: const TextStyle(
                       color: textPrimary,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -679,10 +640,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  'Already have an Account? ',
-                  style: TextStyle(
-                    color: textSecondary,
+                  AppLanguage.tr('dont_have_account'),
+                  style: const TextStyle(
+                    color: textPrimary,
                     fontSize: 14,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 TextButton(
@@ -701,9 +663,9 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text(
-                    'Sign Up',
-                    style: TextStyle(
+                  child: Text(
+                    AppLanguage.tr('sign_up'),
+                    style: const TextStyle(
                       color: Color(0xFF00A3E0),
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -713,7 +675,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 24),
         ],
       ),
     );
