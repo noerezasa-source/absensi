@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'signup.dart';
 import 'join_organization_screen.dart';
+import 'dashboard.dart'; // Import dashboard
 import '../helpers/language_helper.dart'; // Import language helper
 
 class ModernLoginScreen extends StatefulWidget {
@@ -20,7 +21,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
-  
+
   final supabase = Supabase.instance.client;
 
   // Color Scheme - Matching the image
@@ -41,13 +42,18 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     try {
       String namePart = email.split('@')[0];
       namePart = namePart.replaceAll(RegExp(r'[_.\-0-9]'), ' ').trim();
-      
-      List<String> words = namePart.split(' ').where((w) => w.isNotEmpty).toList();
+
+      List<String> words = namePart
+          .split(' ')
+          .where((w) => w.isNotEmpty)
+          .toList();
       String capitalizedName = words
-          .map((word) => word[0].toUpperCase() + word.substring(1).toLowerCase())
+          .map(
+            (word) => word[0].toUpperCase() + word.substring(1).toLowerCase(),
+          )
           .join(' ')
           .trim();
-      
+
       return capitalizedName.isEmpty ? email.split('@')[0] : capitalizedName;
     } catch (e) {
       debugPrint('Error extracting name from email: $e');
@@ -56,8 +62,12 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   }
 
   Map<String, String> _splitName(String fullName) {
-    List<String> nameParts = fullName.trim().split(' ').where((n) => n.isNotEmpty).toList();
-    
+    List<String> nameParts = fullName
+        .trim()
+        .split(' ')
+        .where((n) => n.isNotEmpty)
+        .toList();
+
     if (nameParts.isEmpty) {
       return {'first_name': 'User', 'last_name': ''};
     } else if (nameParts.length == 1) {
@@ -69,47 +79,50 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     }
   }
 
-  Future<bool> _ensureUserProfile(String userId, String email, {String? googleName}) async {
+  Future<bool> _ensureUserProfile(
+    String userId,
+    String email, {
+    String? googleName,
+  }) async {
     try {
       debugPrint('Ensuring user profile for: $userId');
-      
+
       final existingProfile = await supabase
           .from('user_profiles')
           .select('id, first_name, last_name, display_name, email')
           .eq('id', userId)
           .maybeSingle();
-      
-      String fullName = googleName?.isNotEmpty == true 
-          ? googleName! 
+
+      String fullName = googleName?.isNotEmpty == true
+          ? googleName!
           : _extractNameFromEmail(email);
-      
+
       final nameParts = _splitName(fullName);
       final firstName = nameParts['first_name']!;
       final lastName = nameParts['last_name']!;
-      
+
       if (existingProfile == null) {
         debugPrint('Creating new user profile...');
-        
-        await supabase
-            .from('user_profiles')
-            .insert({
-              'id': userId,
-              'first_name': firstName,
-              'last_name': lastName,
-              'display_name': fullName,
-              'email': email,
-              'is_active': true,
-            });
-        
+
+        await supabase.from('user_profiles').insert({
+          'id': userId,
+          'first_name': firstName,
+          'last_name': lastName,
+          'display_name': fullName,
+          'email': email,
+          'is_active': true,
+        });
+
         debugPrint('✓ User profile created successfully');
         return true;
       } else {
         debugPrint('User profile already exists');
-        
-        final hasValidName = existingProfile['first_name'] != null && 
-                            existingProfile['first_name'].toString().isNotEmpty &&
-                            existingProfile['first_name'] != 'User';
-        
+
+        final hasValidName =
+            existingProfile['first_name'] != null &&
+            existingProfile['first_name'].toString().isNotEmpty &&
+            existingProfile['first_name'] != 'User';
+
         if (!hasValidName) {
           await supabase
               .from('user_profiles')
@@ -120,7 +133,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
                 'email': email,
               })
               .eq('id', userId);
-          
+
           debugPrint('✓ User profile updated with name');
         }
         return true;
@@ -162,18 +175,41 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
 
     try {
       final hasOrganization = await _userHasOrganization(userId);
-      
+
       if (!mounted) return;
-      Navigator.of(context).pop();
-      
+      Navigator.of(context).pop(); // Close loading dialog
+
       if (!mounted) return;
 
+      // Di dalam method _navigateAfterLogin
       if (hasOrganization) {
+        debugPrint('✓ User has organization - navigating to Dashboard');
         _showSnackBar(AppLanguage.tr('login_success'), true);
-        debugPrint('✓ User has organization - should navigate to MainDashboard');
+
+        // Ambil organizationMemberId
+        final orgMember = await supabase
+            .from('organization_members')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('is_active', true)
+            .single();
+
+        final organizationMemberId = orgMember['id'] as int;
+
+        // Navigate to Dashboard dengan organizationMemberId
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) =>
+                DashboardPage(organizationMemberId: organizationMemberId),
+          ),
+          (route) => false,
+        );
       } else {
-        Navigator.pushAndRemoveUntil(
-          context,
+        debugPrint(
+          '⚠️ User has no organization - navigating to Join Organization',
+        );
+        // Navigate to Join Organization Screen
+        Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
             builder: (context) => const JoinOrganizationScreen(),
           ),
@@ -182,26 +218,29 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
       }
     } catch (e) {
       debugPrint('Error checking organization: $e');
-      
+
       if (!mounted) return;
       if (Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
       }
-      
-      _showSnackBar('${AppLanguage.tr('check_organization_failed')}: ${e.toString()}', false);
+
+      _showSnackBar(
+        '${AppLanguage.tr('check_organization_failed')}: ${e.toString()}',
+        false,
+      );
     }
   }
 
   Future<void> _signInWithEmail() async {
     if (_isLoading) return;
-    
+
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
     try {
       debugPrint('Attempting email login...');
-      
+
       final res = await supabase.auth.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
@@ -212,9 +251,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
         debugPrint('✓ Email login successful, user ID: ${user.id}');
 
         final profileCreated = await _ensureUserProfile(user.id, user.email!);
-        
+
         if (!profileCreated) {
-          debugPrint('⚠️ Warning: Profile creation/update failed, but continuing...');
+          debugPrint(
+            '⚠️ Warning: Profile creation/update failed, but continuing...',
+          );
         }
 
         SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -226,9 +267,9 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     } catch (e) {
       debugPrint('❌ Login error: $e');
       if (!mounted) return;
-      
+
       String errorMessage = AppLanguage.tr('login_error');
-      
+
       if (e is AuthException) {
         if (e.message.toLowerCase().contains('invalid login credentials') ||
             e.message.toLowerCase().contains('invalid_credentials')) {
@@ -239,7 +280,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
           errorMessage = e.message;
         }
       }
-      
+
       _showSnackBar(errorMessage, false);
     } finally {
       if (mounted) {
@@ -256,7 +297,8 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     try {
       debugPrint('🔵 Starting Google Sign In...');
 
-      const webClientId = '210380129521-9kb8of23fk2jrf6p09do71v4df4asehf.apps.googleusercontent.com';
+      const webClientId =
+          '210380129521-9kb8of23fk2jrf6p09do71v4df4asehf.apps.googleusercontent.com';
       const androidClientIds = [
         '210380129521-tt2solatsiu1ieo6547kmgu6pfl19t7a.apps.googleusercontent.com',
         '210380129521-lr442btemji6k32tnh4a29llllapc8q9.apps.googleusercontent.com',
@@ -333,11 +375,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
 
       if (!mounted) return;
       await _navigateAfterLogin(user.id);
-
     } catch (e) {
       debugPrint('❌ Error during Google Sign In: $e');
       if (!mounted) return;
-      _showSnackBar('${AppLanguage.tr('google_signin_failed')}: ${e.toString()}', false);
+      _showSnackBar(
+        '${AppLanguage.tr('google_signin_failed')}: ${e.toString()}',
+        false,
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -345,7 +389,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
 
   void _showSnackBar(String message, bool isSuccess) {
     if (!mounted) return;
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -361,7 +405,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
-    
+
     return Scaffold(
       body: Container(
         height: screenHeight,
@@ -369,10 +413,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
           gradient: LinearGradient(
             begin: Alignment.bottomCenter,
             end: Alignment.topCenter,
-            colors: [
-              Colors.white,
-              Color.fromARGB(255, 120, 210, 240),
-            ],
+            colors: [Colors.white, Color.fromARGB(255, 120, 210, 240)],
             stops: [0.20, 1.2],
           ),
         ),
@@ -382,9 +423,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
               return SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 28),
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minHeight: constraints.maxHeight,
-                  ),
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
                   child: IntrinsicHeight(
                     child: Column(
                       children: [
@@ -463,8 +502,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
             keyboardType: TextInputType.emailAddress,
             decoration: InputDecoration(
               hintText: AppLanguage.tr('email_hint'),
-              hintStyle: const TextStyle(color: Color.fromARGB(255, 222, 221, 221)),
-              suffixIcon: Icon(Icons.email_outlined, color: Colors.grey.shade400),
+              hintStyle: const TextStyle(
+                color: Color.fromARGB(255, 222, 221, 221),
+              ),
+              suffixIcon: Icon(
+                Icons.email_outlined,
+                color: Colors.grey.shade400,
+              ),
               filled: true,
               fillColor: inputFillColor,
               border: OutlineInputBorder(
@@ -488,7 +532,9 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
               if (value == null || value.trim().isEmpty) {
                 return AppLanguage.tr('email_required');
               }
-              if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
+              if (!RegExp(
+                r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
+              ).hasMatch(value)) {
                 return AppLanguage.tr('email_invalid');
               }
               return null;
@@ -510,7 +556,9 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
             obscureText: _obscurePassword,
             decoration: InputDecoration(
               hintText: AppLanguage.tr('password_hint'),
-              hintStyle: const TextStyle(color: Color.fromARGB(255, 222, 221, 221)),
+              hintStyle: const TextStyle(
+                color: Color.fromARGB(255, 222, 221, 221),
+              ),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePassword
@@ -586,18 +634,19 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
+              Expanded(
+                child: Divider(color: Colors.grey.shade300, thickness: 1),
+              ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Text(
                   AppLanguage.tr('or'),
-                  style: const TextStyle(
-                    color: textSecondary,
-                    fontSize: 14,
-                  ),
+                  style: const TextStyle(color: textSecondary, fontSize: 14),
                 ),
               ),
-              Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
+              Expanded(
+                child: Divider(color: Colors.grey.shade300, thickness: 1),
+              ),
             ],
           ),
           const SizedBox(height: 24),
