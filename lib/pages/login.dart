@@ -1,3 +1,4 @@
+import 'package:absensimassal/pages/admin_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,7 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'signup.dart';
 import 'join_organization_screen.dart';
-import 'dashboard.dart'; // Import dashboard
+import '../services/role_service.dart';
+import 'admin_dashboard.dart';
+import 'user_dashboard.dart';
 import '../helpers/language_helper.dart'; // Import language helper
 
 class ModernLoginScreen extends StatefulWidget {
@@ -23,6 +26,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   bool _isLoading = false;
 
   final supabase = Supabase.instance.client;
+  final RoleService _roleService = RoleService();
 
   // Color Scheme - Matching the image
   static const Color primaryColor = Color(0xFF1A1A1A);
@@ -160,76 +164,102 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     }
   }
 
-  Future<void> _navigateAfterLogin(String userId) async {
+ Future<void> _navigateAfterLogin(String userId) async {
+  if (!mounted) return;
+
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(
+      child: CircularProgressIndicator(
+        valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+      ),
+    ),
+  );
+
+  try {
+    // Cek apakah user punya organization
+    final hasOrganization = await _userHasOrganization(userId);
+
+    if (!mounted) return;
+    Navigator.of(context).pop(); // Close loading dialog
+
     if (!mounted) return;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
-        ),
-      ),
-    );
+    if (hasOrganization) {
+      debugPrint('✓ User has organization - checking role');
+      _showSnackBar(AppLanguage.tr('login_success'), true);
 
-    try {
-      final hasOrganization = await _userHasOrganization(userId);
+      // Ambil organization member dengan role
+      final memberData = await _roleService.getOrganizationMemberWithRole(userId);
 
-      if (!mounted) return;
-      Navigator.of(context).pop(); // Close loading dialog
+      if (memberData == null) {
+        throw Exception('Failed to fetch member data');
+      }
+
+      final organizationMemberId = memberData['id'] as int;
 
       if (!mounted) return;
 
-      // Di dalam method _navigateAfterLogin
-      if (hasOrganization) {
-        debugPrint('✓ User has organization - navigating to Dashboard');
-        _showSnackBar(AppLanguage.tr('login_success'), true);
-
-        // Ambil organizationMemberId
-        final orgMember = await supabase
-            .from('organization_members')
-            .select('id')
-            .eq('user_id', userId)
-            .eq('is_active', true)
-            .single();
-
-        final organizationMemberId = orgMember['id'] as int;
-
-        // Navigate to Dashboard dengan organizationMemberId
+      // Navigate berdasarkan role
+      if (_roleService.isAdmin(memberData)) {
+        debugPrint('✓ User is Admin - navigating to Admin Dashboard');
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (context) =>
-                DashboardPage(organizationMemberId: organizationMemberId),
+            builder: (context) => AdminDashboardPage(
+              organizationMemberId: organizationMemberId,
+              memberData: memberData,
+            ),
+          ),
+          (route) => false,
+        );
+      } else if (_roleService.isUser(memberData)) {
+        debugPrint('✓ User is Regular User - navigating to User Dashboard');
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => UserDashboardPage(
+              organizationMemberId: organizationMemberId,
+              memberData: memberData,
+            ),
           ),
           (route) => false,
         );
       } else {
-        debugPrint(
-          '⚠️ User has no organization - navigating to Join Organization',
-        );
-        // Navigate to Join Organization Screen
+        // Default ke User Dashboard jika role tidak dikenali
+        debugPrint('⚠️ Unknown role - navigating to User Dashboard');
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (context) => const JoinOrganizationScreen(),
+            builder: (context) => UserDashboardPage(
+              organizationMemberId: organizationMemberId,
+              memberData: memberData,
+            ),
           ),
           (route) => false,
         );
       }
-    } catch (e) {
-      debugPrint('Error checking organization: $e');
-
-      if (!mounted) return;
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
-
-      _showSnackBar(
-        '${AppLanguage.tr('check_organization_failed')}: ${e.toString()}',
-        false,
+    } else {
+      debugPrint('⚠️ User has no organization - navigating to Join Organization');
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (context) => const JoinOrganizationScreen(),
+        ),
+        (route) => false,
       );
     }
+  } catch (e) {
+    debugPrint('Error checking organization: $e');
+
+    if (!mounted) return;
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+
+    _showSnackBar(
+      '${AppLanguage.tr('check_organization_failed')}: ${e.toString()}',
+      false,
+    );
   }
+}
 
   Future<void> _signInWithEmail() async {
     if (_isLoading) return;

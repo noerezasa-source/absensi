@@ -1,25 +1,29 @@
 import 'package:flutter/material.dart';
 import '../services/attendance_service.dart';
 import '../services/biometric_service.dart';
+import '../services/role_service.dart';
 import '../models/attendance_record.dart';
 import 'face_registration_page.dart';
 import 'face_attendance_page.dart';
 
-class DashboardPage extends StatefulWidget {
+class AdminDashboardPage extends StatefulWidget {
   final int organizationMemberId;
+  final Map<String, dynamic> memberData;
 
-  const DashboardPage({
+  const AdminDashboardPage({
     super.key,
     required this.organizationMemberId,
+    required this.memberData,
   });
 
   @override
-  State<DashboardPage> createState() => _DashboardPageState();
+  State<AdminDashboardPage> createState() => _AdminDashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage> {
+class _AdminDashboardPageState extends State<AdminDashboardPage> {
   final AttendanceService _attendanceService = AttendanceService();
   final BiometricService _biometricService = BiometricService();
+  final RoleService _roleService = RoleService();
 
   String selectedPresenceTab = 'This Week';
   String selectedHistoryTab = 'This Month';
@@ -59,40 +63,14 @@ class _DashboardPageState extends State<DashboardPage> {
       'iconColor': Colors.green,
       'photoUrl': 'https://i.pravatar.cc/150?img=32',
     },
-    {
-      'studentName': 'Dimas Prakoso',
-      'status': 'Sick',
-      'date': 'Tuesday, 7 January 2021',
-      'time': '-',
-      'icon': Icons.healing,
-      'iconColor': Colors.orange,
-      'photoUrl': 'https://i.pravatar.cc/150?img=15',
-    },
-    {
-      'studentName': 'Eka Putri',
-      'status': 'Leave',
-      'date': 'Monday, 6 January 2021',
-      'time': '-',
-      'icon': Icons.event_busy,
-      'iconColor': Colors.purple,
-      'photoUrl': 'https://i.pravatar.cc/150?img=25',
-    },
-    {
-      'studentName': 'Fajar Ramadhan',
-      'status': 'Arrived on time',
-      'date': 'Monday, 6 January 2021',
-      'time': '07:20',
-      'icon': Icons.check_circle,
-      'iconColor': Colors.green,
-      'photoUrl': 'https://i.pravatar.cc/150?img=8',
-    },
   ];
 
   @override
   void initState() {
     super.initState();
-    print('=== DASHBOARD INIT ===');
-    print('Organization Member ID: ${widget.organizationMemberId}');
+    debugPrint('=== ADMIN DASHBOARD INIT ===');
+    debugPrint('Organization Member ID: ${widget.organizationMemberId}');
+    debugPrint('Role: ${_roleService.getRoleName(widget.memberData)}');
     _loadTodayAttendance();
     _checkFaceRegistration();
   }
@@ -104,15 +82,11 @@ class _DashboardPageState extends State<DashboardPage> {
     });
     
     try {
-      print('Loading today attendance...');
+      debugPrint('Loading today attendance...');
       final attendance = await _attendanceService.getTodayAttendance(
         widget.organizationMemberId,
       );
-      print('Today attendance loaded: ${attendance != null}');
-      if (attendance != null) {
-        print('Check In: ${attendance.actualCheckIn}');
-        print('Check Out: ${attendance.actualCheckOut}');
-      }
+      debugPrint('Today attendance loaded: ${attendance != null}');
       
       if (mounted) {
         setState(() {
@@ -121,7 +95,7 @@ class _DashboardPageState extends State<DashboardPage> {
         });
       }
     } catch (e) {
-      print('!!! ERROR loading attendance: $e');
+      debugPrint('!!! ERROR loading attendance: $e');
       if (mounted) {
         setState(() {
           _isLoadingAttendance = false;
@@ -138,14 +112,13 @@ class _DashboardPageState extends State<DashboardPage> {
     });
     
     try {
-      print('=== CHECKING FACE REGISTRATION ===');
-      print('Organization Member ID: ${widget.organizationMemberId}');
+      debugPrint('=== CHECKING FACE REGISTRATION ===');
       
       final hasRegistered = await _biometricService.hasRegisteredFace(
         widget.organizationMemberId,
       );
       
-      print('Face registration check result: $hasRegistered');
+      debugPrint('Face registration check result: $hasRegistered');
       
       if (mounted) {
         setState(() {
@@ -154,7 +127,7 @@ class _DashboardPageState extends State<DashboardPage> {
         });
       }
     } catch (e) {
-      print('!!! ERROR checking face registration: $e');
+      debugPrint('!!! ERROR checking face registration: $e');
       if (mounted) {
         setState(() {
           _hasRegisteredFace = false;
@@ -166,7 +139,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _refreshAll() async {
-    print('=== REFRESHING ALL DATA ===');
+    debugPrint('=== REFRESHING ALL DATA ===');
     await Future.wait([
       _loadTodayAttendance(),
       _checkFaceRegistration(),
@@ -175,7 +148,6 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _handleAttendanceAction(String type) async {
     if (!_hasRegisteredFace) {
-      // Show dialog to register face first
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -207,7 +179,6 @@ class _DashboardPageState extends State<DashboardPage> {
       return;
     }
 
-    // Navigate to face attendance page
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -218,7 +189,6 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
 
-    // Reload attendance if successful
     if (result == true) {
       _refreshAll();
     }
@@ -234,10 +204,16 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
 
-    // Check face registration status after returning
     if (result == true) {
       _refreshAll();
     }
+  }
+
+  String _getCurrentDate() {
+    final now = DateTime.now();
+    final weekday = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
+    final month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][now.month - 1];
+    return '$weekday, ${now.day} $month ${now.year}';
   }
 
   @override
@@ -273,7 +249,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.3),
+                            color: Colors.white.withValues(alpha: 0.3),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Icon(
@@ -293,7 +269,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.3),
+                            color: Colors.white.withValues(alpha: 0.3),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Icon(
@@ -305,7 +281,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       ],
                     ),
                     const SizedBox(height: 20),
-                    // Profile Card
+                    // Profile Card with Admin Badge
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -313,7 +289,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         borderRadius: BorderRadius.circular(20),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
+                            color: Colors.black.withValues(alpha: 0.1),
                             blurRadius: 15,
                             offset: const Offset(0, 5),
                           ),
@@ -321,23 +297,47 @@ class _DashboardPageState extends State<DashboardPage> {
                       ),
                       child: Row(
                         children: [
-                          // Profile Image
-                          Container(
-                            width: 60,
-                            height: 60,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: const Color(0xFF4A90E2),
-                                width: 2,
-                              ),
-                              image: const DecorationImage(
-                                image: NetworkImage(
-                                  'https://i.pravatar.cc/150?img=47',
+                          // Profile Image with Admin Badge
+                          Stack(
+                            children: [
+                              Container(
+                                width: 60,
+                                height: 60,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(0xFF4A90E2),
+                                    width: 2,
+                                  ),
+                                  image: const DecorationImage(
+                                    image: NetworkImage(
+                                      'https://i.pravatar.cc/150?img=47',
+                                    ),
+                                    fit: BoxFit.cover,
+                                  ),
                                 ),
-                                fit: BoxFit.cover,
                               ),
-                            ),
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: const Icon(
+                                    Icons.admin_panel_settings,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(width: 16),
                           // Profile Info
@@ -362,35 +362,27 @@ class _DashboardPageState extends State<DashboardPage> {
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFFE3F2FD),
+                                        color: Colors.orange.shade50,
                                         borderRadius: BorderRadius.circular(12),
                                       ),
-                                      child: const Text(
-                                        'Student',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF4A90E2),
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFE3F2FD),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: const Text(
-                                        'X Echo 1',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF4A90E2),
-                                          fontWeight: FontWeight.w500,
-                                        ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.admin_panel_settings,
+                                            size: 14,
+                                            color: Colors.orange.shade700,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            _roleService.getRoleName(widget.memberData),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.orange.shade700,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
@@ -418,9 +410,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
 
-              const SizedBox(height: 24),        
-
-              const SizedBox(height: 16),
+              const SizedBox(height: 24),
 
               // ---------- ATTENDANCE BUTTONS ----------
               Padding(
@@ -437,14 +427,14 @@ class _DashboardPageState extends State<DashboardPage> {
 
               const SizedBox(height: 24),
 
-              // ---------- STUDENT'S PRESENCE ----------
+              // ---------- TEAM ATTENDANCE OVERVIEW ----------
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      "Student's Presence",
+                      "Team Attendance Overview",
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -452,56 +442,31 @@ class _DashboardPageState extends State<DashboardPage> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Tab Selector
-                    Row(
-                      children: [
-                        _TabButton(
-                          label: 'This Week',
-                          isSelected: selectedPresenceTab == 'This Week',
-                          onTap: () {
-                            setState(() {
-                              selectedPresenceTab = 'This Week';
-                            });
-                          },
-                        ),
-                        const SizedBox(width: 12),
-                        _TabButton(
-                          label: 'This Month',
-                          isSelected: selectedPresenceTab == 'This Month',
-                          onTap: () {
-                            setState(() {
-                              selectedPresenceTab = 'This Month';
-                            });
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
                     // Stats Cards
                     Row(
                       children: [
                         _StatCard(
-                          value: '3',
-                          label: 'Arrive',
-                          color: Colors.blue.shade50,
+                          value: '24',
+                          label: 'Present',
+                          color: Colors.green.shade50,
+                          icon: Icons.check_circle,
+                          iconColor: Colors.green,
                         ),
                         const SizedBox(width: 12),
                         _StatCard(
-                          value: '1',
-                          label: 'Sick',
+                          value: '2',
+                          label: 'Late',
                           color: Colors.orange.shade50,
+                          icon: Icons.schedule,
+                          iconColor: Colors.orange,
                         ),
                         const SizedBox(width: 12),
                         _StatCard(
-                          value: '1',
-                          label: 'Leave',
-                          color: Colors.purple.shade50,
-                        ),
-                        const SizedBox(width: 12),
-                        _StatCard(
-                          value: '0',
-                          label: 'Skip',
-                          color: Colors.grey.shade100,
+                          value: '3',
+                          label: 'Absent',
+                          color: Colors.red.shade50,
+                          icon: Icons.cancel,
+                          iconColor: Colors.red,
                         ),
                       ],
                     ),
@@ -509,7 +474,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
 
-              const SizedBox(height: 30),
+              const SizedBox(height: 24),
 
               // ---------- ATTENDANCE HISTORY ----------
               Padding(
@@ -517,40 +482,26 @@ class _DashboardPageState extends State<DashboardPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Attendance History',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    // Tab Selector
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        _TabButton(
-                          label: 'This Week',
-                          isSelected: selectedHistoryTab == 'This Week',
-                          onTap: () {
-                            setState(() {
-                              selectedHistoryTab = 'This Week';
-                            });
-                          },
+                        const Text(
+                          'Recent Activity',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
                         ),
-                        const SizedBox(width: 12),
-                        _TabButton(
-                          label: 'This Month',
-                          isSelected: selectedHistoryTab == 'This Month',
-                          onTap: () {
-                            setState(() {
-                              selectedHistoryTab = 'This Month';
-                            });
+                        TextButton(
+                          onPressed: () {
+                            // Navigate to full attendance list
                           },
+                          child: const Text('View All'),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
                     // History Items
                     ...attendanceHistory.map((attendance) {
                       return Padding(
@@ -565,7 +516,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           photoUrl: attendance['photoUrl'],
                         ),
                       );
-                    }).toList(),
+                    }),
                   ],
                 ),
               ),
@@ -576,81 +527,52 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
       ),
       // ---------- BOTTOM NAVIGATION ----------
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, -5),
-            ),
-          ],
-        ),
-        child: BottomNavigationBar(
-          backgroundColor: Colors.white,
-          selectedItemColor: const Color(0xFF4A90E2),
-          unselectedItemColor: Colors.grey,
-          currentIndex: 0,
-          elevation: 0,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.assignment),
-              label: 'Attendances',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.person),
-              label: 'Profile',
-            ),
-          ],
-        ),
-      ),
+      bottomNavigationBar: _buildBottomNav(),
     );
   }
 
-  Widget _buildDebugRow(String label, String value, {Color? valueColor}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 140,
-            child: Text(
-              '$label:',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
-              ),
-            ),
+  Widget _buildBottomNav() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, -5),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: 12,
-                color: valueColor ?? Colors.black54,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+        ],
+      ),
+      child: BottomNavigationBar(
+        backgroundColor: Colors.white,
+        selectedItemColor: const Color(0xFF4A90E2),
+        unselectedItemColor: Colors.grey,
+        currentIndex: 0,
+        elevation: 0,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.people),
+            label: 'Team',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.bar_chart),
+            label: 'Reports',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: 'Profile',
           ),
         ],
       ),
     );
   }
-
-  String _getCurrentDate() {
-    final now = DateTime.now();
-    final weekday = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
-    final month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][now.month - 1];
-    return '$weekday, ${now.day} $month ${now.year}';
-  }
 }
+
+// ========== SUPPORTING WIDGETS ==========
 
 // ---------- ATTENDANCE BUTTONS WIDGET ----------
 class _AttendanceButtons extends StatelessWidget {
@@ -680,7 +602,7 @@ class _AttendanceButtons extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 10,
               offset: const Offset(0, 2),
             ),
@@ -702,7 +624,7 @@ class _AttendanceButtons extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -900,72 +822,44 @@ class _AttendanceButtons extends StatelessWidget {
   }
 }
 
-// ---------- TAB BUTTON WIDGET ----------
-class _TabButton extends StatelessWidget {
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _TabButton({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4A90E2) : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade300,
-            width: 1.5,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.black54,
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ---------- STAT CARD WIDGET ----------
 class _StatCard extends StatelessWidget {
   final String value;
   final String label;
   final Color color;
+  final IconData? icon;
+  final Color? iconColor;
 
   const _StatCard({
     required this.value,
     required this.label,
     required this.color,
+    this.icon,
+    this.iconColor,
   });
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: color,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           children: [
+            if (icon != null)
+              Icon(
+                icon,
+                color: iconColor ?? Colors.black54,
+                size: 24,
+              ),
+            if (icon != null) const SizedBox(height: 8),
             Text(
               value,
               style: const TextStyle(
-                fontSize: 28,
+                fontSize: 24,
                 fontWeight: FontWeight.bold,
                 color: Colors.black87,
               ),
@@ -1014,7 +908,7 @@ class _HistoryItem extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),

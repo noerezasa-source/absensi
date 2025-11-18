@@ -1,4 +1,6 @@
-import 'package:absensimassal/pages/dashboard.dart';
+import 'package:absensimassal/pages/admin_dashboard.dart';
+import 'package:absensimassal/pages/user_dashboard.dart';
+import 'package:absensimassal/services/role_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -23,6 +25,7 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
   static const Color accentColor = Color(0xFF00A3E0);
 
   final TextEditingController _invCodeController = TextEditingController();
+  final RoleService _roleService = RoleService();
 
   bool _isJoining = false;
   bool _isInitializing = true;
@@ -93,36 +96,22 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
 
       // Check if user already has organization
       debugPrint('Checking existing organization membership...');
-      final existingOrgMember = await Supabase.instance.client
-          .from('organization_members')
-          .select('id, organization_id, organizations(name)')
-          .eq('user_id', user.id)
-          .eq('is_active', true)
-          .maybeSingle();
+      final memberData = await _roleService.getOrganizationMemberWithRole(user.id);
 
-     if (existingOrgMember != null && mounted) {
-  final orgName = existingOrgMember['organizations']?['name'] ?? 'an organization';
-  final organizationMemberId = existingOrgMember['id'] as int;
-  
-  debugPrint('✓ User already has organization: $orgName');
-  
-  _showSnackBar(_tr('join_org_already_member').replaceAll('{org}', orgName), true);
+      if (memberData != null && mounted) {
+        final organizationMemberId = memberData['id'] as int;
+        
+        debugPrint('✓ User already has organization');
+        
+        _showSnackBar('You are already a member of an organization', true);
 
-  await Future.delayed(const Duration(milliseconds: 800));
+        await Future.delayed(const Duration(milliseconds: 800));
 
-  if (!mounted) return;
+        if (!mounted) return;
 
-  // Navigate to Dashboard dengan organizationMemberId
-  Navigator.of(context).pushReplacement(
-    MaterialPageRoute(
-      builder: (context) => DashboardPage(
-        organizationMemberId: organizationMemberId,
-      ),
-    ),
-  );
-  
-  debugPrint('Navigated to DashboardPage');
-} else {
+        // Navigate berdasarkan role
+        _navigateToDashboard(organizationMemberId, memberData);
+      } else {
         if (mounted) {
           setState(() => _isInitializing = false);
         }
@@ -135,252 +124,303 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
     }
   }
 
- Future<void> _joinOrganizationWithCode() async {
-  final invCode = _invCodeController.text.trim().toUpperCase();
+  Future<void> _joinOrganizationWithCode() async {
+    final invCode = _invCodeController.text.trim().toUpperCase();
 
-  if (invCode.isEmpty) {
-    _showSnackBar(_tr('join_org_enter_code'), false);
-    return;
-  }
-
-  setState(() => _isJoining = true);
-
-  try {
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user == null) {
-      throw Exception('User tidak terautentikasi');
-    }
-
-    // STEP 1: Check if already member
-    debugPrint('Step 1: Checking existing organization membership...');
-    final existingOrgMember = await Supabase.instance.client
-        .from('organization_members')
-        .select('id, organization_id, organizations(name)')
-        .eq('user_id', user.id)
-        .eq('is_active', true)
-        .maybeSingle();
-
-    if (existingOrgMember != null) {
-      debugPrint('✓ User already has organization - redirecting');
-
-      final orgName = existingOrgMember['organizations']?['name'] ?? 'an organization';
-      final organizationMemberId = existingOrgMember['id'] as int;
-
-      if (mounted) {
-        _showSnackBar(_tr('join_org_already_member').replaceAll('{org}', orgName), true);
-
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        if (!mounted) return;
-
-        // Navigate to Dashboard dengan organizationMemberId
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => DashboardPage(
-              organizationMemberId: organizationMemberId,
-            ),
-          ),
-        );
-        
-        debugPrint('Navigated to DashboardPage');
-      }
+    if (invCode.isEmpty) {
+      _showSnackBar(_tr('join_org_enter_code'), false);
       return;
     }
 
-    // STEP 2: Validate invitation code
-    debugPrint('Step 2: Validating invitation code: $invCode');
-    final orgResponse = await Supabase.instance.client
-        .from('organizations')
-        .select('id, name, inv_code')
-        .eq('inv_code', invCode)
-        .eq('is_active', true)
-        .maybeSingle();
+    setState(() => _isJoining = true);
 
-    if (orgResponse == null) {
-      throw Exception('Kode undangan tidak valid');
-    }
-
-    final orgId = orgResponse['id'];
-    final orgName = orgResponse['name'];
-
-    debugPrint('✓ Found organization: $orgName (ID: $orgId)');
-
-    // STEP 3: Check if already member of THIS specific organization
-    debugPrint('Step 3: Checking membership in this organization...');
-    final existingMemberInOrg = await Supabase.instance.client
-        .from('organization_members')
-        .select('id, is_active')
-        .eq('organization_id', orgId)
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-    int organizationMemberId;
-
-    if (existingMemberInOrg != null) {
-      if (existingMemberInOrg['is_active'] == true) {
-        debugPrint('⚠️ User is already an active member of this organization');
-        throw Exception('Anda sudah tergabung di organisasi ini');
-      } else {
-        debugPrint('Step 3b: Reactivating existing membership...');
-        await Supabase.instance.client
-            .from('organization_members')
-            .update({
-              'is_active': true,
-              'work_location': 'field',
-              'updated_at': DateTime.now().toIso8601String(),
-            })
-            .eq('id', existingMemberInOrg['id']);
-
-        organizationMemberId = existingMemberInOrg['id'] as int;
-        debugPrint('✓ Re-activated existing membership, ID: $organizationMemberId');
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        throw Exception('User tidak terautentikasi');
       }
-    } else {
-      // STEP 4: Insert new member
-      debugPrint('Step 4: Creating new organization membership...');
-      final newMember = await Supabase.instance.client
+
+      // STEP 1: Check if already member
+      debugPrint('Step 1: Checking existing organization membership...');
+      final existingMemberData = await _roleService.getOrganizationMemberWithRole(user.id);
+
+      if (existingMemberData != null) {
+        debugPrint('✓ User already has organization - redirecting');
+
+        final organizationMemberId = existingMemberData['id'] as int;
+
+        if (mounted) {
+          _showSnackBar('You are already a member of an organization', true);
+
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          if (!mounted) return;
+
+          // Navigate berdasarkan role
+          _navigateToDashboard(organizationMemberId, existingMemberData);
+        }
+        return;
+      }
+
+      // STEP 2: Validate invitation code
+      debugPrint('Step 2: Validating invitation code: $invCode');
+      final orgResponse = await Supabase.instance.client
+          .from('organizations')
+          .select('id, name, inv_code')
+          .eq('inv_code', invCode)
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (orgResponse == null) {
+        throw Exception('Kode undangan tidak valid');
+      }
+
+      final orgId = orgResponse['id'];
+      final orgName = orgResponse['name'];
+
+      debugPrint('✓ Found organization: $orgName (ID: $orgId)');
+
+      // STEP 3: Check if already member of THIS specific organization
+      debugPrint('Step 3: Checking membership in this organization...');
+      final existingMemberInOrg = await Supabase.instance.client
           .from('organization_members')
-          .insert({
-            'organization_id': orgId,
-            'user_id': user.id,
-            'hire_date': DateTime.now().toIso8601String().split('T')[0],
-            'employment_status': 'active',
-            'work_location': 'field',
-            'is_active': true,
-          })
-          .select('id')
-          .single();
+          .select('id, is_active')
+          .eq('organization_id', orgId)
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-      organizationMemberId = newMember['id'] as int;
-      debugPrint('✓ Created new organization membership, ID: $organizationMemberId');
-    }
+      int organizationMemberId;
 
-    // STEP 5: Success - Pass organizationMemberId to dialog
-    if (mounted) {
-      _showSuccessDialog(orgName, organizationMemberId);
-    }
-  } catch (e) {
-    debugPrint('Error joining organization: $e');
-    if (mounted) {
-      String errorMessage = _tr('join_org_error');
+      if (existingMemberInOrg != null) {
+        if (existingMemberInOrg['is_active'] == true) {
+          debugPrint('⚠️ User is already an active member of this organization');
+          throw Exception('Anda sudah tergabung di organisasi ini');
+        } else {
+          debugPrint('Step 3b: Reactivating existing membership...');
+          await Supabase.instance.client
+              .from('organization_members')
+              .update({
+                'is_active': true,
+                'work_location': 'field',
+                'updated_at': DateTime.now().toIso8601String(),
+              })
+              .eq('id', existingMemberInOrg['id']);
 
-      if (e.toString().contains('tidak valid') || 
-          e.toString().contains('not valid')) {
-        errorMessage = _tr('join_org_invalid_code');
-      } else if (e.toString().contains('sudah tergabung') ||
-                 e.toString().contains('already')) {
-        errorMessage = _tr('join_org_already_joined');
-      } else if (e.toString().contains('terautentikasi') ||
-                 e.toString().contains('authenticated')) {
-        errorMessage = _tr('join_org_not_authenticated');
+          organizationMemberId = existingMemberInOrg['id'] as int;
+          debugPrint('✓ Re-activated existing membership, ID: $organizationMemberId');
+        }
+      } else {
+        // STEP 4: Insert new member (default role: User - role_id: 2)
+        debugPrint('Step 4: Creating new organization membership...');
+        final newMember = await Supabase.instance.client
+            .from('organization_members')
+            .insert({
+              'organization_id': orgId,
+              'user_id': user.id,
+              'role_id': 2, // Default role: User (US001)
+              'hire_date': DateTime.now().toIso8601String().split('T')[0],
+              'employment_status': 'active',
+              'work_location': 'field',
+              'is_active': true,
+            })
+            .select('id')
+            .single();
+
+        organizationMemberId = newMember['id'] as int;
+        debugPrint('✓ Created new organization membership, ID: $organizationMemberId');
       }
 
-      _showSnackBar(errorMessage, false);
-    }
-  } finally {
-    if (mounted) {
-      setState(() => _isJoining = false);
+      // STEP 5: Get member data with role
+      final memberData = await _roleService.getOrganizationMemberWithRole(user.id);
+
+      if (memberData == null) {
+        throw Exception('Failed to fetch member data');
+      }
+
+      // STEP 6: Success - Show dialog and navigate
+      if (mounted) {
+        _showSuccessDialog(orgName, organizationMemberId, memberData);
+      }
+    } catch (e) {
+      debugPrint('Error joining organization: $e');
+      if (mounted) {
+        String errorMessage = _tr('join_org_error');
+
+        if (e.toString().contains('tidak valid') || 
+            e.toString().contains('not valid')) {
+          errorMessage = _tr('join_org_invalid_code');
+        } else if (e.toString().contains('sudah tergabung') ||
+                   e.toString().contains('already')) {
+          errorMessage = _tr('join_org_already_joined');
+        } else if (e.toString().contains('terautentikasi') ||
+                   e.toString().contains('authenticated')) {
+          errorMessage = _tr('join_org_not_authenticated');
+        }
+
+        _showSnackBar(errorMessage, false);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isJoining = false);
+      }
     }
   }
-}
 
- void _showSuccessDialog(String orgName, int organizationMemberId) {
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) {
-      return Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(32),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10B981),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF10B981).withOpacity(0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.check_circle,
-                  size: 48,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                _tr('join_org_success_title'),
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: textPrimary,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _tr('join_org_success_message').replaceAll('{org}', orgName),
-                style: const TextStyle(
-                  fontSize: 15,
-                  color: textSecondary,
-                  height: 1.5,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).pop(); // Close dialog
-                    // Navigate to Dashboard with organizationMemberId
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                        builder: (context) => DashboardPage(
-                          organizationMemberId: organizationMemberId,
-                        ),
-                      ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(26),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: Text(
-                    _tr('join_org_continue'),
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+  void _navigateToDashboard(int organizationMemberId, Map<String, dynamic> memberData) {
+    debugPrint('=== NAVIGATING TO DASHBOARD ===');
+    debugPrint('Organization Member ID: $organizationMemberId');
+    debugPrint('Role: ${_roleService.getRoleName(memberData)}');
+
+    if (_roleService.isAdmin(memberData)) {
+      debugPrint('✓ Navigating to Admin Dashboard');
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => AdminDashboardPage(
+            organizationMemberId: organizationMemberId,
+            memberData: memberData,
           ),
         ),
       );
-    },
-  );
-}
+    } else {
+      debugPrint('✓ Navigating to User Dashboard');
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => UserDashboardPage(
+            organizationMemberId: organizationMemberId,
+            memberData: memberData,
+          ),
+        ),
+      );
+    }
+  }
+
+  void _showSuccessDialog(String orgName, int organizationMemberId, Map<String, dynamic> memberData) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF10B981).withOpacity(0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.check_circle,
+                    size: 48,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  _tr('join_org_success_title'),
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: textPrimary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _tr('join_org_success_message').replaceAll('{org}', orgName),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: textSecondary,
+                    height: 1.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _roleService.isAdmin(memberData) 
+                        ? Colors.orange.shade50 
+                        : const Color(0xFFE8E5FF),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _roleService.isAdmin(memberData) 
+                            ? Icons.admin_panel_settings 
+                            : Icons.person,
+                        size: 16,
+                        color: _roleService.isAdmin(memberData) 
+                            ? Colors.orange.shade700 
+                            : const Color(0xFF6C63FF),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Role: ${_roleService.getRoleName(memberData)}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _roleService.isAdmin(memberData) 
+                              ? Colors.orange.shade700 
+                              : const Color(0xFF6C63FF),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(context).pop(); // Close dialog
+                      // Navigate to appropriate dashboard
+                      _navigateToDashboard(organizationMemberId, memberData);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryColor,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(26),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: Text(
+                      _tr('join_org_continue'),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
