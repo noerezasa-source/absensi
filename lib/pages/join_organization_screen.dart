@@ -237,7 +237,7 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
         throw Exception('Failed to fetch member data');
       }
 
-      // STEP 6: Success - Show dialog and navigate
+      // STEP 6: Success - Show dialog and auto redirect after 2 seconds
       if (mounted) {
         _showSuccessDialog(orgName, organizationMemberId, memberData);
       }
@@ -299,6 +299,14 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
       context: context,
       barrierDismissible: false,
       builder: (context) {
+        // Auto close after 2 seconds
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) {
+            Navigator.of(context).pop(); // Close dialog
+            _navigateToDashboard(organizationMemberId, memberData);
+          }
+        });
+
         return Dialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
@@ -351,68 +359,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
                     height: 1.5,
                   ),
                   textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _roleService.isAdmin(memberData) 
-                        ? Colors.orange.shade50 
-                        : const Color(0xFFE8E5FF),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _roleService.isAdmin(memberData) 
-                            ? Icons.admin_panel_settings 
-                            : Icons.person,
-                        size: 16,
-                        color: _roleService.isAdmin(memberData) 
-                            ? Colors.orange.shade700 
-                            : const Color(0xFF6C63FF),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Role: ${_roleService.getRoleName(memberData)}',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: _roleService.isAdmin(memberData) 
-                              ? Colors.orange.shade700 
-                              : const Color(0xFF6C63FF),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.of(context).pop(); // Close dialog
-                      // Navigate to appropriate dashboard
-                      _navigateToDashboard(organizationMemberId, memberData);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryColor,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(26),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: Text(
-                      _tr('join_org_continue'),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
                 ),
               ],
             ),

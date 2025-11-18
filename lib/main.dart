@@ -1,11 +1,11 @@
 import 'package:absensimassal/helpers/language_helper.dart';
 import 'package:absensimassal/pages/login.dart';
+import 'package:absensimassal/pages/join_organization_screen.dart';
+import 'package:absensimassal/pages/admin_dashboard.dart';
+import 'package:absensimassal/pages/user_dashboard.dart';
+import 'package:absensimassal/services/role_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
-// Import halaman yang diperlukan
-// import 'pages/join_organization_screen.dart';
-// import 'pages/main_dashboard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +48,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
   late Animation<double> _rotateAnimation;
+  final RoleService _roleService = RoleService();
 
   @override
   void initState() {
@@ -90,13 +91,14 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
-  Future<void> _checkMembershipAndNavigate() async {
+  Future<void> _checkAuthAndNavigate() async {
     if (!mounted) return;
 
     final session = Supabase.instance.client.auth.currentSession;
 
     // Jika tidak ada session, arahkan ke Login
     if (session == null) {
+      debugPrint('❌ No active session - navigating to Login');
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
@@ -106,55 +108,66 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     try {
       final userId = session.user.id;
+      debugPrint('✅ Active session found for user: $userId');
       
-      // Check apakah user sudah join organization
-      final memberResponse = await Supabase.instance.client
-          .from('organization_members')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('is_active', true)
-          .maybeSingle();
+      // Check apakah user sudah join organization dan ambil role
+      final memberData = await _roleService.getOrganizationMemberWithRole(userId);
 
       if (!mounted) return;
 
-      if (memberResponse != null) {
-        // User sudah punya organization, ke Dashboard
-        // TODO: Uncomment dan sesuaikan dengan nama class Dashboard Anda
-        // Navigator.of(context).pushReplacement(
-        //   MaterialPageRoute(builder: (context) => const MainDashboard()),
-        // );
+      if (memberData != null) {
+        final organizationMemberId = memberData['id'] as int;
         
-        // Sementara ke Login (ganti nanti)
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
-        );
-        
-        debugPrint('✅ User has organization - should navigate to Dashboard');
+        debugPrint('✅ User has organization membership');
+        debugPrint('   Organization Member ID: $organizationMemberId');
+        debugPrint('   Role: ${_roleService.getRoleName(memberData)}');
+
+        // Navigate berdasarkan role
+        if (_roleService.isAdmin(memberData)) {
+          debugPrint('✅ User is Admin - navigating to Admin Dashboard');
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => AdminDashboardPage(
+                organizationMemberId: organizationMemberId,
+                memberData: memberData,
+              ),
+            ),
+          );
+        } else if (_roleService.isUser(memberData)) {
+          debugPrint('✅ User is Regular User - navigating to User Dashboard');
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => UserDashboardPage(
+                organizationMemberId: organizationMemberId,
+                memberData: memberData,
+              ),
+            ),
+          );
+        } else {
+          // Default ke User Dashboard jika role tidak dikenali
+          debugPrint('⚠️ Unknown role - navigating to User Dashboard');
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => UserDashboardPage(
+                organizationMemberId: organizationMemberId,
+                memberData: memberData,
+              ),
+            ),
+          );
+        }
       } else {
-        // User belum punya organization, ke Join Organization
-        // TODO: Uncomment dan sesuaikan dengan nama class Join Organization Anda
-        // Navigator.of(context).pushReplacement(
-        //   MaterialPageRoute(builder: (context) => const JoinOrganizationScreen()),
-        // );
-        
-        // Sementara ke Login (ganti nanti)
+        // User belum join organization
+        debugPrint('⚠️ User has no organization - navigating to Join Organization');
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
+          MaterialPageRoute(builder: (context) => const JoinOrganizationScreen()),
         );
-        
-        debugPrint('⚠️ User has no organization - should navigate to Join Organization');
       }
     } catch (e) {
       debugPrint('❌ Error checking organization membership: $e');
       
       if (!mounted) return;
       
-      // Jika error, arahkan ke Join Organization untuk aman
-      // Navigator.of(context).pushReplacement(
-      //   MaterialPageRoute(builder: (context) => const JoinOrganizationScreen()),
-      // );
-      
-      // Sementara ke Login
+      // Jika error, arahkan ke Login untuk aman
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
       );
@@ -162,13 +175,13 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 
   Future<void> _navigateToNextScreen() async {
-    // Tampilkan splash selama 2.5 detik
-    await Future.delayed(const Duration(milliseconds: 2500));
+    // Tampilkan splash selama 2 detik
+    await Future.delayed(const Duration(milliseconds: 2000));
     
     if (!mounted) return;
     
-    // Check membership dan navigate
-    await _checkMembershipAndNavigate();
+    // Check auth dan navigate
+    await _checkAuthAndNavigate();
   }
 
   @override
@@ -223,7 +236,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                 
                 // App Name
                 const Text(
-                  'ABSENSI',
+                  'FACEGATE',
                   style: TextStyle(
                     fontSize: 36,
                     fontWeight: FontWeight.bold,
