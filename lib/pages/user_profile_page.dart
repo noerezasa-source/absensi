@@ -1,4 +1,3 @@
-import 'package:absensimassal/pages/login.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
@@ -35,16 +34,49 @@ class _UserProfilePageState extends State<UserProfilePage> {
   bool _isCheckingFace = true;
   bool _isLoadingProfile = false;
   bool _isUploadingPhoto = false;
+  bool _isEditMode = false;
+  bool _isSaving = false;
   Map<String, dynamic>? _userProfile;
+  Map<String, dynamic>? _organization;
+
+  // Form controllers
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _displayNameController;
+  late TextEditingController _phoneController;
+  String _selectedGender = 'male';
+  DateTime? _selectedDateOfBirth;
+
+  static const Color primaryColor = Color(0xFF6C63FF);
 
   @override
   void initState() {
     super.initState();
+    _displayNameController = TextEditingController();
+    _phoneController = TextEditingController();
     _userProfile = widget.userProfile;
     _checkFaceRegistration();
+    _loadOrganizationInfo();
     if (_userProfile == null) {
       _loadUserProfile();
+    } else {
+      _populateControllers();
     }
+  }
+
+  @override
+  void dispose() {
+    _displayNameController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  void _populateControllers() {
+    _displayNameController.text = _userProfile?['display_name'] ?? '';
+    _phoneController.text = _userProfile?['phone'] ?? '';
+    _selectedGender = _userProfile?['gender'] ?? 'male';
+    _selectedDateOfBirth = _userProfile?['date_of_birth'] != null 
+        ? DateTime.parse(_userProfile!['date_of_birth']) 
+        : null;
   }
 
   Future<void> _loadUserProfile() async {
@@ -67,6 +99,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
       if (mounted) {
         setState(() {
           _userProfile = response;
+          _populateControllers();
           _isLoadingProfile = false;
         });
       }
@@ -77,6 +110,24 @@ class _UserProfilePageState extends State<UserProfilePage> {
           _isLoadingProfile = false;
         });
       }
+    }
+  }
+
+  Future<void> _loadOrganizationInfo() async {
+    try {
+      final response = await _supabase
+          .from('organizations')
+          .select('id, name, logo_url')
+          .eq('id', widget.memberData['organization_id'])
+          .single();
+
+      if (mounted) {
+        setState(() {
+          _organization = response;
+        });
+      }
+    } catch (e) {
+      print('Error loading organization info: $e');
     }
   }
 
@@ -140,24 +191,20 @@ class _UserProfilePageState extends State<UserProfilePage> {
       final userId = _supabase.auth.currentUser?.id;
       if (userId == null) throw Exception('User not logged in');
 
-      // Generate unique filename
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final fileName = '$userId-$timestamp.jpg';
       final filePath = 'mass-profile/$fileName';
 
-      // Upload to Supabase Storage
       final file = File(image.path);
       await _supabase.storage
           .from('profile-photos')
           .upload(filePath, file);
 
-      // Update user profile with new photo path
       await _supabase
           .from('user_profiles')
           .update({'profile_photo_url': fileName})
           .eq('id', userId);
 
-      // Reload profile
       await _loadUserProfile();
 
       if (mounted) {
@@ -184,6 +231,122 @@ class _UserProfilePageState extends State<UserProfilePage> {
           _isUploadingPhoto = false;
         });
       }
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) throw Exception('User not logged in');
+
+      // Split display name menjadi first_name dan last_name
+      final displayName = _displayNameController.text.trim();
+      final nameParts = displayName.split(' ').where((n) => n.isNotEmpty).toList();
+      
+      String firstName;
+      String lastName;
+      
+      if (nameParts.isEmpty) {
+        firstName = 'User';
+        lastName = '';
+      } else if (nameParts.length == 1) {
+        firstName = nameParts[0];
+        lastName = '';
+      } else {
+        firstName = nameParts[0];
+        lastName = nameParts.sublist(1).join(' ');
+      }
+
+      await _supabase
+          .from('user_profiles')
+          .update({
+            'first_name': firstName,
+            'last_name': lastName,
+            'display_name': displayName,
+            'phone': _phoneController.text.trim().isEmpty 
+                ? null 
+                : _phoneController.text.trim(),
+            'gender': _selectedGender,
+            'date_of_birth': _selectedDateOfBirth?.toIso8601String().split('T')[0],
+          })
+          .eq('id', userId);
+
+      await _loadUserProfile();
+
+      if (mounted) {
+        setState(() {
+          _isEditMode = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Profile updated successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('!!! ERROR saving profile: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update profile: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  void _toggleEditMode() {
+    setState(() {
+      _isEditMode = !_isEditMode;
+      if (!_isEditMode) {
+        _populateControllers();
+      }
+    });
+  }
+
+  Future<void> _selectDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDateOfBirth ?? 
+          DateTime.now().subtract(const Duration(days: 365 * 25)),
+      firstDate: DateTime(1900),
+      lastDate: DateTime.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: primaryColor,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    
+    if (picked != null) {
+      setState(() {
+        _selectedDateOfBirth = picked;
+      });
     }
   }
 
@@ -287,6 +450,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 children: [
                   // ---------- HEADER ----------
                   Container(
+                    width: double.infinity,
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
                         colors: [Color(0xFF6C63FF), Color(0xFF8B84FF)],
@@ -298,18 +462,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         bottomRight: Radius.circular(30),
                       ),
                     ),
-                    padding: const EdgeInsets.fromLTRB(20, 50, 20, 40),
+                    padding: const EdgeInsets.fromLTRB(0, 60, 0, 30),
                     child: Column(
                       children: [
-                        const Text(
-                          'My Profile',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 30),
                         // Profile Photo
                         Stack(
                           children: [
@@ -335,7 +490,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                                 child: _isUploadingPhoto
                                     ? const Center(
                                         child: CircularProgressIndicator(
-                                          color: Color(0xFF6C63FF),
+                                          color: Colors.white,
                                           strokeWidth: 3,
                                         ),
                                       )
@@ -378,7 +533,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                                   ),
                                   child: const Icon(
                                     Icons.camera_alt,
-                                    color: Color(0xFF6C63FF),
+                                    color: primaryColor,
                                     size: 20,
                                   ),
                                 ),
@@ -396,47 +551,171 @@ class _UserProfilePageState extends State<UserProfilePage> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            _roleService.getRoleName(widget.memberData),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
+                        Text(
+                          _supabase.auth.currentUser?.email ?? 'No email',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
                           ),
                         ),
+                        if (_organization != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.3),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.business,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    _organization!['name'] ?? 'Unknown Organization',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
 
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 24),
 
-                  // ---------- PROFILE INFO ----------
+                  // ---------- CONTENT ----------
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Column(
                       children: [
-                        // Personal Information Card
                         _buildSectionCard(
                           title: 'Personal Information',
                           icon: Icons.person_outline,
+                          needsForm: true,
                           children: [
+                            if (_isEditMode) ...[
+                              // Save & Cancel Buttons
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 16),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        onPressed: _isSaving ? null : _toggleEditMode,
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.grey[600],
+                                          side: BorderSide(color: Colors.grey[300]!),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          padding: const EdgeInsets.symmetric(vertical: 12),
+                                        ),
+                                        child: const Text('Cancel'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        onPressed: _isSaving ? null : _saveProfile,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: primaryColor,
+                                          foregroundColor: Colors.white,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          padding: const EdgeInsets.symmetric(vertical: 12),
+                                          elevation: 0,
+                                        ),
+                                        child: _isSaving
+                                            ? const SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                ),
+                                              )
+                                            : const Text('Save'),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Editable Fields
+                              _buildEditableField(
+                                label: 'Display Name',
+                                controller: _displayNameController,
+                                validator: (value) {
+                                  if (value == null || value.trim().isEmpty) {
+                                    return 'Display name is required';
+                                  }
+                                  return null;
+                                },
+                              ),
+                              _buildEditableField(
+                                label: 'Phone Number',
+                                controller: _phoneController,
+                                keyboardType: TextInputType.phone,
+                              ),
+                              _buildGenderField(),
+                              _buildDateOfBirthField(),
+                            ] else ...[
+                              // View Mode with Edit Button
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 16),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    OutlinedButton.icon(
+                                      onPressed: _toggleEditMode,
+                                      icon: const Icon(Icons.edit, size: 16),
+                                      label: const Text('Edit'),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: primaryColor,
+                                        side: const BorderSide(color: primaryColor),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 8,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              _buildInfoRow('Display Name', _userProfile?['display_name'] ?? 'Not set'),
+                              _buildInfoRow('Phone Number', _userProfile?['phone'] ?? 'Not set'),
+                              _buildInfoRow('Gender', _userProfile?['gender'] != null 
+                                  ? '${_userProfile!['gender'].toString()[0].toUpperCase()}${_userProfile!['gender'].toString().substring(1)}'
+                                  : 'Not set'),
+                              _buildInfoRow('Date of Birth', _formatDate(_userProfile?['date_of_birth'])),
+                            ],
+                            const Divider(height: 24),
                             _buildInfoRow('Employee Code', _userProfile?['employee_code'] ?? 'Not set'),
-                            _buildInfoRow('Email', _supabase.auth.currentUser?.email ?? 'Not set'),
-                            _buildInfoRow('Phone', _userProfile?['phone'] ?? 'Not set'),
-                            _buildInfoRow('Mobile', _userProfile?['mobile'] ?? 'Not set'),
-                            _buildInfoRow('Date of Birth', _formatDate(_userProfile?['date_of_birth'])),
-                            _buildInfoRow('Gender', _userProfile?['gender']?.toString().toUpperCase() ?? 'Not set'),
-                            _buildInfoRow('Nationality', _userProfile?['nationality'] ?? 'Not set'),
+                            _buildInfoRow('Position', widget.memberData['position']?['title'] ?? 'Not specified'),
+                            _buildInfoRow('Department', widget.memberData['department']?['name'] ?? 'Not specified'),
                           ],
                         ),
 
@@ -513,7 +792,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                                         ),
                                       ),
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(0xFF6C63FF),
+                                        backgroundColor: primaryColor,
                                         foregroundColor: Colors.white,
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -565,7 +844,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
         onTap: (index) {
           switch (index) {
             case 0:
-              // Navigate back to Home
               Navigator.pop(context);
               break;
             case 1:
@@ -581,7 +859,30 @@ class _UserProfilePageState extends State<UserProfilePage> {
     required String title,
     required IconData icon,
     required List<Widget> children,
+    bool needsForm = false,
   }) {
+    final cardContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: primaryColor),
+            const SizedBox(width: 12),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        ...children,
+      ],
+    );
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -595,25 +896,146 @@ class _UserProfilePageState extends State<UserProfilePage> {
           ),
         ],
       ),
+      child: needsForm 
+          ? Form(key: _formKey, child: cardContent)
+          : cardContent,
+    );
+  }
+
+  Widget _buildEditableField({
+    required String label,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    String? Function(String?)? validator,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: controller,
+            keyboardType: keyboardType,
+            validator: validator,
+            decoration: InputDecoration(
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              filled: true,
+              fillColor: Colors.grey.shade50,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGenderField() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Gender',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
-              Icon(icon, color: const Color(0xFF6C63FF)),
-              const SizedBox(width: 12),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+              Expanded(
+                child: RadioListTile<String>(
+                  title: const Text('Male'),
+                  value: 'male',
+                  groupValue: _selectedGender,
+                  activeColor: primaryColor,
+                  contentPadding: EdgeInsets.zero,
+                  onChanged: (v) => setState(() => _selectedGender = v!),
+                ),
+              ),
+              Expanded(
+                child: RadioListTile<String>(
+                  title: const Text('Female'),
+                  value: 'female',
+                  groupValue: _selectedGender,
+                  activeColor: primaryColor,
+                  contentPadding: EdgeInsets.zero,
+                  onChanged: (v) => setState(() => _selectedGender = v!),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          ...children,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDateOfBirthField() {
+    final dateDisplay = _selectedDateOfBirth != null
+        ? '${_selectedDateOfBirth!.day.toString().padLeft(2, '0')}/${_selectedDateOfBirth!.month.toString().padLeft(2, '0')}/${_selectedDateOfBirth!.year}'
+        : 'Select date';
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Date of Birth',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: _selectDate,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
+                color: Colors.grey.shade50,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    dateDisplay,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: _selectedDateOfBirth != null 
+                          ? Colors.black87 
+                          : Colors.grey.shade600,
+                    ),
+                  ),
+                  Icon(
+                    Icons.calendar_today,
+                    size: 20,
+                    color: Colors.grey.shade600,
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
