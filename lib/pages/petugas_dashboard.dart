@@ -5,70 +5,53 @@ import '../services/role_service.dart';
 import '../models/attendance_record.dart';
 import 'face_registration_page.dart';
 import 'face_attendance_page.dart';
+import 'petugas_profile_page.dart';
 
-class AdminDashboardPage extends StatefulWidget {
+class PetugasDashboardPage extends StatefulWidget {
   final int organizationMemberId;
   final Map<String, dynamic> memberData;
+  final Map<String, dynamic>? userProfile;
 
-  const AdminDashboardPage({
+  const PetugasDashboardPage({
     super.key,
     required this.organizationMemberId,
     required this.memberData,
+    this.userProfile,
   });
 
   @override
-  State<AdminDashboardPage> createState() => _AdminDashboardPageState();
+  State<PetugasDashboardPage> createState() => _PetugasDashboardPageState();
 }
 
-class _AdminDashboardPageState extends State<AdminDashboardPage> {
+class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   final AttendanceService _attendanceService = AttendanceService();
   final BiometricService _biometricService = BiometricService();
   final RoleService _roleService = RoleService();
 
-  String selectedPresenceTab = 'This Week';
-  String selectedHistoryTab = 'This Month';
-  
   AttendanceRecord? _todayAttendance;
   bool _hasRegisteredFace = false;
   bool _isLoadingAttendance = true;
   bool _isCheckingFace = true;
   String? _errorMessage;
+  int _currentNavIndex = 0;
 
-  // Data dummy untuk attendance history
+  // Data dummy untuk attendance history (1 item saja)
   final List<Map<String, dynamic>> attendanceHistory = [
     {
       'studentName': 'Angelica Martha Faozi',
       'status': 'Arrived on time',
-      'date': 'Wednesday, 8 January 2021',
+      'date': 'Wednesday, 8 January 2025',
       'time': '07:15',
       'icon': Icons.check_circle,
       'iconColor': Colors.green,
       'photoUrl': 'https://i.pravatar.cc/150?img=47',
-    },
-    {
-      'studentName': 'Budi Santoso',
-      'status': 'Arrived late',
-      'date': 'Wednesday, 8 January 2021',
-      'time': '07:45',
-      'icon': Icons.schedule,
-      'iconColor': Colors.orange,
-      'photoUrl': 'https://i.pravatar.cc/150?img=12',
-    },
-    {
-      'studentName': 'Citra Dewi',
-      'status': 'Arrived on time',
-      'date': 'Tuesday, 7 January 2021',
-      'time': '07:10',
-      'icon': Icons.check_circle,
-      'iconColor': Colors.green,
-      'photoUrl': 'https://i.pravatar.cc/150?img=32',
     },
   ];
 
   @override
   void initState() {
     super.initState();
-    debugPrint('=== ADMIN DASHBOARD INIT ===');
+    debugPrint('=== PETUGAS DASHBOARD INIT ===');
     debugPrint('Organization Member ID: ${widget.organizationMemberId}');
     debugPrint('Role: ${_roleService.getRoleName(widget.memberData)}');
     _loadTodayAttendance();
@@ -209,6 +192,49 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     }
   }
 
+  void _handleNavigation(int index) {
+    if (index == _currentNavIndex) return;
+
+    setState(() {
+      _currentNavIndex = index;
+    });
+
+    switch (index) {
+      case 0:
+        // Home - stay on current page
+        break;
+      case 1:
+        // Scanner
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('QR Scanner feature coming soon')),
+        );
+        break;
+      case 2:
+        // Records
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Records feature coming soon')),
+        );
+        break;
+      case 3:
+        // Profile
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PetugasProfilePage(
+              organizationMemberId: widget.organizationMemberId,
+              memberData: widget.memberData,
+              userProfile: widget.userProfile,
+            ),
+          ),
+        ).then((_) {
+          setState(() {
+            _currentNavIndex = 0;
+          });
+        });
+        break;
+    }
+  }
+
   String _getCurrentDate() {
     final now = DateTime.now();
     final weekday = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
@@ -230,7 +256,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xFF4A90E2), Color(0xFF5BA3F5)],
+                    colors: [Color(0xFF6B46C1), Color(0xFF9333EA)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
@@ -281,7 +307,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       ],
                     ),
                     const SizedBox(height: 20),
-                    // Profile Card with Admin Badge
+                    // Profile Card with Petugas Badge
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -297,7 +323,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       ),
                       child: Row(
                         children: [
-                          // Profile Image with Admin Badge
+                          // Profile Image with Petugas Badge
                           Stack(
                             children: [
                               Container(
@@ -306,7 +332,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                    color: const Color(0xFF4A90E2),
+                                    color: const Color(0xFF9333EA),
                                     width: 2,
                                   ),
                                   image: const DecorationImage(
@@ -323,7 +349,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                                 child: Container(
                                   padding: const EdgeInsets.all(4),
                                   decoration: BoxDecoration(
-                                    color: Colors.orange,
+                                    color: const Color(0xFF9333EA),
                                     shape: BoxShape.circle,
                                     border: Border.all(
                                       color: Colors.white,
@@ -331,7 +357,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                                     ),
                                   ),
                                   child: const Icon(
-                                    Icons.admin_panel_settings,
+                                    Icons.badge,
                                     size: 16,
                                     color: Colors.white,
                                   ),
@@ -362,23 +388,23 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: Colors.orange.shade50,
+                                        color: const Color(0xFFF3E8FF),
                                         borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          Icon(
-                                            Icons.admin_panel_settings,
+                                          const Icon(
+                                            Icons.badge,
                                             size: 14,
-                                            color: Colors.orange.shade700,
+                                            color: Color(0xFF9333EA),
                                           ),
                                           const SizedBox(width: 4),
                                           Text(
                                             _roleService.getRoleName(widget.memberData),
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                               fontSize: 12,
-                                              color: Colors.orange.shade700,
+                                              color: Color(0xFF9333EA),
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
@@ -427,14 +453,14 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
               const SizedBox(height: 24),
 
-              // ---------- TEAM ATTENDANCE OVERVIEW ----------
+              // ---------- QUICK ACTIONS ----------
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      "Team Attendance Overview",
+                      "Quick Actions",
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -442,30 +468,73 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Stats Cards
+                    Row(
+                      children: [
+                        _QuickActionCard(
+                          icon: Icons.qr_code_scanner,
+                          label: 'Scan QR',
+                          color: Colors.purple.shade50,
+                          iconColor: const Color(0xFF9333EA),
+                          onTap: () {
+                            // Navigate to QR scanner
+                          },
+                        ),
+                        const SizedBox(width: 12),
+                        _QuickActionCard(
+                          icon: Icons.people,
+                          label: 'Manual Check',
+                          color: Colors.blue.shade50,
+                          iconColor: Colors.blue,
+                          onTap: () {
+                            // Navigate to manual attendance
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // ---------- TODAY'S SUMMARY ----------
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Today's Summary",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     Row(
                       children: [
                         _StatCard(
-                          value: '24',
-                          label: 'Present',
+                          value: '18',
+                          label: 'Checked In',
                           color: Colors.green.shade50,
-                          icon: Icons.check_circle,
+                          icon: Icons.login,
                           iconColor: Colors.green,
+                        ),
+                        const SizedBox(width: 12),
+                        _StatCard(
+                          value: '5',
+                          label: 'Pending',
+                          color: Colors.orange.shade50,
+                          icon: Icons.hourglass_empty,
+                          iconColor: Colors.orange,
                         ),
                         const SizedBox(width: 12),
                         _StatCard(
                           value: '2',
                           label: 'Late',
-                          color: Colors.orange.shade50,
-                          icon: Icons.schedule,
-                          iconColor: Colors.orange,
-                        ),
-                        const SizedBox(width: 12),
-                        _StatCard(
-                          value: '3',
-                          label: 'Absent',
                           color: Colors.red.shade50,
-                          icon: Icons.cancel,
+                          icon: Icons.warning,
                           iconColor: Colors.red,
                         ),
                       ],
@@ -476,7 +545,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
               const SizedBox(height: 24),
 
-              // ---------- ATTENDANCE HISTORY ----------
+              // ---------- RECENT ACTIVITY ----------
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
@@ -495,14 +564,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                         ),
                         TextButton(
                           onPressed: () {
-                            // Navigate to full attendance list
+                            // Navigate to full activity list
                           },
                           child: const Text('View All'),
                         ),
                       ],
                     ),
                     const SizedBox(height: 16),
-                    // History Items
                     ...attendanceHistory.map((attendance) {
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
@@ -526,7 +594,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           ),
         ),
       ),
-      // ---------- BOTTOM NAVIGATION ----------
       bottomNavigationBar: _buildBottomNav(),
     );
   }
@@ -545,22 +612,24 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       ),
       child: BottomNavigationBar(
         backgroundColor: Colors.white,
-        selectedItemColor: const Color(0xFF4A90E2),
+        selectedItemColor: const Color(0xFF9333EA),
         unselectedItemColor: Colors.grey,
-        currentIndex: 0,
+        currentIndex: _currentNavIndex,
         elevation: 0,
+        type: BottomNavigationBarType.fixed,
+        onTap: _handleNavigation,
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.home),
             label: 'Home',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.people),
-            label: 'Team',
+            icon: Icon(Icons.qr_code_scanner),
+            label: 'Scanner',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.bar_chart),
-            label: 'Reports',
+            icon: Icon(Icons.list_alt),
+            label: 'Records',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person),
@@ -574,7 +643,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
 // ========== SUPPORTING WIDGETS ==========
 
-// ---------- ATTENDANCE BUTTONS WIDGET ----------
 class _AttendanceButtons extends StatelessWidget {
   final AttendanceRecord? todayAttendance;
   final bool hasRegisteredFace;
@@ -608,9 +676,7 @@ class _AttendanceButtons extends StatelessWidget {
             ),
           ],
         ),
-        child: const Center(
-          child: CircularProgressIndicator(),
-        ),
+        child: const Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -634,7 +700,7 @@ class _AttendanceButtons extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.camera_alt, color: Color(0xFF4A90E2)),
+              const Icon(Icons.camera_alt, color: Color(0xFF9333EA)),
               const SizedBox(width: 12),
               const Text(
                 'Face Recognition Attendance',
@@ -648,7 +714,6 @@ class _AttendanceButtons extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           
-          // Face Registration Status
           if (!hasRegisteredFace)
             Container(
               padding: const EdgeInsets.all(12),
@@ -675,7 +740,6 @@ class _AttendanceButtons extends StatelessWidget {
               ),
             ),
 
-          // Today's Status
           if (hasCheckedIn)
             Container(
               padding: const EdgeInsets.all(12),
@@ -700,10 +764,7 @@ class _AttendanceButtons extends StatelessWidget {
                         children: [
                           const Text(
                             'Check In',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.black54,
-                            ),
+                            style: TextStyle(fontSize: 12, color: Colors.black54),
                           ),
                           Text(
                             _formatTime(todayAttendance!.actualCheckIn!),
@@ -720,21 +781,14 @@ class _AttendanceButtons extends StatelessWidget {
                   if (hasCheckedOut)
                     Row(
                       children: [
-                        const Icon(
-                          Icons.logout,
-                          color: Colors.grey,
-                          size: 20,
-                        ),
+                        const Icon(Icons.logout, color: Colors.grey, size: 20),
                         const SizedBox(width: 8),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
                               'Check Out',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.black54,
-                              ),
+                              style: TextStyle(fontSize: 12, color: Colors.black54),
                             ),
                             Text(
                               _formatTime(todayAttendance!.actualCheckOut!),
@@ -752,7 +806,6 @@ class _AttendanceButtons extends StatelessWidget {
               ),
             ),
 
-          // Action Buttons
           Row(
             children: [
               if (!hasRegisteredFace)
@@ -762,7 +815,7 @@ class _AttendanceButtons extends StatelessWidget {
                     icon: const Icon(Icons.face),
                     label: const Text('Register Face'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4A90E2),
+                      backgroundColor: const Color(0xFF9333EA),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
@@ -822,7 +875,56 @@ class _AttendanceButtons extends StatelessWidget {
   }
 }
 
-// ---------- STAT CARD WIDGET ----------
+class _QuickActionCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final Color iconColor;
+  final VoidCallback onTap;
+
+  const _QuickActionCard({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.iconColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                Icon(icon, color: iconColor, size: 32),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _StatCard extends StatelessWidget {
   final String value;
   final String label;
@@ -850,11 +952,7 @@ class _StatCard extends StatelessWidget {
         child: Column(
           children: [
             if (icon != null)
-              Icon(
-                icon,
-                color: iconColor ?? Colors.black54,
-                size: 24,
-              ),
+              Icon(icon, color: iconColor ?? Colors.black54, size: 24),
             if (icon != null) const SizedBox(height: 8),
             Text(
               value,
@@ -867,10 +965,7 @@ class _StatCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
           ],
         ),
@@ -879,7 +974,6 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-// ---------- HISTORY ITEM WIDGET ----------
 class _HistoryItem extends StatelessWidget {
   final String studentName;
   final String status;
@@ -916,16 +1010,12 @@ class _HistoryItem extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Photo Profile
           Container(
             width: 50,
             height: 50,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(
-                color: iconColor,
-                width: 2,
-              ),
+              border: Border.all(color: iconColor, width: 2),
               image: DecorationImage(
                 image: NetworkImage(photoUrl),
                 fit: BoxFit.cover,
@@ -933,7 +1023,6 @@ class _HistoryItem extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          // Info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -966,12 +1055,7 @@ class _HistoryItem extends StatelessWidget {
               ],
             ),
           ),
-          // Status Icon
-          Icon(
-            icon,
-            color: iconColor,
-            size: 24,
-          ),
+          Icon(icon, color: iconColor, size: 24),
         ],
       ),
     );

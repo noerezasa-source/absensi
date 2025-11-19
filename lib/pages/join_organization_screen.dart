@@ -1,4 +1,4 @@
-import 'package:absensimassal/pages/admin_dashboard.dart';
+import 'package:absensimassal/pages/petugas_dashboard.dart';
 import 'package:absensimassal/pages/user_dashboard.dart';
 import 'package:absensimassal/services/role_service.dart';
 import 'package:flutter/material.dart';
@@ -266,33 +266,39 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
     }
   }
 
-  void _navigateToDashboard(int organizationMemberId, Map<String, dynamic> memberData) {
-    debugPrint('=== NAVIGATING TO DASHBOARD ===');
-    debugPrint('Organization Member ID: $organizationMemberId');
-    debugPrint('Role: ${_roleService.getRoleName(memberData)}');
+  // Update method _navigateToDashboard di join_organization_screen.dart
+// Ganti method ini dengan yang baru:
 
-    if (_roleService.isAdmin(memberData)) {
-      debugPrint('✓ Navigating to Admin Dashboard');
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => AdminDashboardPage(
-            organizationMemberId: organizationMemberId,
-            memberData: memberData,
-          ),
+void _navigateToDashboard(int organizationMemberId, Map<String, dynamic> memberData) {
+  debugPrint('=== NAVIGATING TO DASHBOARD ===');
+  debugPrint('Organization Member ID: $organizationMemberId');
+  debugPrint('Role: ${_roleService.getRoleName(memberData)}');
+
+  if (_roleService.isPetugas(memberData)) {
+    debugPrint('✓ Navigating to Petugas Dashboard');
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => PetugasDashboardPage(
+          organizationMemberId: organizationMemberId,
+          memberData: memberData,
         ),
-      );
-    } else {
-      debugPrint('✓ Navigating to User Dashboard');
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => UserDashboardPage(
-            organizationMemberId: organizationMemberId,
-            memberData: memberData,
-          ),
+      ),
+    );
+  } else {
+    debugPrint('✓ Navigating to User Dashboard');
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => UserDashboardPage(
+          organizationMemberId: organizationMemberId,
+          memberData: memberData,
         ),
-      );
-    }
+      ),
+    );
   }
+}
+
+// JANGAN LUPA TAMBAHKAN IMPORT di bagian atas file:
+// import 'petugas_dashboard.dart';
 
   void _showSuccessDialog(String orgName, int organizationMemberId, Map<String, dynamic> memberData) {
     showDialog(

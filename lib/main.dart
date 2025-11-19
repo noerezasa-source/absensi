@@ -1,7 +1,7 @@
 import 'package:absensimassal/helpers/language_helper.dart';
 import 'package:absensimassal/pages/login.dart';
 import 'package:absensimassal/pages/join_organization_screen.dart';
-import 'package:absensimassal/pages/admin_dashboard.dart';
+import 'package:absensimassal/pages/petugas_dashboard.dart';
 import 'package:absensimassal/pages/user_dashboard.dart';
 import 'package:absensimassal/services/role_service.dart';
 import 'package:flutter/material.dart';
@@ -117,17 +117,19 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
       if (memberData != null) {
         final organizationMemberId = memberData['id'] as int;
+        final roleName = _roleService.getRoleName(memberData);
+        final roleCode = _roleService.getRoleCode(memberData);
         
         debugPrint('✅ User has organization membership');
         debugPrint('   Organization Member ID: $organizationMemberId');
-        debugPrint('   Role: ${_roleService.getRoleName(memberData)}');
+        debugPrint('   Role: $roleName ($roleCode)');
 
         // Navigate berdasarkan role
-        if (_roleService.isAdmin(memberData)) {
-          debugPrint('✅ User is Admin - navigating to Admin Dashboard');
+        if (_roleService.isPetugas(memberData)) {
+          debugPrint('✅ User is Admin - navigating to Petugas Dashboard');
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
-              builder: (context) => AdminDashboardPage(
+              builder: (context) => PetugasDashboardPage(
                 organizationMemberId: organizationMemberId,
                 memberData: memberData,
               ),
@@ -145,7 +147,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           );
         } else {
           // Default ke User Dashboard jika role tidak dikenali
-          debugPrint('⚠️ Unknown role - navigating to User Dashboard');
+          debugPrint('⚠️ Unknown role ($roleCode) - navigating to User Dashboard');
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (context) => UserDashboardPage(

@@ -33,11 +33,11 @@ class RoleService {
           .maybeSingle();
 
       if (response == null) {
-        print('No organization member found');
+        print('❌ No organization member found');
         return null;
       }
 
-      print('Organization Member found:');
+      print('✅ Organization Member found:');
       print('  - ID: ${response['id']}');
       print('  - Employee ID: ${response['employee_id']}');
       print('  - Role ID: ${response['role_id']}');
@@ -45,6 +45,8 @@ class RoleService {
       if (response['system_roles'] != null) {
         print('  - Role Code: ${response['system_roles']['code']}');
         print('  - Role Name: ${response['system_roles']['name']}');
+      } else {
+        print('  ⚠️ WARNING: system_roles is NULL!');
       }
 
       return response;
@@ -56,26 +58,65 @@ class RoleService {
 
   /// Check if user has admin role
   bool isAdmin(Map<String, dynamic>? memberData) {
-    if (memberData == null || memberData['system_roles'] == null) {
+    if (memberData == null) {
+      print('❌ isAdmin: memberData is null');
+      return false;
+    }
+    
+    if (memberData['system_roles'] == null) {
+      print('❌ isAdmin: system_roles is null');
       return false;
     }
 
     final roleCode = memberData['system_roles']['code'] as String?;
+    print('🔍 isAdmin check: roleCode = $roleCode');
     
     // Admin role codes: A001 (Admin), SA001 (Super Admin)
-    return roleCode == 'A001' || roleCode == 'SA001';
+    final result = roleCode == 'A001' || roleCode == 'SA001';
+    print('   Result: $result');
+    return result;
+  }
+
+  /// Check if user has petugas role
+  bool isPetugas(Map<String, dynamic>? memberData) {
+    if (memberData == null) {
+      print('❌ isPetugas: memberData is null');
+      return false;
+    }
+    
+    if (memberData['system_roles'] == null) {
+      print('❌ isPetugas: system_roles is null');
+      return false;
+    }
+
+    final roleCode = memberData['system_roles']['code'] as String?;
+    print('🔍 isPetugas check: roleCode = $roleCode');
+    
+    // Petugas role code: P001
+    final result = roleCode == 'P001';
+    print('   Result: $result');
+    return result;
   }
 
   /// Check if user has user role
   bool isUser(Map<String, dynamic>? memberData) {
-    if (memberData == null || memberData['system_roles'] == null) {
+    if (memberData == null) {
+      print('❌ isUser: memberData is null');
+      return false;
+    }
+    
+    if (memberData['system_roles'] == null) {
+      print('❌ isUser: system_roles is null');
       return false;
     }
 
     final roleCode = memberData['system_roles']['code'] as String?;
+    print('🔍 isUser check: roleCode = $roleCode');
     
     // User role code: US001
-    return roleCode == 'US001';
+    final result = roleCode == 'US001';
+    print('   Result: $result');
+    return result;
   }
 
   /// Get role display name
@@ -85,6 +126,15 @@ class RoleService {
     }
 
     return memberData['system_roles']['name'] as String? ?? 'Unknown';
+  }
+
+  /// Get role code
+  String getRoleCode(Map<String, dynamic>? memberData) {
+    if (memberData == null || memberData['system_roles'] == null) {
+      return 'UNKNOWN';
+    }
+
+    return memberData['system_roles']['code'] as String? ?? 'UNKNOWN';
   }
 
   /// Get all active roles

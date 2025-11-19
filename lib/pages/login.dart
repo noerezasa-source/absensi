@@ -1,4 +1,4 @@
-import 'package:absensimassal/pages/admin_dashboard.dart';
+import 'package:absensimassal/pages/petugas_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,7 +7,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'signup.dart';
 import 'join_organization_screen.dart';
 import '../services/role_service.dart';
-import 'admin_dashboard.dart';
+import 'petugas_dashboard.dart';
 import 'user_dashboard.dart';
 import '../helpers/language_helper.dart'; // Import language helper
 
@@ -164,7 +164,10 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     }
   }
 
- Future<void> _navigateAfterLogin(String userId) async {
+ // Update bagian _navigateAfterLogin di login.dart
+// Ganti method ini dengan yang baru:
+
+Future<void> _navigateAfterLogin(String userId) async {
   if (!mounted) return;
 
   showDialog(
@@ -202,11 +205,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
       if (!mounted) return;
 
       // Navigate berdasarkan role
-      if (_roleService.isAdmin(memberData)) {
-        debugPrint('✓ User is Admin - navigating to Admin Dashboard');
+      if (_roleService.isPetugas(memberData)) {
+        debugPrint('✓ User is Admin - navigating to Petugas Dashboard');
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (context) => AdminDashboardPage(
+            builder: (context) => PetugasDashboardPage(
               organizationMemberId: organizationMemberId,
               memberData: memberData,
             ),
@@ -261,6 +264,8 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   }
 }
 
+// JANGAN LUPA TAMBAHKAN IMPORT di bagian atas file:
+// import 'petugas_dashboard.dart';
   Future<void> _signInWithEmail() async {
     if (_isLoading) return;
 
