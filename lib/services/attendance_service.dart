@@ -1,7 +1,7 @@
 // lib/services/attendance_service.dart
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/attendance_record.dart';
-import '../models/attendance_log.dart';
 
 class AttendanceService {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -12,10 +12,16 @@ class AttendanceService {
     required String photoUrl,
     required String method,
     Map<String, dynamic>? location,
+    int? deviceId,
+    String? ipAddress,
+    String? userAgent,
+    int? applicationId,
+    Map<String, dynamic>? rawData,
   }) async {
     try {
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
+      final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
 
       // Cek apakah sudah ada record hari ini
       final existingRecord = await _supabase
@@ -30,15 +36,17 @@ class AttendanceService {
       if (existingRecord != null) {
         // ✅ Jika sudah check-in, jangan update lagi
         if (existingRecord['actual_check_in'] != null) {
-          throw Exception('Already checked in today at ${existingRecord['actual_check_in']}');
+          throw Exception(
+            'Already checked in today at ${existingRecord['actual_check_in']}',
+          );
         }
-        
+
         // Update existing record
         recordData = {
           'actual_check_in': now.toIso8601String(),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
-          'check_in_location': location,
+          'check_in_location': locationWithPhoto,
           'status': 'present',
           'updated_at': now.toIso8601String(),
         };
@@ -59,7 +67,7 @@ class AttendanceService {
           'actual_check_in': now.toIso8601String(),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
-          'check_in_location': location,
+          'check_in_location': locationWithPhoto,
           'status': 'present',
           'validation_status': 'pending',
         };
@@ -79,7 +87,12 @@ class AttendanceService {
         attendanceRecordId: recordData['id'],
         eventType: 'check_in',
         method: method,
-        location: location,
+        location: locationWithPhoto,
+        deviceId: deviceId,
+        ipAddress: ipAddress,
+        userAgent: userAgent,
+        applicationId: applicationId,
+        rawData: rawData,
       );
 
       return AttendanceRecord.fromJson(recordData);
@@ -94,6 +107,11 @@ class AttendanceService {
     required String photoUrl,
     required String method,
     Map<String, dynamic>? location,
+    int? deviceId,
+    String? ipAddress,
+    String? userAgent,
+    int? applicationId,
+    Map<String, dynamic>? rawData,
   }) async {
     try {
       final now = DateTime.now();
@@ -117,19 +135,23 @@ class AttendanceService {
 
       // ✅ Jika sudah check-out, jangan update lagi
       if (existingRecord['actual_check_out'] != null) {
-        throw Exception('Already checked out today at ${existingRecord['actual_check_out']}');
+        throw Exception(
+          'Already checked out today at ${existingRecord['actual_check_out']}',
+        );
       }
 
       // Calculate work duration
       final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
       final workDuration = now.difference(checkInTime).inMinutes;
 
+      final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
+
       // Update record
       final recordData = {
         'actual_check_out': now.toIso8601String(),
         'check_out_method': method,
         'check_out_photo_url': photoUrl,
-        'check_out_location': location,
+        'check_out_location': locationWithPhoto,
         'work_duration_minutes': workDuration,
         'updated_at': now.toIso8601String(),
       };
@@ -145,7 +167,12 @@ class AttendanceService {
         attendanceRecordId: existingRecord['id'],
         eventType: 'check_out',
         method: method,
-        location: location,
+        location: locationWithPhoto,
+        deviceId: deviceId,
+        ipAddress: ipAddress,
+        userAgent: userAgent,
+        applicationId: applicationId,
+        rawData: rawData,
       );
 
       final updatedRecord = await _supabase
@@ -164,9 +191,11 @@ class AttendanceService {
   Future<AttendanceRecord?> getTodayAttendance(int organizationMemberId) async {
     try {
       final today = DateTime.now();
-      final todayStr = DateTime(today.year, today.month, today.day)
-          .toIso8601String()
-          .split('T')[0];
+      final todayStr = DateTime(
+        today.year,
+        today.month,
+        today.day,
+      ).toIso8601String().split('T')[0];
 
       final record = await _supabase
           .from('attendance_records')
@@ -197,11 +226,17 @@ class AttendanceService {
           .eq('organization_member_id', organizationMemberId);
 
       if (startDate != null) {
-        query = query.gte('attendance_date', startDate.toIso8601String().split('T')[0]);
+        query = query.gte(
+          'attendance_date',
+          startDate.toIso8601String().split('T')[0],
+        );
       }
 
       if (endDate != null) {
-        query = query.lte('attendance_date', endDate.toIso8601String().split('T')[0]);
+        query = query.lte(
+          'attendance_date',
+          endDate.toIso8601String().split('T')[0],
+        );
       }
 
       final records = await query
@@ -223,6 +258,11 @@ class AttendanceService {
     required String eventType,
     required String method,
     Map<String, dynamic>? location,
+    int? deviceId,
+    String? ipAddress,
+    String? userAgent,
+    int? applicationId,
+    Map<String, dynamic>? rawData,
   }) async {
     try {
       final logData = {
@@ -232,14 +272,125 @@ class AttendanceService {
         'event_time': DateTime.now().toIso8601String(),
         'method': method,
         'location': location,
-        'is_verified': method == 'face_recognition' || method == 'face_recognition_kiosk',
-        'verification_method': method.contains('face_recognition') ? 'face_recognition' : null,
+        'device_id': deviceId,
+        'ip_address': ipAddress,
+        'user_agent': userAgent,
+        'application_id': applicationId,
+        'raw_data': rawData,
+        'is_verified':
+            method == 'face_recognition' || method == 'face_recognition_kiosk',
+        'verification_method': method.contains('face_recognition')
+            ? 'face_recognition'
+            : null,
       };
 
       await _supabase.from('attendance_logs').insert(logData);
     } catch (e) {
       // Log error tapi jangan throw exception
-      print('Failed to create attendance log: $e');
+      debugPrint('Failed to create attendance log: $e');
     }
+  }
+
+  Future<Map<String, int>> getOrganizationTodayStats(int organizationId) async {
+    final today = DateTime.now();
+    final todayStr = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).toIso8601String().split('T')[0];
+
+    try {
+      final records = await _supabase
+          .from('attendance_records')
+          .select('''
+            id,
+            actual_check_in,
+            validation_status,
+            late_minutes,
+            organization_members!inner(organization_id)
+          ''')
+          .eq('attendance_date', todayStr)
+          .eq('organization_members.organization_id', organizationId);
+
+      int checkedIn = 0;
+      int pending = 0;
+      int late = 0;
+
+      for (final record in records as List<dynamic>) {
+        final data = record as Map<String, dynamic>;
+
+        if (data['actual_check_in'] != null) {
+          checkedIn++;
+        }
+
+        if ((data['validation_status'] as String?) == 'pending') {
+          pending++;
+        }
+
+        final lateMinutes = data['late_minutes'];
+        if (lateMinutes is int && lateMinutes > 0) {
+          late++;
+        }
+      }
+
+      return {'checked_in': checkedIn, 'pending': pending, 'late': late};
+    } catch (e) {
+      throw Exception('Failed to load organization stats: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getOrganizationRecentActivities({
+    required int organizationId,
+    int limit = 10,
+  }) async {
+    try {
+      const faceRecognitionPattern = '%face_recognition%';
+      final logs = await _supabase
+          .from('attendance_logs')
+          .select('''
+            id,
+            event_type,
+            event_time,
+            method,
+            organization_members!inner(
+              id,
+              organization_id,
+              user_profiles!inner(
+                display_name,
+                first_name,
+                last_name,
+                profile_photo_url
+              )
+            ),
+            attendance_records (
+              attendance_date,
+              status
+            )
+          ''')
+          .eq('organization_members.organization_id', organizationId)
+          .ilike('method', faceRecognitionPattern)
+          .order('event_time', ascending: false)
+          .limit(limit);
+
+      return List<Map<String, dynamic>>.from(logs);
+    } catch (e) {
+      throw Exception('Failed to load recent activities: $e');
+    }
+  }
+
+  Map<String, dynamic>? _decorateLocationWithPhoto(
+    Map<String, dynamic>? location,
+    String photoUrl,
+  ) {
+    if (photoUrl.trim().isEmpty) {
+      return location;
+    }
+
+    final updatedLocation = location != null
+        ? Map<String, dynamic>.from(location)
+        : <String, dynamic>{};
+
+    updatedLocation['photo_url'] = photoUrl;
+    return updatedLocation;
   }
 }

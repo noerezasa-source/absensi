@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/attendance_service.dart';
 import '../services/role_service.dart';
-import '../models/attendance_record.dart';
 import 'face_attendance_multi_user_page.dart';
 import 'petugas_profile_page.dart';
 
@@ -22,10 +22,12 @@ class PetugasDashboardPage extends StatefulWidget {
 }
 
 class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
+  final SupabaseClient _supabase = Supabase.instance.client;
   final AttendanceService _attendanceService = AttendanceService();
   final RoleService _roleService = RoleService();
 
   bool _isLoadingStats = true;
+  bool _isLoadingActivities = true;
   String? _errorMessage;
   int _currentNavIndex = 0;
 
@@ -35,7 +37,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   int _lateCount = 0;
 
   // Recent activity data
-  final List<Map<String, dynamic>> attendanceHistory = [];
+  List<Map<String, dynamic>> _recentActivities = [];
 
   @override
   void initState() {
@@ -43,27 +45,34 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     debugPrint('=== PETUGAS DASHBOARD INIT (KIOSK MODE) ===');
     debugPrint('Organization Member ID: ${widget.organizationMemberId}');
     debugPrint('Role: ${_roleService.getRoleName(widget.memberData)}');
-    _loadTodayStats();
+    _refreshAll();
   }
 
   Future<void> _loadTodayStats() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) {
+      setState(() {
+        _isLoadingStats = false;
+        _errorMessage = 'Organization data not found';
+      });
+      return;
+    }
+
     setState(() {
       _isLoadingStats = true;
       _errorMessage = null;
     });
     
     try {
-      debugPrint('Loading today statistics...');
+      debugPrint('Loading today statistics for organization $organizationId...');
       
-      // TODO: Implement API call to get organization stats
-      // For now, using dummy data
-      await Future.delayed(const Duration(milliseconds: 500));
+      final stats = await _attendanceService.getOrganizationTodayStats(organizationId);
       
       if (mounted) {
         setState(() {
-          _checkedInCount = 18;
-          _pendingCount = 5;
-          _lateCount = 2;
+          _checkedInCount = stats['checked_in'] ?? 0;
+          _pendingCount = stats['pending'] ?? 0;
+          _lateCount = stats['late'] ?? 0;
           _isLoadingStats = false;
         });
       }
@@ -80,7 +89,68 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   Future<void> _refreshAll() async {
     debugPrint('=== REFRESHING ALL DATA ===');
-    await _loadTodayStats();
+    await Future.wait([
+      _loadTodayStats(),
+      _loadRecentActivities(),
+    ]);
+  }
+
+  Future<void> _loadRecentActivities() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) {
+      setState(() {
+        _isLoadingActivities = false;
+        _errorMessage = 'Organization data not found';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoadingActivities = true;
+    });
+
+    try {
+      final activities = await _attendanceService.getOrganizationRecentActivities(
+        organizationId: organizationId,
+        limit: 6,
+      );
+
+      if (!mounted) return;
+
+      final mappedActivities = activities.map((activity) {
+        final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
+        final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
+        final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
+
+        DateTime? eventTime;
+        final eventTimeStr = activity['event_time'] as String?;
+        if (eventTimeStr != null) {
+          eventTime = DateTime.tryParse(eventTimeStr);
+        }
+
+        return {
+          'name': _composeUserName(profile),
+          'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
+          'eventType': activity['event_type'] as String?,
+          'method': activity['method'] as String?,
+          'eventTime': eventTime,
+          'status': record['status'] as String?,
+        };
+      }).toList();
+
+      setState(() {
+        _recentActivities = mappedActivities;
+        _isLoadingActivities = false;
+      });
+    } catch (e) {
+      debugPrint('!!! ERROR loading recent activities: $e');
+      if (!mounted) return;
+      setState(() {
+        _isLoadingActivities = false;
+        _recentActivities = [];
+        _errorMessage ??= 'Failed to load recent activities: $e';
+      });
+    }
   }
 
   Future<void> _navigateToMultiUserFaceAttendance(String type) async {
@@ -262,6 +332,92 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     return '$weekday, ${now.day} $month ${now.year}';
   }
 
+  String _getDisplayName() {
+    final profile = widget.userProfile;
+    if (profile == null) {
+      return 'Petugas Attendance';
+    }
+
+    final displayName = profile['display_name'] as String?;
+    if (displayName != null && displayName.trim().isNotEmpty) {
+      return displayName.trim();
+    }
+
+    final firstName = profile['first_name'] as String? ?? '';
+    final lastName = profile['last_name'] as String? ?? '';
+    final fullName = '$firstName $lastName'.trim();
+    return fullName.isEmpty ? 'Petugas Attendance' : fullName;
+  }
+
+  ImageProvider _getProfileImage() {
+    final photoUrl =
+        _resolveProfilePhotoUrl(widget.userProfile?['profile_photo_url'] as String?);
+    if (photoUrl != null && photoUrl.isNotEmpty) {
+      return NetworkImage(photoUrl);
+    }
+    return const AssetImage('images/logo.png');
+  }
+
+  String _composeUserName(Map<String, dynamic>? profile) {
+    if (profile == null) return 'Unknown User';
+    final displayName = profile['display_name'] as String?;
+    if (displayName != null && displayName.trim().isNotEmpty) {
+      return displayName.trim();
+    }
+    final firstName = profile['first_name'] as String? ?? '';
+    final lastName = profile['last_name'] as String? ?? '';
+    final fullName = '$firstName $lastName'.trim();
+    return fullName.isEmpty ? 'Unknown User' : fullName;
+  }
+
+  String? _resolveProfilePhotoUrl(String? storedPath) {
+    if (storedPath == null || storedPath.trim().isEmpty) return null;
+    if (storedPath.startsWith('http://') || storedPath.startsWith('https://')) {
+      return storedPath;
+    }
+
+    final normalizedPath = storedPath.startsWith('mass-profile/')
+        ? storedPath
+        : 'mass-profile/$storedPath';
+
+    try {
+      return _supabase.storage
+          .from('profile-photos')
+          .getPublicUrl(normalizedPath);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _formatEventType(String? type) {
+    switch (type) {
+      case 'check_in':
+        return 'Check In';
+      case 'check_out':
+        return 'Check Out';
+      default:
+        if (type == null) return 'Activity';
+        return type.replaceAll('_', ' ').toUpperCase();
+    }
+  }
+
+  String _formatEventTime(DateTime? time) {
+    if (time == null) return 'Unknown time';
+    final now = DateTime.now();
+    final isToday =
+        now.year == time.year && now.month == time.month && now.day == time.day;
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    final timeStr = '$hour:$minute';
+
+    if (isToday) {
+      return 'Today • $timeStr';
+    }
+
+    final dateStr = '${time.day}/${time.month}/${time.year}';
+    return '$dateStr • $timeStr';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -355,10 +511,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                     color: const Color(0xFF9333EA),
                                     width: 2,
                                   ),
-                                  image: const DecorationImage(
-                                    image: NetworkImage(
-                                      'https://i.pravatar.cc/150?img=47',
-                                    ),
+                                  image: DecorationImage(
+                                    image: _getProfileImage(),
                                     fit: BoxFit.cover,
                                   ),
                                 ),
@@ -391,9 +545,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
-                                  'Angelica Martha Faozi',
-                                  style: TextStyle(
+                                Text(
+                                  _getDisplayName(),
+                                  style: const TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.black87,
@@ -455,6 +609,45 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                   ],
                 ),
               ),
+
+              if (_errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red.shade100),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            color: Colors.redAccent, size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _errorMessage!,
+                            style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close,
+                              size: 16, color: Colors.redAccent),
+                          onPressed: () {
+                            setState(() {
+                              _errorMessage = null;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
 
               const SizedBox(height: 24),
 
@@ -665,7 +858,18 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    if (attendanceHistory.isEmpty)
+                    if (_isLoadingActivities)
+                      Container(
+                        padding: const EdgeInsets.all(40),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                      )
+                    else if (_recentActivities.isEmpty)
                       Container(
                         padding: const EdgeInsets.all(40),
                         decoration: BoxDecoration(
@@ -691,6 +895,12 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                             ],
                           ),
                         ),
+                      )
+                    else
+                      Column(
+                        children: _recentActivities
+                            .map((activity) => _buildActivityItem(activity))
+                            .toList(),
                       ),
                   ],
                 ),
@@ -735,6 +945,107 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildActivityItem(Map<String, dynamic> activity) {
+    final name = activity['name'] as String? ?? 'Unknown User';
+    final eventType = activity['eventType'] as String?;
+    final method = activity['method'] as String?;
+    final eventTime = activity['eventTime'] as DateTime?;
+    final photoUrl = activity['photoUrl'] as String?;
+
+    final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
+        ? NetworkImage(photoUrl)
+        : const AssetImage('images/logo.png');
+
+    final isCheckIn = eventType == 'check_in';
+    final chipColor = isCheckIn ? Colors.green : Colors.red;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 26,
+            backgroundImage: avatarImage,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _formatEventTime(eventTime),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _buildStatusChip(
+                      _formatEventType(eventType),
+                      chipColor,
+                      chipColor.withValues(alpha: 0.1),
+                    ),
+                    if (method != null &&
+                        !method.toLowerCase().contains('face_recognition'))
+                      _buildStatusChip(
+                        method.replaceAll('_', ' ').toUpperCase(),
+                        Colors.blueGrey,
+                        Colors.blueGrey.withValues(alpha: 0.1),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusChip(String label, Color textColor, Color backgroundColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: textColor,
+        ),
+      ),
     );
   }
 
