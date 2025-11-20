@@ -41,14 +41,14 @@ class AttendanceService {
           );
         }
 
-        // Update existing record
+        // Update existing record (save as UTC)
         recordData = {
-          'actual_check_in': now.toIso8601String(),
+          'actual_check_in': now.toUtc().toIso8601String(),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
           'check_in_location': locationWithPhoto,
           'status': 'present',
-          'updated_at': now.toIso8601String(),
+          'updated_at': now.toUtc().toIso8601String(),
         };
 
         await _supabase
@@ -64,7 +64,7 @@ class AttendanceService {
         recordData = {
           'organization_member_id': organizationMemberId,
           'attendance_date': today.toIso8601String().split('T')[0],
-          'actual_check_in': now.toIso8601String(),
+          'actual_check_in': now.toUtc().toIso8601String(),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
           'check_in_location': locationWithPhoto,
@@ -148,7 +148,7 @@ class AttendanceService {
 
       // Update record
       final recordData = {
-        'actual_check_out': now.toIso8601String(),
+        'actual_check_out': now.toUtc().toIso8601String(),
         'check_out_method': method,
         'check_out_photo_url': photoUrl,
         'check_out_location': locationWithPhoto,
@@ -269,7 +269,7 @@ class AttendanceService {
         'organization_member_id': organizationMemberId,
         'attendance_record_id': attendanceRecordId,
         'event_type': eventType,
-        'event_time': DateTime.now().toIso8601String(),
+        'event_time': DateTime.now().toUtc().toIso8601String(),
         'method': method,
         'location': location,
         'device_id': deviceId,

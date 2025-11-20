@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../helpers/timezone_helper.dart';
 import '../services/attendance_service.dart';
 import '../services/role_service.dart';
 import '../widgets/petugas_bottom_nav.dart';
@@ -31,6 +32,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   bool _isLoadingActivities = true;
   String? _errorMessage;
   int _currentNavIndex = 0;
+  String _organizationTimezone = 'Asia/Jakarta'; // Default to WIB
 
   // Stats data
   int _checkedInCount = 0;
@@ -46,7 +48,30 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     debugPrint('=== PETUGAS DASHBOARD INIT (KIOSK MODE) ===');
     debugPrint('Organization Member ID: ${widget.organizationMemberId}');
     debugPrint('Role: ${_roleService.getRoleName(widget.memberData)}');
+    _loadOrganizationTimezone();
     _refreshAll();
+  }
+
+  Future<void> _loadOrganizationTimezone() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      final org = await _supabase
+          .from('organizations')
+          .select('timezone')
+          .eq('id', organizationId)
+          .maybeSingle();
+
+      if (org != null && org['timezone'] != null) {
+        setState(() {
+          _organizationTimezone = org['timezone'] as String;
+        });
+        debugPrint('Organization timezone: $_organizationTimezone');
+      }
+    } catch (e) {
+      debugPrint('Error loading organization timezone: $e');
+    }
   }
 
   Future<void> _loadTodayStats() async {
@@ -126,7 +151,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         DateTime? eventTime;
         final eventTimeStr = activity['event_time'] as String?;
         if (eventTimeStr != null) {
-          eventTime = DateTime.tryParse(eventTimeStr);
+          // Convert UTC to organization timezone
+          eventTime = TimezoneHelper.parseAndConvert(
+            eventTimeStr,
+            _organizationTimezone,
+          );
         }
 
         return {
@@ -404,9 +433,19 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   String _formatEventTime(DateTime? time) {
     if (time == null) return 'Unknown time';
-    final now = DateTime.now();
+    
+    // Get current time in organization timezone for comparison
+    final nowUtc = DateTime.now().toUtc();
+    final nowOrg = TimezoneHelper.parseAndConvert(
+      nowUtc.toIso8601String(),
+      _organizationTimezone,
+    ) ?? nowUtc;
+    
     final isToday =
-        now.year == time.year && now.month == time.month && now.day == time.day;
+        nowOrg.year == time.year && 
+        nowOrg.month == time.month && 
+        nowOrg.day == time.day;
+    
     final hour = time.hour.toString().padLeft(2, '0');
     final minute = time.minute.toString().padLeft(2, '0');
     final timeStr = '$hour:$minute';
