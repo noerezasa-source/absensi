@@ -1,7 +1,7 @@
 import 'package:absensimassal/pages/login.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../helpers/language_helper.dart'; // Import language helper
+import '../helpers/language_helper.dart';
 
 class ModernSignupScreen extends StatefulWidget {
   const ModernSignupScreen({super.key});
@@ -17,11 +17,10 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
-  bool _agreeToTerms = false;
+  // HAPUS: bool _agreeToTerms = false;
   
   final supabase = Supabase.instance.client;
 
-  // Color Scheme - Matching Think Board
   static const Color primaryColor = Color(0xFF1A1A1A);
   static const Color backgroundColor = Color(0xFFE8F4F8);
   static const Color textPrimary = Color(0xFF000000);
@@ -37,7 +36,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
     super.dispose();
   }
 
-  // Split name into first and last name
   Map<String, String> _splitName(String fullName) {
     List<String> nameParts = fullName.trim().split(' ').where((n) => n.isNotEmpty).toList();
     
@@ -52,7 +50,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
     }
   }
 
-  // Create user profile after signup
   Future<bool> _createUserProfile(String userId, String fullName, String email) async {
     try {
       debugPrint('Creating user profile for: $userId');
@@ -61,10 +58,8 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
       final firstName = nameParts['first_name']!;
       final lastName = nameParts['last_name']!;
       
-      // Wait untuk memastikan trigger selesai
       await Future.delayed(const Duration(milliseconds: 500));
       
-      // Check apakah profile sudah ada dari trigger
       final existingProfile = await supabase
           .from('user_profiles')
           .select('id, email')
@@ -72,7 +67,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
           .maybeSingle();
 
       if (existingProfile != null) {
-        // Update profile yang sudah dibuat oleh trigger
         debugPrint('Updating existing profile created by trigger...');
         await supabase
             .from('user_profiles')
@@ -85,7 +79,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
             })
             .eq('id', userId);
       } else {
-        // Create new profile jika trigger gagal
         debugPrint('Creating new user profile...');
         await supabase
             .from('user_profiles')
@@ -107,7 +100,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
     }
   }
 
-  // Parse auth errors
   String _parseAuthError(dynamic error) {
     try {
       String errorString = error.toString().toLowerCase();
@@ -123,8 +115,10 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
         return AppLanguage.tr('weak_password');
       }
       if (errorString.contains('network') ||
-          errorString.contains('connection')) {
-        return AppLanguage.tr('network_error');
+          errorString.contains('connection') ||
+          errorString.contains('socketexception') ||
+          errorString.contains('failed host lookup')) {
+        return 'Tidak ada koneksi internet. Mohon periksa koneksi Anda dan coba lagi.';
       }
       
       return AppLanguage.tr('signup_error');
@@ -133,16 +127,16 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
     }
   }
 
-  // Sign Up
   Future<void> _signUp() async {
     if (_isLoading) return;
     
     if (!_formKey.currentState!.validate()) return;
 
-    if (!_agreeToTerms) {
-      _showSnackBar(AppLanguage.tr('terms_required'), false);
-      return;
-    }
+    // HAPUS pengecekan terms
+    // if (!_agreeToTerms) {
+    //   _showSnackBar(AppLanguage.tr('terms_required'), false);
+    //   return;
+    // }
 
     setState(() => _isLoading = true);
 
@@ -151,7 +145,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
       final email = _emailController.text.trim();
       final password = _passwordController.text.trim();
 
-      // Sign up dengan metadata nama
       final AuthResponse res = await supabase.auth.signUp(
         email: email,
         password: password,
@@ -164,7 +157,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
       if (res.user != null) {
         debugPrint('Signup successful, user ID: ${res.user!.id}');
         
-        // Create/update user profile
         final profileSuccess = await _createUserProfile(
           res.user!.id,
           name,
@@ -177,7 +169,6 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
 
         if (!mounted) return;
         
-        // Show success dialog
         _showSuccessDialog();
       } else {
         if (!mounted) return;
@@ -204,6 +195,7 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -272,12 +264,11 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
                   height: 52,
                   child: ElevatedButton(
                     onPressed: () {
-                      Navigator.of(context).pop(); // Close dialog
+                      Navigator.of(context).pop();
                       _nameController.clear();
                       _emailController.clear();
                       _passwordController.clear();
                       
-                      // Navigate to login screen
                       Navigator.pushReplacement(
                         context,
                         MaterialPageRoute(builder: (_) => const ModernLoginScreen()),
@@ -574,7 +565,7 @@ class _ModernSignupScreenState extends State<ModernSignupScreen> {
               return null;
             },
           ),
-          const SizedBox(height: 16),
+          // HAPUS checkbox terms di sini
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,

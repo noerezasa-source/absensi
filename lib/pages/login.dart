@@ -1,15 +1,17 @@
+import 'dart:io';
 import 'package:absensimassal/pages/petugas_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'signup.dart';
 import 'join_organization_screen.dart';
 import '../services/role_service.dart';
 import 'petugas_dashboard.dart';
 import 'user_dashboard.dart';
-import '../helpers/language_helper.dart'; // Import language helper
+import '../helpers/language_helper.dart';
 
 class ModernLoginScreen extends StatefulWidget {
   const ModernLoginScreen({super.key});
@@ -28,7 +30,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
   final supabase = Supabase.instance.client;
   final RoleService _roleService = RoleService();
 
-  // Color Scheme - Matching the image
+  // Color Scheme
   static const Color primaryColor = Color(0xFF1A1A1A);
   static const Color backgroundColor = Color(0xFFE8F4F8);
   static const Color textPrimary = Color(0xFF000000);
@@ -40,6 +42,27 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  // Cek koneksi internet
+  Future<bool> _checkInternetConnection() async {
+    try {
+      final connectivityResult = await Connectivity().checkConnectivity();
+      
+      if (connectivityResult == ConnectivityResult.none) {
+        return false;
+      }
+      
+      // Double check dengan ping ke Google DNS
+      final result = await InternetAddress.lookup('google.com');
+      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('Connection check error: $e');
+      return false;
+    }
   }
 
   String _extractNameFromEmail(String email) {
@@ -164,108 +187,99 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> {
     }
   }
 
- // Update bagian _navigateAfterLogin di login.dart
-// Ganti method ini dengan yang baru:
+  Future<void> _navigateAfterLogin(String userId) async {
+    if (!mounted) return;
 
-Future<void> _navigateAfterLogin(String userId) async {
-  if (!mounted) return;
-
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) => const Center(
-      child: CircularProgressIndicator(
-        valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+        ),
       ),
-    ),
-  );
+    );
 
-  try {
-    // Cek apakah user punya organization
-    final hasOrganization = await _userHasOrganization(userId);
+    try {
+      final hasOrganization = await _userHasOrganization(userId);
 
-    if (!mounted) return;
-    Navigator.of(context).pop(); // Close loading dialog
-
-    if (!mounted) return;
-
-    if (hasOrganization) {
-      debugPrint('✓ User has organization - checking role');
-      _showSnackBar(AppLanguage.tr('login_success'), true);
-
-      // Ambil organization member dengan role
-      final memberData = await _roleService.getOrganizationMemberWithRole(userId);
-
-      if (memberData == null) {
-        throw Exception('Failed to fetch member data');
-      }
-
-      final organizationMemberId = memberData['id'] as int;
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close loading dialog
 
       if (!mounted) return;
 
-      // Navigate berdasarkan role
-      if (_roleService.isPetugas(memberData)) {
-        debugPrint('✓ User is Admin - navigating to Petugas Dashboard');
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(
-            builder: (context) => PetugasDashboardPage(
-              organizationMemberId: organizationMemberId,
-              memberData: memberData,
+      if (hasOrganization) {
+        debugPrint('✓ User has organization - checking role');
+        _showSnackBar(AppLanguage.tr('login_success'), true);
+
+        final memberData = await _roleService.getOrganizationMemberWithRole(userId);
+
+        if (memberData == null) {
+          throw Exception('Failed to fetch member data');
+        }
+
+        final organizationMemberId = memberData['id'] as int;
+
+        if (!mounted) return;
+
+        if (_roleService.isPetugas(memberData)) {
+          debugPrint('✓ User is Admin - navigating to Petugas Dashboard');
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (context) => PetugasDashboardPage(
+                organizationMemberId: organizationMemberId,
+                memberData: memberData,
+              ),
             ),
-          ),
-          (route) => false,
-        );
-      } else if (_roleService.isUser(memberData)) {
-        debugPrint('✓ User is Regular User - navigating to User Dashboard');
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(
-            builder: (context) => UserDashboardPage(
-              organizationMemberId: organizationMemberId,
-              memberData: memberData,
+            (route) => false,
+          );
+        } else if (_roleService.isUser(memberData)) {
+          debugPrint('✓ User is Regular User - navigating to User Dashboard');
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (context) => UserDashboardPage(
+                organizationMemberId: organizationMemberId,
+                memberData: memberData,
+              ),
             ),
-          ),
-          (route) => false,
-        );
+            (route) => false,
+          );
+        } else {
+          debugPrint('⚠️ Unknown role - navigating to User Dashboard');
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (context) => UserDashboardPage(
+                organizationMemberId: organizationMemberId,
+                memberData: memberData,
+              ),
+            ),
+            (route) => false,
+          );
+        }
       } else {
-        // Default ke User Dashboard jika role tidak dikenali
-        debugPrint('⚠️ Unknown role - navigating to User Dashboard');
+        debugPrint('⚠️ User has no organization - navigating to Join Organization');
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (context) => UserDashboardPage(
-              organizationMemberId: organizationMemberId,
-              memberData: memberData,
-            ),
+            builder: (context) => const JoinOrganizationScreen(),
           ),
           (route) => false,
         );
       }
-    } else {
-      debugPrint('⚠️ User has no organization - navigating to Join Organization');
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (context) => const JoinOrganizationScreen(),
-        ),
-        (route) => false,
+    } catch (e) {
+      debugPrint('Error checking organization: $e');
+
+      if (!mounted) return;
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+
+      _showSnackBar(
+        '${AppLanguage.tr('check_organization_failed')}: ${e.toString()}',
+        false,
       );
     }
-  } catch (e) {
-    debugPrint('Error checking organization: $e');
-
-    if (!mounted) return;
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-    }
-
-    _showSnackBar(
-      '${AppLanguage.tr('check_organization_failed')}: ${e.toString()}',
-      false,
-    );
   }
-}
 
-// JANGAN LUPA TAMBAHKAN IMPORT di bagian atas file:
-// import 'petugas_dashboard.dart';
   Future<void> _signInWithEmail() async {
     if (_isLoading) return;
 
@@ -274,6 +288,12 @@ Future<void> _navigateAfterLogin(String userId) async {
     setState(() => _isLoading = true);
 
     try {
+      // CEK KONEKSI INTERNET DULU
+      final hasConnection = await _checkInternetConnection();
+      if (!hasConnection) {
+        throw SocketException('Tidak ada koneksi internet');
+      }
+
       debugPrint('Attempting email login...');
 
       final res = await supabase.auth.signInWithPassword(
@@ -299,13 +319,25 @@ Future<void> _navigateAfterLogin(String userId) async {
         if (!mounted) return;
         await _navigateAfterLogin(user.id);
       }
+    } on SocketException catch (e) {
+      debugPrint('❌ No internet connection: $e');
+      if (!mounted) return;
+      _showSnackBar(
+        'Tidak ada koneksi internet. Mohon periksa koneksi Anda dan coba lagi.',
+        false,
+      );
     } catch (e) {
       debugPrint('❌ Login error: $e');
       if (!mounted) return;
 
       String errorMessage = AppLanguage.tr('login_error');
 
-      if (e is AuthException) {
+      // Check for network errors
+      if (e.toString().toLowerCase().contains('socketexception') ||
+          e.toString().toLowerCase().contains('failed host lookup') ||
+          e.toString().toLowerCase().contains('network')) {
+        errorMessage = 'Tidak ada koneksi internet. Mohon periksa koneksi Anda.';
+      } else if (e is AuthException) {
         if (e.message.toLowerCase().contains('invalid login credentials') ||
             e.message.toLowerCase().contains('invalid_credentials')) {
           errorMessage = AppLanguage.tr('invalid_credentials');
@@ -330,6 +362,12 @@ Future<void> _navigateAfterLogin(String userId) async {
     setState(() => _isLoading = true);
 
     try {
+      // CEK KONEKSI INTERNET DULU
+      final hasConnection = await _checkInternetConnection();
+      if (!hasConnection) {
+        throw SocketException('Tidak ada koneksi internet');
+      }
+
       debugPrint('🔵 Starting Google Sign In...');
 
       const webClientId =
@@ -410,13 +448,25 @@ Future<void> _navigateAfterLogin(String userId) async {
 
       if (!mounted) return;
       await _navigateAfterLogin(user.id);
+    } on SocketException catch (e) {
+      debugPrint('❌ No internet connection: $e');
+      if (!mounted) return;
+      _showSnackBar(
+        'Tidak ada koneksi internet. Mohon periksa koneksi Anda dan coba lagi.',
+        false,
+      );
     } catch (e) {
       debugPrint('❌ Error during Google Sign In: $e');
       if (!mounted) return;
-      _showSnackBar(
-        '${AppLanguage.tr('google_signin_failed')}: ${e.toString()}',
-        false,
-      );
+      
+      String errorMessage = '${AppLanguage.tr('google_signin_failed')}: ${e.toString()}';
+      
+      if (e.toString().toLowerCase().contains('socketexception') ||
+          e.toString().toLowerCase().contains('failed host lookup')) {
+        errorMessage = 'Tidak ada koneksi internet. Mohon periksa koneksi Anda.';
+      }
+      
+      _showSnackBar(errorMessage, false);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
