@@ -4,6 +4,8 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../services/biometric_service.dart';
 import '../services/role_service.dart';
+import '../services/attendance_service.dart';
+import '../models/attendance_record.dart';
 import '../widgets/petugas_bottom_nav_simple.dart';
 import 'face_registration_page.dart';
 import 'login.dart';
@@ -28,18 +30,23 @@ class PetugasProfilePage extends StatefulWidget {
 class _PetugasProfilePageState extends State<PetugasProfilePage> {
   final BiometricService _biometricService = BiometricService();
   final RoleService _roleService = RoleService();
+  final AttendanceService _attendanceService = AttendanceService();
   final _supabase = Supabase.instance.client;
   final ImagePicker _picker = ImagePicker();
 
   bool _hasRegisteredFace = false;
   bool _isCheckingFace = true;
   bool _isLoadingProfile = false;
+  bool _isLoadingAttendance = false;
   bool _isUploadingPhoto = false;
   bool _isEditMode = false;
   bool _isSaving = false;
+  bool _rfidMode = false;
   int _currentNavIndex = 3; // Profile is index 3
   Map<String, dynamic>? _userProfile;
   Map<String, dynamic>? _organization;
+  AttendanceRecord? _todayAttendance;
+  String? _memberCardNumber;
 
   // Form controllers
   final _formKey = GlobalKey<FormState>();
@@ -58,6 +65,8 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
     _userProfile = widget.userProfile;
     _checkFaceRegistration();
     _loadOrganizationInfo();
+    _loadTodayAttendance();
+    _loadMemberRfidCard();
     if (_userProfile == null) {
       _loadUserProfile();
     } else {
@@ -81,8 +90,8 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
 
     switch (index) {
       case 0:
-        // Home - navigate back to dashboard
-        Navigator.pop(context);
+        // Home - navigate back to dashboard, return current RFID mode
+        Navigator.pop(context, _rfidMode);
         break;
       case 1:
         // Member
@@ -160,6 +169,49 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
       }
     } catch (e) {
       debugPrint('Error loading organization info: $e');
+    }
+  }
+
+  Future<void> _loadTodayAttendance() async {
+    setState(() {
+      _isLoadingAttendance = true;
+    });
+
+    try {
+      final record =
+          await _attendanceService.getTodayAttendance(widget.organizationMemberId);
+      if (mounted) {
+        setState(() {
+          _todayAttendance = record;
+          _isLoadingAttendance = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading today attendance: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingAttendance = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadMemberRfidCard() async {
+    try {
+      final card = await _supabase
+          .from('rfid_cards')
+          .select()
+          .eq('organization_member_id', widget.organizationMemberId)
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (mounted && card != null) {
+        setState(() {
+          _memberCardNumber = card['card_number'] as String?;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading RFID card: $e');
     }
   }
 
@@ -471,9 +523,21 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
     }
   }
 
+  String _formatTime(DateTime? time) {
+    if (time == null) return '-';
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.pop(context, _rfidMode);
+        return false;
+      },
+      child: Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       body: _isLoadingProfile
           ? const Center(child: CircularProgressIndicator())
@@ -904,6 +968,76 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
 
                         const SizedBox(height: 16),
 
+                        // Attendance Mode (RFID)
+                        _buildSectionCard(
+                          title: 'Attendance Mode',
+                          icon: Icons.nfc,
+                          children: [
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                'Use RFID for Attendance',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                              subtitle: Text(
+                                _memberCardNumber == null
+                                    ? 'No active RFID card found for this member'
+                                    : 'RFID Card: $_memberCardNumber',
+                              ),
+                              value: _rfidMode,
+                              onChanged: (value) {
+                                setState(() {
+                                  _rfidMode = value;
+                                });
+                              },
+                              activeColor: primaryColor,
+                            ),
+                            const SizedBox(height: 12),
+                            if (_isLoadingAttendance)
+                              const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(12.0),
+                                  child: CircularProgressIndicator(),
+                                ),
+                              )
+                            else if (_todayAttendance != null)
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    "Today's Attendance",
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _buildInfoRow(
+                                    'Check In',
+                                    _formatTime(_todayAttendance!.actualCheckIn),
+                                  ),
+                                  _buildInfoRow(
+                                    'Check Out',
+                                    _formatTime(_todayAttendance!.actualCheckOut),
+                                  ),
+                                ],
+                              )
+                            else
+                              const Text(
+                                'No attendance record for today',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 16),
+
                         // Account Settings Card
                         _buildSectionCard(
                           title: 'Account Settings',
@@ -951,6 +1085,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
         currentIndex: _currentNavIndex,
         onNavigationTap: _handleNavigation,
       ),
+    ),
     );
   }
 

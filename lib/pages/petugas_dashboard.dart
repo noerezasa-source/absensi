@@ -6,6 +6,7 @@ import '../services/role_service.dart';
 import '../widgets/petugas_bottom_nav.dart';
 import 'face_attendance_multi_user_page.dart';
 import 'petugas_profile_page.dart';
+import 'rfid_attendance_page.dart';
 
 class PetugasDashboardPage extends StatefulWidget {
   final int organizationMemberId;
@@ -32,6 +33,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   bool _isLoadingActivities = true;
   String? _errorMessage;
   int _currentNavIndex = 0;
+  bool _useRfidForAttendance = false;
   String _organizationTimezone = 'Asia/Jakarta'; // Default to WIB
   Map<String, dynamic>? _organization;
   Map<String, dynamic>? _userProfile; // Store user profile locally
@@ -199,30 +201,57 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
       if (!mounted) return;
 
-      final mappedActivities = activities.map((activity) {
+      final groupedActivities = <String, Map<String, dynamic>>{};
+
+      for (final activity in activities) {
         final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
         final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
         final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
 
+        final memberId = member['id']?.toString() ?? activity['organization_member_id']?.toString() ?? '';
         DateTime? eventTime;
         final eventTimeStr = activity['event_time'] as String?;
         if (eventTimeStr != null) {
-          // Convert UTC to organization timezone
           eventTime = TimezoneHelper.parseAndConvert(
             eventTimeStr,
             _organizationTimezone,
           );
         }
 
-        return {
-          'name': _composeUserName(profile),
-          'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
-          'eventType': activity['event_type'] as String?,
-          'method': activity['method'] as String?,
-          'eventTime': eventTime,
-          'status': record['status'] as String?,
-        };
-      }).toList();
+        final attendanceDate = (record['attendance_date'] as String?) ??
+            (eventTimeStr != null ? eventTimeStr.split('T').first : '');
+        final key = '$memberId-$attendanceDate';
+
+        final entry = groupedActivities.putIfAbsent(key, () {
+          return {
+            'name': _composeUserName(profile),
+            'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
+            'status': record['status'] as String?,
+            'checkInTime': null,
+            'checkOutTime': null,
+            'lastAction': null,
+            'method': null,
+            'lastUpdated': null,
+          };
+        });
+
+        if (activity['event_type'] == 'check_in') {
+          entry['checkInTime'] = eventTime;
+        } else if (activity['event_type'] == 'check_out') {
+          entry['checkOutTime'] = eventTime;
+        }
+
+        entry['lastAction'] = activity['event_type'];
+        entry['method'] = activity['method'];
+        entry['lastUpdated'] = eventTime;
+      }
+
+      final mappedActivities = groupedActivities.values.toList()
+        ..sort((a, b) {
+          final aTime = a['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bTime = b['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bTime.compareTo(aTime);
+        });
 
       setState(() {
         _recentActivities = mappedActivities;
@@ -273,6 +302,24 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   }
 
   void _handleCameraButtonPress() {
+    if (_useRfidForAttendance) {
+      // Mode RFID: buka halaman khusus RFID yang hanya menampilkan nama & jam hari ini
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => RfidAttendancePage(
+            organizationMemberId: widget.organizationMemberId,
+            memberData: widget.memberData,
+            userProfile: _userProfile ?? widget.userProfile,
+          ),
+        ),
+      ).then((_) {
+        _refreshAll();
+      });
+      return;
+    }
+
+    // Mode default: face recognition multi user
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -393,7 +440,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         break;
       case 3:
         // Profile
-        Navigator.push(
+        Navigator.push<bool>(
           context,
           MaterialPageRoute(
             builder: (context) => PetugasProfilePage(
@@ -402,9 +449,12 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
               userProfile: _userProfile ?? widget.userProfile,
             ),
           ),
-        ).then((_) {
+        ).then((rfidMode) {
           setState(() {
             _currentNavIndex = 0;
+            if (rfidMode != null) {
+              _useRfidForAttendance = rfidMode;
+            }
           });
           // Reload profile after returning from profile page
           _loadUserProfile();
@@ -537,6 +587,13 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
     final dateStr = '${time.day}/${time.month}/${time.year}';
     return '$dateStr • $timeStr';
+  }
+
+  String _formatShortTime(DateTime? time) {
+    if (time == null) return '--';
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 
   @override
@@ -994,17 +1051,14 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   Widget _buildActivityItem(Map<String, dynamic> activity) {
     final name = activity['name'] as String? ?? 'Unknown User';
-    final eventType = activity['eventType'] as String?;
-    final method = activity['method'] as String?;
-    final eventTime = activity['eventTime'] as DateTime?;
     final photoUrl = activity['photoUrl'] as String?;
+    final lastUpdated = activity['lastUpdated'] as DateTime?;
+    final checkInTime = activity['checkInTime'] as DateTime?;
+    final checkOutTime = activity['checkOutTime'] as DateTime?;
 
     final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
         ? NetworkImage(photoUrl)
         : const AssetImage('images/logo.png');
-
-    final isCheckIn = eventType == 'check_in';
-    final chipColor = isCheckIn ? Colors.green : Colors.red;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1020,55 +1074,60 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 26,
-            backgroundImage: avatarImage,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _formatEventTime(eventTime),
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 26,
+                backgroundImage: avatarImage,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildStatusChip(
-                      _formatEventType(eventType),
-                      chipColor,
-                      chipColor.withValues(alpha: 0.1),
-                    ),
-                    if (method != null &&
-                        !method.toLowerCase().contains('face_recognition'))
-                      _buildStatusChip(
-                        method.replaceAll('_', ' ').toUpperCase(),
-                        Colors.blueGrey,
-                        Colors.blueGrey.withValues(alpha: 0.1),
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
                       ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatEventTime(lastUpdated),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatusChip(
+                  'CHECK IN  ${_formatShortTime(checkInTime)}',
+                  Colors.green.shade800,
+                  Colors.green.shade50,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildStatusChip(
+                  'CHECK OUT ${_formatShortTime(checkOutTime)}',
+                  Colors.blue.shade800,
+                  Colors.blue.shade50,
+                ),
+              ),
+            ],
           ),
         ],
       ),

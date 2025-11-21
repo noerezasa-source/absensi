@@ -350,7 +350,6 @@ class AttendanceService {
     int limit = 10,
   }) async {
     try {
-      const faceRecognitionPattern = '%face_recognition%';
       final logs = await _supabase
           .from('attendance_logs')
           .select('''
@@ -374,7 +373,7 @@ class AttendanceService {
             )
           ''')
           .eq('organization_members.organization_id', organizationId)
-          .ilike('method', faceRecognitionPattern)
+          .inFilter('method', ['face_recognition', 'face_recognition_kiosk', 'rfid_card', 'rfid_card_mobile'])
           .order('event_time', ascending: false)
           .limit(limit);
 
