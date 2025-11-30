@@ -5,19 +5,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/face_recognition_service.dart';
 import '../services/biometric_service.dart';
 import '../services/attendance_service.dart';
 import '../services/supabase_storage_service.dart';
+import '../services/face_recognition_tflite_service.dart';
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
-  final String attendanceType;
+  final String? attendanceType; // Optional, akan auto-detect
 
   const FaceAttendanceMultiUserPage({
     super.key,
     required this.organizationId,
-    required this.attendanceType,
+    this.attendanceType,
   });
 
   @override
@@ -28,27 +30,27 @@ class FaceAttendanceMultiUserPage extends StatefulWidget {
 class _FaceAttendanceMultiUserPageState
     extends State<FaceAttendanceMultiUserPage> {
   CameraController? _cameraController;
-  final FaceRecognitionService _faceService = FaceRecognitionService();
+  final FaceRecognitionTFLiteService _faceService = FaceRecognitionTFLiteService();
   final BiometricService _biometricService = BiometricService();
   final AttendanceService _attendanceService = AttendanceService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
 
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
-  String _currentStep = 'Ready - Position your face in the frame';
+  String _currentStep = 'Siap - Posisikan wajah Anda';
   Position? _currentPosition;
 
   Timer? _continuousScanTimer;
   
-  // Success notifications queue (max 10)
-  final List<Map<String, dynamic>> _successQueue = [];
+  // Recent attendance list (max 10, shows who already checked in/out today)
+  final List<Map<String, dynamic>> _recentAttendanceList = [];
   int _totalProcessedToday = 0;
 
   // Track processed users with timestamp (cooldown 10 detik)
   final Map<int, DateTime> _processedUserTimestamps = {};
   final Duration _userCooldown = const Duration(seconds: 10);
 
-  // Detected faces on screen (converted to Map for UI)
+  // Detected faces on screen
   List<Map<String, dynamic>> _detectedFaces = [];
 
   Future<Size?> _getImageSize(File imageFile) async {
@@ -73,6 +75,7 @@ class _FaceAttendanceMultiUserPageState
   void initState() {
     super.initState();
     _enableKioskMode();
+    _initializeFaceService();
     _initializeCamera();
     _getCurrentLocation();
   }
@@ -90,6 +93,32 @@ class _FaceAttendanceMultiUserPageState
       debugPrint('Error enabling kiosk mode: $e');
     }
   }
+
+  Future<void> _initializeFaceService() async {
+  try {
+    setState(() {
+      _currentStep = 'Loading AI model...';
+    });
+    
+    await _faceService.initialize();
+    
+    debugPrint('✅ TFLite model initialized');
+    
+    setState(() {
+      _currentStep = 'Siap - Posisikan wajah Anda';
+    });
+  } catch (e) {
+    debugPrint('!!! Failed to initialize TFLite: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load AI model: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+}
 
   Future<void> _initializeCamera() async {
     try {
@@ -153,7 +182,6 @@ class _FaceAttendanceMultiUserPageState
   }
 
   void _startContinuousScan() {
-    // Scan setiap 2 detik untuk multi-face detection
     _continuousScanTimer = Timer.periodic(
       const Duration(seconds: 2),
       (timer) {
@@ -165,164 +193,174 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<void> _scanForFaces() async {
-    if (_cameraController == null ||
-        !_cameraController!.value.isInitialized ||
-        _isProcessing) {
-      return;
-    }
+  if (_cameraController == null ||
+      !_cameraController!.value.isInitialized ||
+      _isProcessing) {
+    return;
+  }
 
-    setState(() {
-      _isProcessing = true;
-    });
+  setState(() {
+    _isProcessing = true;
+  });
 
-    try {
-      debugPrint('=== STARTING MULTI-FACE SCAN ===');
+  try {
+    debugPrint('=== STARTING MULTI-FACE SCAN (TFLite) ===');
+    
+    final image = await _cameraController!.takePicture();
+    final imageFile = File(image.path);
+    
+    // Detect faces using ML Kit
+    final faces = await _faceService.detectFaces(image.path);
+    
+    debugPrint('Total faces detected: ${faces.length}');
+
+    if (faces.isEmpty) {
+      // Clean up temp file
+      await imageFile.delete();
       
-      final image = await _cameraController!.takePicture();
-      final imageFile = File(image.path);
-      
-      // Detect ALL faces
-      final faces = await _faceService.detectFaces(image.path);
-      
-      debugPrint('Total faces detected: ${faces.length}');
-
-      if (faces.isEmpty) {
-        setState(() {
-          _detectedFaces = [];
-          _currentStep = 'No face detected - Please position your face';
-        });
-        
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted && !_isProcessing) {
-            setState(() {
-              _currentStep = 'Ready - Position your face in the frame';
-            });
-          }
-        });
-        return;
-      }
-
-      final imageSize = await _getImageSize(imageFile);
-      final imageWidth = imageSize?.width ??
-          _cameraController?.value.previewSize?.height ??
-          1080.0;
-      final imageHeight = imageSize?.height ??
-          _cameraController?.value.previewSize?.width ??
-          1920.0;
-
-      // Convert Face objects to Map for UI display
-      final detectedFacesMap = faces.map((face) {
-        final boundingBox = face.boundingBox;
-        final left = (boundingBox.left / imageWidth).clamp(0.0, 1.0);
-        final top = (boundingBox.top / imageHeight).clamp(0.0, 1.0);
-        final width = (boundingBox.width / imageWidth).clamp(0.0, 1.0);
-        final height = (boundingBox.height / imageHeight).clamp(0.0, 1.0);
-
-        return {
-          'left': left,
-          'top': top,
-          'width': width,
-          'height': height,
-        };
-      }).toList();
-
-      // Update detected faces untuk UI overlay
       setState(() {
-        _detectedFaces = detectedFacesMap;
-        _currentStep = 'Detected ${faces.length} face(s) - Processing...';
-      });
-
-      // Process each face (max 5 faces sekaligus)
-      final facesToProcess = faces.take(5).toList();
-      final processedUsers = <Map<String, dynamic>>[];
-
-      for (int i = 0; i < facesToProcess.length; i++) {
-        try {
-          debugPrint('Processing face ${i + 1}/${facesToProcess.length}');
-          
-          // Extract features untuk setiap wajah
-          // Note: Gunakan image.path langsung karena extractFaceFeatures 
-          // akan handle detection sendiri per face
-          final capturedTemplate = _faceService.buildTemplateFromFace(
-            facesToProcess[i],
-          );
-          
-          // Identify user
-          final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
-            capturedTemplate: capturedTemplate,
-            organizationId: widget.organizationId,
-            threshold: 0.75, // 75% threshold
-          );
-
-          if (bestMatch != null) {
-            final userId = bestMatch['organization_member_id'] as int;
-            
-            // Check cooldown
-            if (_processedUserTimestamps.containsKey(userId)) {
-              final lastProcessTime = _processedUserTimestamps[userId]!;
-              final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
-              
-              if (timeSinceLastProcess < _userCooldown) {
-                debugPrint('User $userId in cooldown, skipping');
-                continue;
-              }
-            }
-
-            // Add to process queue
-            processedUsers.add({
-              'user': bestMatch,
-              'imageFile': imageFile,
-              'faceIndex': i,
-            });
-          }
-        } catch (e) {
-          debugPrint('Error processing face $i: $e');
-          continue;
-        }
-      }
-
-      // Process attendance untuk semua recognized users
-      if (processedUsers.isNotEmpty) {
-        await _processMultipleAttendances(processedUsers);
-      } else {
-        setState(() {
-          _currentStep = 'No recognized faces - Please register first';
-        });
-        
-        await SystemSound.play(SystemSoundType.alert);
-        
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted && !_isProcessing) {
-            setState(() {
-              _currentStep = 'Ready - Position your face in the frame';
-              _detectedFaces = [];
-            });
-          }
-        });
-      }
-
-    } catch (e) {
-      debugPrint('!!! ERROR in multi-face scan: $e');
-      setState(() {
-        _currentStep = 'Error: ${e.toString()}';
         _detectedFaces = [];
+        _currentStep = 'Tidak ada wajah terdeteksi';
       });
       
-      Future.delayed(const Duration(seconds: 3), () {
+      Future.delayed(const Duration(seconds: 2), () {
         if (mounted && !_isProcessing) {
           setState(() {
-            _currentStep = 'Ready - Position your face in the frame';
+            _currentStep = 'Siap - Posisikan wajah Anda';
           });
         }
       });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-        });
+      return;
+    }
+
+    final imageSize = await _getImageSize(imageFile);
+    final imageWidth = imageSize?.width ??
+        _cameraController?.value.previewSize?.height ??
+        1080.0;
+    final imageHeight = imageSize?.height ??
+        _cameraController?.value.previewSize?.width ??
+        1920.0;
+
+    // Map face bounding boxes for overlay
+    final detectedFacesMap = faces.map((face) {
+      final boundingBox = face.boundingBox;
+      final left = (boundingBox.left / imageWidth).clamp(0.0, 1.0);
+      final top = (boundingBox.top / imageHeight).clamp(0.0, 1.0);
+      final width = (boundingBox.width / imageWidth).clamp(0.0, 1.0);
+      final height = (boundingBox.height / imageHeight).clamp(0.0, 1.0);
+
+      return {
+        'left': left,
+        'top': top,
+        'width': width,
+        'height': height,
+      };
+    }).toList();
+
+    setState(() {
+      _detectedFaces = detectedFacesMap;
+      _currentStep = 'Terdeteksi ${faces.length} wajah - Memproses AI...';
+    });
+
+    // Process up to 5 faces
+    final facesToProcess = faces.take(5).toList();
+    final processedUsers = <Map<String, dynamic>>[];
+
+    for (int i = 0; i < facesToProcess.length; i++) {
+      try {
+        debugPrint('Processing face ${i + 1}/${facesToProcess.length} with TFLite');
+        
+        // Extract features using TFLite (requires image path)
+        final capturedTemplate = await _faceService.buildTemplateFromFace(
+          facesToProcess[i],
+          image.path,
+        );
+        
+        debugPrint('Extracted embedding size: ${capturedTemplate['embeddingSize']}');
+        
+        // Identify user with higher threshold for TFLite
+        final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
+          capturedTemplate: capturedTemplate,
+          organizationId: widget.organizationId,
+          threshold: 0.80, // Higher threshold for better accuracy
+        );
+
+        if (bestMatch != null) {
+          final userId = bestMatch['organization_member_id'] as int;
+          
+          // Check cooldown
+          if (_processedUserTimestamps.containsKey(userId)) {
+            final lastProcessTime = _processedUserTimestamps[userId]!;
+            final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
+            
+            if (timeSinceLastProcess < _userCooldown) {
+              debugPrint('User $userId in cooldown, skipping');
+              continue;
+            }
+          }
+
+          processedUsers.add({
+            'user': bestMatch,
+            'imageFile': imageFile,
+            'faceIndex': i,
+          });
+        }
+      } catch (e) {
+        debugPrint('Error processing face $i: $e');
+        continue;
       }
     }
+
+    if (processedUsers.isNotEmpty) {
+      await _processMultipleAttendances(processedUsers);
+    } else {
+      setState(() {
+        _currentStep = 'Wajah tidak dikenali - Silakan daftar terlebih dahulu';
+      });
+      
+      await SystemSound.play(SystemSoundType.alert);
+      
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted && !_isProcessing) {
+          setState(() {
+            _currentStep = 'Siap - Posisikan wajah Anda';
+            _detectedFaces = [];
+          });
+        }
+      });
+    }
+
+    // Clean up temp file after processing
+    try {
+      if (await imageFile.exists()) {
+        await imageFile.delete();
+      }
+    } catch (e) {
+      debugPrint('Failed to delete temp file: $e');
+    }
+
+  } catch (e) {
+    debugPrint('!!! ERROR in multi-face scan: $e');
+    setState(() {
+      _currentStep = 'Error: ${e.toString()}';
+      _detectedFaces = [];
+    });
+    
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && !_isProcessing) {
+        setState(() {
+          _currentStep = 'Siap - Posisikan wajah Anda';
+        });
+      }
+    });
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isProcessing = false;
+      });
+    }
   }
+}
 
   Future<void> _processMultipleAttendances(
     List<Map<String, dynamic>> usersData,
@@ -333,12 +371,17 @@ class _FaceAttendanceMultiUserPageState
       try {
         final user = userData['user'];
         final imageFile = userData['imageFile'] as File;
+        final memberId = user['organization_member_id'] as int;
+        
+        // Auto-detect: Check if already checked in today
+        final isCheckIn = await _shouldCheckIn(memberId);
+        final attendanceType = isCheckIn ? 'check_in' : 'check_out';
         
         // Upload photo
         final photoUrl = await _storageService.uploadAttendancePhoto(
           imageFile,
-          user['organization_member_id'],
-          widget.attendanceType,
+          memberId,
+          attendanceType,
         );
 
         // Prepare location data
@@ -352,16 +395,16 @@ class _FaceAttendanceMultiUserPageState
         }
 
         // Record attendance
-        if (widget.attendanceType == 'check_in') {
+        if (isCheckIn) {
           await _attendanceService.checkIn(
-            organizationMemberId: user['organization_member_id'],
+            organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
             location: locationData,
           );
         } else {
           await _attendanceService.checkOut(
-            organizationMemberId: user['organization_member_id'],
+            organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
             location: locationData,
@@ -372,61 +415,49 @@ class _FaceAttendanceMultiUserPageState
         await _biometricService.updateLastUsed(user['biometric_id']);
 
         // Update timestamp
-        final userId = user['organization_member_id'] as int;
-        _processedUserTimestamps[userId] = DateTime.now();
+        _processedUserTimestamps[memberId] = DateTime.now();
 
-        // Add to success queue
+        // Add to list
         if (mounted) {
           setState(() {
             _totalProcessedToday++;
             
-            final notificationTimestamp = DateTime.now();
-            _successQueue.insert(0, {
+            final now = DateTime.now();
+            final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+            
+            // Add to top of list
+            _recentAttendanceList.insert(0, {
               'name': user['user_name'] ?? 'Unknown',
-              'similarity': user['similarity'],
-              'timestamp': notificationTimestamp,
-              'count': _totalProcessedToday,
+              'time': timeStr,
+              'type': isCheckIn ? 'check_in' : 'check_out',
+              'timestamp': now,
             });
 
-            // Keep max 10 notifications
-            if (_successQueue.length > 10) {
-              _successQueue.removeLast();
+            // Keep max 10
+            if (_recentAttendanceList.length > 10) {
+              _recentAttendanceList.removeLast();
             }
-            
-            // Remove notification after 5 seconds
-            Future.delayed(const Duration(seconds: 5), () {
-              if (mounted) {
-                setState(() {
-                  _successQueue.removeWhere(
-                    (item) => item['timestamp'] == notificationTimestamp,
-                  );
-                });
-              }
-            });
           });
         }
 
-        debugPrint('✅ Attendance recorded: ${user['user_name']}');
+        debugPrint('✅ Attendance recorded: ${user['user_name']} - $attendanceType');
 
       } catch (e) {
         debugPrint('!!! ERROR processing user: $e');
       }
     }
 
-    // Play success sound once
     await SystemSound.play(SystemSoundType.click);
 
-    // Reset after 2 seconds
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted && !_isProcessing) {
         setState(() {
-          _currentStep = 'Ready - Position your face in the frame';
+          _currentStep = 'Siap - Posisikan wajah Anda';
           _detectedFaces = [];
         });
       }
     });
 
-    // Cleanup old timestamps
     _cleanupOldTimestamps();
   }
 
@@ -436,6 +467,73 @@ class _FaceAttendanceMultiUserPageState
       return now.difference(timestamp) > _userCooldown;
     });
   }
+
+  /// Check if user should check in (true) or check out (false)
+  Future<bool> _shouldCheckIn(int organizationMemberId) async {
+  try {
+    final supabase = Supabase.instance.client;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayStr = today.toIso8601String().split('T').first;
+
+    debugPrint('=== CHECKING ATTENDANCE STATUS ===');
+    debugPrint('Member ID: $organizationMemberId');
+    debugPrint('Date: $todayStr');
+
+    final record = await supabase
+        .from('attendance_records')
+        .select('status, actual_check_in, actual_check_out') // ✅ Nama kolom yang benar
+        .eq('organization_member_id', organizationMemberId)
+        .eq('attendance_date', todayStr)
+        .maybeSingle();
+
+    if (record == null) {
+      debugPrint('✅ No record today → CHECK IN');
+      return true;
+    }
+
+    final status = record['status'] as String?;
+    final actualCheckIn = record['actual_check_in'];
+    final actualCheckOut = record['actual_check_out'];
+    
+    debugPrint('Current status: $status');
+    debugPrint('Check in: $actualCheckIn');
+    debugPrint('Check out: $actualCheckOut');
+
+    // If checked in but NOT checked out yet → CHECK OUT
+    if (actualCheckIn != null && actualCheckOut == null) {
+      debugPrint('✅ Already checked in, not checked out → CHECK OUT');
+      return false;
+    }
+
+    // If both check in and check out exist → CHECK IN (new shift)
+    if (actualCheckIn != null && actualCheckOut != null) {
+      debugPrint('✅ Already checked out → CHECK IN (new shift)');
+      return true;
+    }
+
+    // Status-based fallback
+    if (status == 'present' || status == 'checked_in') {
+      debugPrint('✅ Status is present/checked_in → CHECK OUT');
+      return false;
+    }
+
+    if (status == 'checked_out' || status == 'absent') {
+      debugPrint('✅ Status is checked_out/absent → CHECK IN');
+      return true;
+    }
+
+    // Default: check in
+    debugPrint('✅ Default → CHECK IN');
+    return true;
+    
+  } catch (e) {
+    debugPrint('!!! ERROR checking attendance status: $e');
+    
+    // Don't default to check in - throw error instead
+    throw Exception('Cannot determine attendance status: $e');
+  }
+}
 
   @override
   void dispose() {
@@ -455,6 +553,8 @@ class _FaceAttendanceMultiUserPageState
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
@@ -463,14 +563,14 @@ class _FaceAttendanceMultiUserPageState
         final shouldExit = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Exit Kiosk Mode?'),
+            title: const Text('Keluar dari Mode Kiosk?'),
             content: Text(
-              'Total processed today: $_totalProcessedToday\n\nAre you sure you want to exit?',
+              'Total diproses hari ini: $_totalProcessedToday\n\nYakin ingin keluar?',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Cancel'),
+                child: const Text('Batal'),
               ),
               ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(true),
@@ -478,7 +578,7 @@ class _FaceAttendanceMultiUserPageState
                   backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text('Exit'),
+                child: const Text('Keluar'),
               ),
             ],
           ),
@@ -492,27 +592,49 @@ class _FaceAttendanceMultiUserPageState
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            // Camera Preview
+            // ===== FULL CAMERA BACKGROUND =====
             if (_isCameraInitialized && _cameraController != null)
-              SizedBox.expand(
-                child: CameraPreview(_cameraController!),
+              Positioned.fill(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: _cameraController!.value.previewSize?.height ?? 1,
+                    height: _cameraController!.value.previewSize?.width ?? 1,
+                    child: CameraPreview(_cameraController!),
+                  ),
+                ),
               )
             else
               const Center(
                 child: CircularProgressIndicator(color: Colors.white),
               ),
 
-            // Face Detection Overlays (Green Boxes)
-            if (_detectedFaces.isNotEmpty)
-              ..._detectedFaces.asMap().entries.map((entry) {
-                final face = entry.value;
-                final screenSize = MediaQuery.of(context).size;
+            // ===== FACE DETECTION OVERLAYS =====
+            if (_detectedFaces.isNotEmpty && _cameraController != null)
+              ..._detectedFaces.map((face) {
+                // Get camera preview dimensions
+                final cameraAspectRatio = _cameraController!.value.aspectRatio;
+                final screenWidth = screenSize.width;
+                final screenHeight = screenSize.height;
                 
-                // Convert face bounds to screen coordinates
-                final left = (face['left'] as num).toDouble() * screenSize.width;
-                final top = (face['top'] as num).toDouble() * screenSize.height;
-                final width = (face['width'] as num).toDouble() * screenSize.width;
-                final height = (face['height'] as num).toDouble() * screenSize.height;
+                // Calculate actual preview dimensions maintaining aspect ratio
+                double previewWidth, previewHeight;
+                if (screenWidth / screenHeight > cameraAspectRatio) {
+                  previewHeight = screenHeight;
+                  previewWidth = screenHeight * cameraAspectRatio;
+                } else {
+                  previewWidth = screenWidth;
+                  previewHeight = screenWidth / cameraAspectRatio;
+                }
+                
+                // Calculate offsets to center the preview
+                final offsetX = (screenWidth - previewWidth) / 2;
+                final offsetY = (screenHeight - previewHeight) / 2;
+                
+                final left = offsetX + (face['left'] as num).toDouble() * previewWidth;
+                final top = offsetY + (face['top'] as num).toDouble() * previewHeight;
+                final width = (face['width'] as num).toDouble() * previewWidth;
+                final height = (face['height'] as num).toDouble() * previewHeight;
 
                 return Positioned(
                   left: left,
@@ -522,7 +644,7 @@ class _FaceAttendanceMultiUserPageState
                     height: height,
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: Colors.green,
+                        color: Colors.greenAccent,
                         width: 3,
                       ),
                       borderRadius: BorderRadius.circular(8),
@@ -531,159 +653,105 @@ class _FaceAttendanceMultiUserPageState
                 );
               }),
 
-            // Top Info Bar
+            // ===== TOP APP BAR (TRANSPARAN) =====
             Positioned(
               top: 0,
               left: 0,
               right: 0,
               child: Container(
-                padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
+                padding: const EdgeInsets.fromLTRB(16, 40, 16, 12),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.black.withValues(alpha: 0.7),
+                      Colors.black.withValues(alpha: 0.6),
                       Colors.transparent,
                     ],
                   ),
                 ),
-                child: Column(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back, color: Colors.white, size: 28),
-                          onPressed: () async {
-                            if (!context.mounted) return;
-                            
-                            final shouldExit = await showDialog<bool>(
-                              context: context,
-                              builder: (dialogContext) => AlertDialog(
-                                title: const Text('Exit Kiosk Mode?'),
-                                content: Text(
-                                  'Total processed: $_totalProcessedToday',
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.of(dialogContext).pop(false),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  ElevatedButton(
-                                    onPressed: () => Navigator.of(dialogContext).pop(true),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red,
-                                    ),
-                                    child: const Text('Exit'),
-                                  ),
-                                ],
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      onPressed: () async {
+                        final shouldExit = await showDialog<bool>(
+                          context: context,
+                          builder: (dialogContext) => AlertDialog(
+                            title: const Text('Keluar?'),
+                            content: Text('Total: $_totalProcessedToday'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(false),
+                                child: const Text('Batal'),
                               ),
-                            );
-                            
-                            if (shouldExit == true && context.mounted) {
-                              Navigator.of(context).pop(true);
-                            }
-                          },
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: widget.attendanceType == 'check_in'
-                                ? Colors.green
-                                : Colors.red,
-                            borderRadius: BorderRadius.circular(25),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                widget.attendanceType == 'check_in'
-                                    ? Icons.login
-                                    : Icons.logout,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                widget.attendanceType == 'check_in'
-                                    ? 'CHECK IN'
-                                    : 'CHECK OUT',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
+                              ElevatedButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
                                 ),
+                                child: const Text('Keluar'),
                               ),
                             ],
                           ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(25),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.check_circle,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                '$_totalProcessedToday',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                        );
+                        
+                        if (shouldExit == true && context.mounted) {
+                          Navigator.of(context).pop(true);
+                        }
+                      },
                     ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _isProcessing 
-                            ? Colors.blue.withValues(alpha: 0.8)
-                            : Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(12),
+                    const Text(
+                      'Absensi Wajah',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          if (_isProcessing)
-                            const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            ),
-                          if (_isProcessing) const SizedBox(width: 12),
-                          Flexible(
-                            child: Text(
-                              _currentStep,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
+                    ),
+                    const SizedBox(width: 48), // Balance
+                  ],
+                ),
+              ),
+            ),
+
+            // ===== STATUS OVERLAY (TRANSPARAN) =====
+            Positioned(
+              top: 120,
+              left: 0,
+              right: 0,
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: _isProcessing 
+                      ? Colors.blue.withValues(alpha: 0.8)
+                      : Colors.black.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (_isProcessing)
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      ),
+                    if (_isProcessing) const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        _currentStep,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -691,106 +759,178 @@ class _FaceAttendanceMultiUserPageState
               ),
             ),
 
-            // Success Notifications (max 10, format: "1 of 125: Name")
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: _successQueue.map((notification) {
-                  final index = _successQueue.indexOf(notification);
-                  return TweenAnimationBuilder<double>(
-                    key: ValueKey(notification['timestamp']),
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: const Duration(milliseconds: 400),
-                    curve: Curves.easeOut,
-                    builder: (context, value, child) {
-                      return Transform.translate(
-                        offset: Offset(0, 30 * (1 - value)),
-                        child: Opacity(
-                          opacity: value * (1.0 - (index * 0.08)),
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Container(
+            // ===== ATTENDANCE LIST (TRANSPARAN, MUNCUL JIKA ADA DATA) =====
+            if (_recentAttendanceList.isNotEmpty)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOut,
+                  height: screenSize.height * 0.4, // 40% dari screen
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Colors.black.withValues(alpha: 0.85),
+                        Colors.black.withValues(alpha: 0.5),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      // List Header
+                      Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
+                          horizontal: 20,
                           vertical: 12,
                         ),
-                        decoration: BoxDecoration(
-                          color: Colors.green.withValues(alpha: 0.95),
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.3),
-                              blurRadius: 8,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
                         child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: const BoxDecoration(
+                            const Text(
+                              'Riwayat Hari Ini',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                                 color: Colors.white,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.check,
-                                color: Colors.green,
-                                size: 24,
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '${notification['count']} of $_totalProcessedToday: ${notification['name']}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.verified,
-                                        color: Colors.white70,
-                                        size: 12,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'Match: ${(notification['similarity'] * 100).toStringAsFixed(0)}%',
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Text(
+                                '$_totalProcessedToday',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ),
-                  );
-                }).toList(),
+
+                      // Attendance List
+                      Expanded(
+                        child: ListView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          itemCount: _recentAttendanceList.length,
+                          itemBuilder: (context, index) {
+                            final item = _recentAttendanceList[index];
+                            final isCheckIn = item['type'] == 'check_in';
+                            
+                            return TweenAnimationBuilder<double>(
+                              key: ValueKey(item['timestamp']),
+                              tween: Tween(begin: 0.0, end: 1.0),
+                              duration: const Duration(milliseconds: 400),
+                              curve: Curves.easeOut,
+                              builder: (context, value, child) {
+                                return Transform.translate(
+                                  offset: Offset(0, 20 * (1 - value)),
+                                  child: Opacity(
+                                    opacity: value,
+                                    child: child,
+                                  ),
+                                );
+                              },
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    // Avatar
+                                    Container(
+                                      width: 40,
+                                      height: 40,
+                                      decoration: BoxDecoration(
+                                        color: isCheckIn 
+                                            ? Colors.green.withValues(alpha: 0.3)
+                                            : Colors.blue.withValues(alpha: 0.3),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: isCheckIn ? Colors.green : Colors.blue,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        isCheckIn ? Icons.login : Icons.logout,
+                                        color: isCheckIn 
+                                            ? Colors.greenAccent
+                                            : Colors.blueAccent,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    // Name
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            item['name'],
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.white,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            isCheckIn ? 'Check In' : 'Check Out',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.white.withValues(alpha: 0.7),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    // Time
+                                    Text(
+                                      item['time'],
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: isCheckIn 
+                                            ? Colors.greenAccent
+                                            : Colors.blueAccent,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
           ],
         ),
       ),

@@ -268,7 +268,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     }
   }
 
-  Future<void> _navigateToMultiUserFaceAttendance(String type) async {
+  Future<void> _navigateToMultiUserFaceAttendance(String? type) async {
     try {
       final organizationId = widget.memberData['organization_id'];
       
@@ -319,100 +319,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       return;
     }
 
-    // Mode default: face recognition multi user
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Start Attendance Session',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Select the type of attendance to begin',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade600,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _navigateToMultiUserFaceAttendance('check_in');
-                    },
-                    icon: const Icon(Icons.login, size: 24),
-                    label: const Text(
-                      'Check In',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _navigateToMultiUserFaceAttendance('check_out');
-                    },
-                    icon: const Icon(Icons.logout, size: 24),
-                    label: const Text(
-                      'Check Out',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
+    // Mode default: face recognition multi user dengan auto-detection
+    _navigateToMultiUserFaceAttendance(null); // null = auto-detect
   }
 
   void _handleNavigation(int index) {

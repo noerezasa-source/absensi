@@ -4,7 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
-import '../services/face_recognition_service.dart';
+import '../services/face_recognition_tflite_service.dart';
 import '../services/biometric_service.dart';
 import '../services/supabase_storage_service.dart';
 
@@ -22,25 +22,53 @@ class FaceRegistrationPage extends StatefulWidget {
 
 class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
-  final FaceRecognitionService _faceService = FaceRecognitionService();
+  final FaceRecognitionTFLiteService _faceService = FaceRecognitionTFLiteService();
   final BiometricService _biometricService = BiometricService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
 
   bool _isLoading = false;
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
+  bool _isModelInitialized = false;
   String? _errorMessage;
-  String _currentStep = 'Positioning face...';
+  String _currentStep = 'Initializing model...';
   Timer? _detectionTimer;
 
   @override
   void initState() {
     super.initState();
-    _initializeCamera();
+    _initializeModel();
+  }
+
+  Future<void> _initializeModel() async {
+    try {
+      setState(() {
+        _currentStep = 'Loading AI model...';
+      });
+
+      await _faceService.initialize();
+      
+      setState(() {
+        _isModelInitialized = true;
+        _currentStep = 'Model ready';
+      });
+
+      // Now initialize camera
+      await _initializeCamera();
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to load AI model: $e';
+        _currentStep = 'Model initialization failed';
+      });
+    }
   }
 
   Future<void> _initializeCamera() async {
     try {
+      setState(() {
+        _currentStep = 'Starting camera...';
+      });
+
       final cameras = await availableCameras();
       final frontCamera = cameras.firstWhere(
         (camera) => camera.lensDirection == CameraLensDirection.front,
@@ -51,6 +79,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         frontCamera,
         ResolutionPreset.high,
         enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
       );
 
       await _cameraController!.initialize();
@@ -58,6 +87,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
+          _currentStep = 'Position your face...';
         });
         _startFaceDetection();
       }
@@ -70,14 +100,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
   void _startFaceDetection() {
     _detectionTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
-      if (!_isProcessing && _isCameraInitialized) {
+      if (!_isProcessing && _isCameraInitialized && _isModelInitialized) {
         _detectAndCapture();
       }
     });
   }
 
   Future<void> _detectAndCapture() async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized || _isProcessing) {
+    if (_cameraController == null || 
+        !_cameraController!.value.isInitialized || 
+        _isProcessing) {
       return;
     }
 
@@ -86,30 +118,23 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     });
 
     try {
-      // Capture image for detection
       final image = await _cameraController!.takePicture();
       
-      // Try to validate face (this will throw if no face detected)
       try {
         await _faceService.validatePhotoQuality(image.path);
         
-        // If validation passes, face is detected
-        // Stop detection timer
         _detectionTimer?.cancel();
         
-        // Register the face
         await _registerFace(image.path);
       } catch (e) {
-        // No face detected or poor quality, delete temp image and continue
         await File(image.path).delete();
         setState(() {
-          _currentStep = 'Positioning face...';
+          _currentStep = 'Position your face...';
         });
       }
     } catch (e) {
-      // Continue detecting
       setState(() {
-        _currentStep = 'Positioning face...';
+        _currentStep = 'Position your face...';
       });
     } finally {
       setState(() {
@@ -132,34 +157,34 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _currentStep = 'Validating face quality...';
       });
 
-      // Validate photo quality
       await _faceService.validatePhotoQuality(imagePath);
 
       setState(() {
-        _currentStep = 'Extracting face features...';
+        _currentStep = 'Extracting face features (AI)...';
       });
 
-      // Extract face features
+      // Extract face features using TFLite
       final faceTemplate = await _faceService.extractFaceFeatures(imagePath);
+      
+      debugPrint('Face template extracted:');
+      debugPrint('- Version: ${faceTemplate['version']}');
+      debugPrint('- Embedding size: ${faceTemplate['embeddingSize']}');
 
       setState(() {
         _currentStep = 'Processing image...';
       });
 
-      // Compress and fix orientation before upload
       final processedFile = await _processImage(imageFile);
 
       setState(() {
         _currentStep = 'Uploading face template...';
       });
 
-      // Upload to storage
       await _storageService.uploadFaceTemplate(
         processedFile,
         widget.organizationMemberId,
       );
 
-      // Delete temporary files
       await imageFile.delete();
       if (processedFile.path != imageFile.path) {
         await processedFile.delete();
@@ -169,14 +194,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _currentStep = 'Registering face template...';
       });
 
-      // Save to database
       await _biometricService.registerFaceTemplate(
         organizationMemberId: widget.organizationMemberId,
         faceTemplate: faceTemplate,
       );
 
       if (mounted) {
-        // Show success overlay in center
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -192,11 +215,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Success icon with animation feel
                   Container(
                     width: 72,
                     height: 72,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: Colors.green,
                       shape: BoxShape.circle,
                     ),
@@ -207,7 +229,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  // Title
                   const Text(
                     'All Set!',
                     style: TextStyle(
@@ -219,9 +240,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  // Subtitle
                   Text(
-                    'Face recognition active',
+                    'Face recognition active\n(Powered by AI)',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
@@ -237,28 +257,25 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           ),
         );
 
-        // Auto close after 1.5 seconds
-        await Future.delayed(const Duration(milliseconds: 1500));
+        await Future.delayed(const Duration(milliseconds: 1800));
         if (mounted) {
-          Navigator.of(context).pop(); // Close dialog
-          Navigator.of(context).pop(true); // Close registration page
+          Navigator.of(context).pop();
+          Navigator.of(context).pop(true);
         }
       }
     } catch (e) {
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
-        _currentStep = 'Positioning face...';
+        _currentStep = 'Position your face...';
         _isLoading = false;
       });
       
-      // Restart detection
       _startFaceDetection();
     }
   }
 
   Future<File> _processImage(File imageFile) async {
     try {
-      // Read image
       final imageBytes = await imageFile.readAsBytes();
       final image = img.decodeImage(imageBytes);
       
@@ -266,27 +283,22 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         return imageFile;
       }
 
-      // Fix orientation (front camera is mirrored)
       final flipped = img.flipHorizontal(image);
       
-      // Resize to max 800px width while maintaining aspect ratio
       final resized = img.copyResize(
         flipped,
         width: 800,
         interpolation: img.Interpolation.average,
       );
 
-      // Compress to JPEG with 85% quality
       final compressedBytes = img.encodeJpg(resized, quality: 85);
 
-      // Save to temporary file
       final tempDir = await Directory.systemTemp.createTemp();
       final processedFile = File('${tempDir.path}/processed_face.jpg');
       await processedFile.writeAsBytes(compressedBytes);
 
       return processedFile;
     } catch (e) {
-      // If processing fails, return original
       return imageFile;
     }
   }
@@ -311,7 +323,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
-          'Register Face',
+          'Register Face (AI)',
           style: TextStyle(color: Colors.white),
         ),
       ),
@@ -328,14 +340,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             ),
 
           // Face overlay guide
-          if (_isCameraInitialized)
+          if (_isCameraInitialized && _isModelInitialized)
             Center(
               child: Container(
                 width: 280,
                 height: 350,
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: _isLoading ? Colors.green : (_isProcessing ? Colors.blue : Colors.white),
+                    color: _isLoading 
+                        ? Colors.green 
+                        : (_isProcessing ? Colors.blue : Colors.white),
                     width: 3,
                   ),
                   borderRadius: BorderRadius.circular(200),
@@ -343,7 +357,45 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               ),
             ),
 
-          // Error message at top
+          // Model status indicator
+          if (!_isModelInitialized)
+            Positioned(
+              top: 100,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Text(
+                      'Loading AI Model...',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Error message
           if (_errorMessage != null)
             Positioned(
               top: 50,
@@ -374,7 +426,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               ),
             ),
 
-          // Instructions at bottom
+          // Instructions
           Positioned(
             bottom: 40,
             left: 0,
@@ -382,7 +434,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             child: Column(
               children: [
                 if (_isLoading)
-                  const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                  const CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  )
                 else
                   Container(
                     width: 8,
@@ -393,19 +448,23 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ),
                   ),
                 const SizedBox(height: 16),
-                Text(
-                  _currentStep,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black,
-                        blurRadius: 8,
-                      ),
-                    ],
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    _currentStep,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
               ],
