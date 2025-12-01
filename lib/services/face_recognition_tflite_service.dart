@@ -13,8 +13,8 @@ class FaceRecognitionTFLiteService {
   bool _isInitialized = false;
 
   // Model config
-  static const int inputSize = 112; // MobileFaceNet standard
-  static const int embeddingSize = 192; // Output embedding dimension
+  static const int inputSize = 112;
+  static const int embeddingSize = 192;
   
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -24,19 +24,17 @@ class FaceRecognitionTFLiteService {
         enableClassification: true,
         enableTracking: false,
         performanceMode: FaceDetectorMode.accurate,
-        minFaceSize: 0.15,
+        minFaceSize: 0.10, // Lowered from 0.15 for better detection
       ),
     );
   }
 
-  /// Initialize TFLite model
   Future<void> initialize() async {
     if (_isInitialized) return;
 
     try {
       debugPrint('=== Initializing TFLite Model ===');
       
-      // Load model from assets
       _interpreter = await Interpreter.fromAsset(
         'assets/models/mobile_face_net.tflite',
         options: InterpreterOptions()
@@ -44,7 +42,6 @@ class FaceRecognitionTFLiteService {
           ..useNnApiForAndroid = true,
       );
 
-      // Get input/output tensor info
       final inputShape = _interpreter!.getInputTensor(0).shape;
       final outputShape = _interpreter!.getOutputTensor(0).shape;
       
@@ -59,20 +56,17 @@ class FaceRecognitionTFLiteService {
     }
   }
 
-  /// Detect faces using ML Kit
   Future<List<Face>> detectFaces(String imagePath) async {
     final inputImage = InputImage.fromFilePath(imagePath);
     final faces = await _faceDetector.processImage(inputImage);
     return faces;
   }
 
-  /// Extract face features using TFLite
   Future<Map<String, dynamic>> extractFaceFeatures(String imagePath) async {
     if (!_isInitialized) {
       await initialize();
     }
 
-    // 1. Detect face using ML Kit
     final faces = await detectFaces(imagePath);
     
     if (faces.isEmpty) {
@@ -85,7 +79,6 @@ class FaceRecognitionTFLiteService {
 
     final face = faces.first;
 
-    // 2. Load and preprocess image
     final imageFile = File(imagePath);
     final imageBytes = await imageFile.readAsBytes();
     final image = img.decodeImage(imageBytes);
@@ -94,17 +87,16 @@ class FaceRecognitionTFLiteService {
       throw Exception('Failed to decode image');
     }
 
-    // 3. Crop face region with margin
-    final faceImage = _cropFaceWithMargin(image, face.boundingBox);
+    // Enhance image for low light conditions
+    final enhancedImage = _enhanceImageForLowLight(image);
 
-    // 4. Get embedding from TFLite
+    final faceImage = _cropFaceWithMargin(enhancedImage, face.boundingBox);
+
     final embedding = await _getEmbedding(faceImage);
 
-    // 5. Build template with embedding + metadata
     return _buildTemplate(face, embedding);
   }
 
-  /// Build template from detected face in real-time (kiosk mode)
   Future<Map<String, dynamic>> buildTemplateFromFace(
     Face face,
     String imagePath,
@@ -113,7 +105,6 @@ class FaceRecognitionTFLiteService {
       await initialize();
     }
 
-    // Load image
     final imageFile = File(imagePath);
     final imageBytes = await imageFile.readAsBytes();
     final image = img.decodeImage(imageBytes);
@@ -122,16 +113,66 @@ class FaceRecognitionTFLiteService {
       throw Exception('Failed to decode image');
     }
 
-    // Crop and get embedding
-    final faceImage = _cropFaceWithMargin(image, face.boundingBox);
+    // Enhance for low light
+    final enhancedImage = _enhanceImageForLowLight(image);
+
+    final faceImage = _cropFaceWithMargin(enhancedImage, face.boundingBox);
     final embedding = await _getEmbedding(faceImage);
 
     return _buildTemplate(face, embedding);
   }
 
-  /// Crop face from image with 30% margin
+  /// Enhance image for low light conditions
+  img.Image _enhanceImageForLowLight(img.Image image) {
+    // Calculate average brightness
+    int totalBrightness = 0;
+    int pixelCount = 0;
+    
+    for (int y = 0; y < image.height; y++) {
+      for (int x = 0; x < image.width; x++) {
+        final pixel = image.getPixel(x, y);
+        // Calculate luminance (perceived brightness)
+        final brightness = (0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b).toInt();
+        totalBrightness += brightness;
+        pixelCount++;
+      }
+    }
+    
+    final avgBrightness = totalBrightness / pixelCount;
+    
+    // If image is dark (avg brightness < 100), enhance it
+    if (avgBrightness < 100) {
+      debugPrint('Low light detected (brightness: ${avgBrightness.toStringAsFixed(1)}), enhancing...');
+      
+      // Increase brightness and contrast more aggressively
+      final brightnessFactor = 1.3 + ((100 - avgBrightness) / 200);
+      final contrastFactor = 1.2 + ((100 - avgBrightness) / 300);
+      
+      return img.adjustColor(
+        image,
+        brightness: brightnessFactor,
+        contrast: contrastFactor,
+        saturation: 1.1, // Slightly increase saturation
+      );
+    } else if (avgBrightness < 130) {
+      // Moderate enhancement for medium-low light
+      debugPrint('Medium-low light (brightness: ${avgBrightness.toStringAsFixed(1)}), slight enhancement...');
+      
+      return img.adjustColor(
+        image,
+        brightness: 1.15,
+        contrast: 1.1,
+      );
+    }
+    
+    // Good lighting, minimal enhancement
+    return img.adjustColor(
+      image,
+      contrast: 1.05, // Slight contrast boost for clarity
+    );
+  }
+
   img.Image _cropFaceWithMargin(img.Image image, Rect boundingBox) {
-    // Add 30% margin around face
     const margin = 0.3;
     final marginW = boundingBox.width * margin;
     final marginH = boundingBox.height * margin;
@@ -147,10 +188,8 @@ class FaceRecognitionTFLiteService {
       (boundingBox.height + 2 * marginH).toInt(),
     );
 
-    // Crop face region
     final croppedFace = img.copyCrop(image, x: x, y: y, width: w, height: h);
     
-    // Resize to model input size
     return img.copyResize(
       croppedFace,
       width: inputSize,
@@ -159,39 +198,27 @@ class FaceRecognitionTFLiteService {
     );
   }
 
-  /// Get face embedding from preprocessed face image
   Future<List<double>> _getEmbedding(img.Image faceImage) async {
-    // Preprocess image to 4D array
     final input = _preprocessImage(faceImage);
-
-    // Prepare output buffer - 2D array [1, 192]
     final output = List.generate(1, (_) => List<double>.filled(embeddingSize, 0.0));
 
-    // Run inference
     _interpreter!.run(input, output);
 
-    // Get embedding and normalize (L2 normalization)
     final embedding = List<double>.from(output[0]);
     return _normalizeEmbedding(embedding);
   }
 
-  /// Preprocess image for TFLite model input
-  /// Returns 4D array: [1, 112, 112, 3]
   List<List<List<List<double>>>> _preprocessImage(img.Image image) {
     final input = <List<List<List<double>>>>[];
-    
-    // Batch dimension (always 1)
     final batch = <List<List<double>>>[];
     
-    // Height dimension (112 rows)
     for (int y = 0; y < inputSize; y++) {
       final row = <List<double>>[];
       
-      // Width dimension (112 columns)
       for (int x = 0; x < inputSize; x++) {
         final pixel = image.getPixel(x, y);
         
-        // RGB channels (3 values), normalized to [-1, 1]
+        // Normalize to [-1, 1]
         row.add([
           (pixel.r / 127.5) - 1.0,
           (pixel.g / 127.5) - 1.0,
@@ -206,7 +233,6 @@ class FaceRecognitionTFLiteService {
     return input;
   }
 
-  /// L2 normalize embedding vector
   List<double> _normalizeEmbedding(List<double> embedding) {
     double sumSquares = 0.0;
     for (var value in embedding) {
@@ -216,16 +242,15 @@ class FaceRecognitionTFLiteService {
     final magnitude = sqrt(sumSquares);
     
     if (magnitude < 1e-6) {
-      return embedding; // Avoid division by zero
+      return embedding;
     }
     
     return embedding.map((value) => value / magnitude).toList();
   }
 
-  /// Build face template with embedding and metadata
   Map<String, dynamic> _buildTemplate(Face face, List<double> embedding) {
     return {
-      'version': 3, // TFLite version
+      'version': 3,
       'embedding': embedding,
       'embeddingSize': embedding.length,
       'boundingBox': {
@@ -246,8 +271,6 @@ class FaceRecognitionTFLiteService {
     };
   }
 
-  /// Compare two face embeddings using cosine similarity
-  /// Returns similarity score between 0.0 and 1.0
   double compareFaces(
     Map<String, dynamic> template1,
     Map<String, dynamic> template2,
@@ -264,20 +287,16 @@ class FaceRecognitionTFLiteService {
       return 0.0;
     }
 
-    // Calculate cosine similarity
     double dotProduct = 0.0;
     for (int i = 0; i < embedding1.length; i++) {
       dotProduct += embedding1[i] * embedding2[i];
     }
 
-    // Since embeddings are already L2 normalized, cosine similarity = dot product
-    // Convert from [-1, 1] to [0, 1]
     final similarity = (dotProduct + 1.0) / 2.0;
     
     return similarity.clamp(0.0, 1.0);
   }
 
-  /// Validate photo quality before registration
   Future<bool> validatePhotoQuality(String imagePath) async {
     try {
       final faces = await detectFaces(imagePath);
@@ -292,23 +311,22 @@ class FaceRecognitionTFLiteService {
 
       final face = faces.first;
 
-      // Check eye openness
+      // More lenient eye check for low light
       final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
       final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
       
-      if (leftEyeOpen < 0.5 || rightEyeOpen < 0.5) {
+      if (leftEyeOpen < 0.3 || rightEyeOpen < 0.3) {
         throw Exception('Please open your eyes');
       }
 
-      // Check head rotation
+      // More lenient rotation check
       final headY = (face.headEulerAngleY ?? 0.0).abs();
       final headZ = (face.headEulerAngleZ ?? 0.0).abs();
       
-      if (headY > 20.0 || headZ > 20.0) {
+      if (headY > 25.0 || headZ > 25.0) {
         throw Exception('Please face the camera directly');
       }
 
-      // Check face size (at least 15% of image)
       final imageFile = File(imagePath);
       final imageBytes = await imageFile.readAsBytes();
       final image = img.decodeImage(imageBytes);
@@ -318,11 +336,11 @@ class FaceRecognitionTFLiteService {
         final faceArea = face.boundingBox.width * face.boundingBox.height;
         final faceRatio = faceArea / imageArea;
         
-        if (faceRatio < 0.15) {
+        if (faceRatio < 0.12) {
           throw Exception('Face too small. Please move closer');
         }
 
-        if (faceRatio > 0.8) {
+        if (faceRatio > 0.85) {
           throw Exception('Face too close. Please move back');
         }
       }
@@ -333,7 +351,6 @@ class FaceRecognitionTFLiteService {
     }
   }
 
-  /// Get model info
   Map<String, dynamic> getModelInfo() {
     if (!_isInitialized || _interpreter == null) {
       return {'status': 'not_initialized'};

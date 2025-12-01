@@ -31,7 +31,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   bool _isProcessing = false;
   bool _isModelInitialized = false;
   String? _errorMessage;
-  String _currentStep = 'Initializing model...';
+  String _currentStep = 'Loading model...';
+  String _guidanceMessage = '';
+  Color _overlayColor = Colors.white;
   Timer? _detectionTimer;
 
   @override
@@ -43,7 +45,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   Future<void> _initializeModel() async {
     try {
       setState(() {
-        _currentStep = 'Loading AI model...';
+        _currentStep = 'Loading model...';
       });
 
       await _faceService.initialize();
@@ -53,11 +55,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _currentStep = 'Model ready';
       });
 
-      // Now initialize camera
       await _initializeCamera();
     } catch (e) {
       setState(() {
-        _errorMessage = 'Failed to load AI model: $e';
+        _errorMessage = 'Failed to load model: $e';
         _currentStep = 'Model initialization failed';
       });
     }
@@ -87,7 +88,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
-          _currentStep = 'Position your face...';
+          _currentStep = 'Position your face in the frame';
+          _guidanceMessage = 'Look at the camera';
         });
         _startFaceDetection();
       }
@@ -99,14 +101,14 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   void _startFaceDetection() {
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+    _detectionTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       if (!_isProcessing && _isCameraInitialized && _isModelInitialized) {
-        _detectAndCapture();
+        _detectAndValidate();
       }
     });
   }
 
-  Future<void> _detectAndCapture() async {
+  Future<void> _detectAndValidate() async {
     if (_cameraController == null || 
         !_cameraController!.value.isInitialized || 
         _isProcessing) {
@@ -121,20 +123,45 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       final image = await _cameraController!.takePicture();
       
       try {
-        await _faceService.validatePhotoQuality(image.path);
+        final validationResult = await _validateWithFeedback(image.path);
         
-        _detectionTimer?.cancel();
-        
-        await _registerFace(image.path);
+        if (validationResult['isValid'] == true) {
+          _detectionTimer?.cancel();
+          await _registerFace(image.path);
+        } else {
+          setState(() {
+            _guidanceMessage = validationResult['message'] ?? 'Adjust position';
+            _overlayColor = Colors.orange;
+            _currentStep = validationResult['message'] ?? 'Position your face';
+          });
+          await File(image.path).delete();
+          
+          Future.delayed(const Duration(milliseconds: 1500), () {
+            if (mounted) {
+              setState(() {
+                _overlayColor = Colors.white;
+              });
+            }
+          });
+        }
       } catch (e) {
         await File(image.path).delete();
         setState(() {
-          _currentStep = 'Position your face...';
+          _guidanceMessage = e.toString().replaceAll('Exception: ', '');
+          _overlayColor = Colors.red;
+        });
+        
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) {
+            setState(() {
+              _overlayColor = Colors.white;
+            });
+          }
         });
       }
     } catch (e) {
       setState(() {
-        _currentStep = 'Position your face...';
+        _currentStep = 'Position your face';
       });
     } finally {
       setState(() {
@@ -143,27 +170,98 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
   }
 
+  Future<Map<String, dynamic>> _validateWithFeedback(String imagePath) async {
+    final faces = await _faceService.detectFaces(imagePath);
+    
+    if (faces.isEmpty) {
+      return {
+        'isValid': false,
+        'message': 'No face detected - move closer',
+      };
+    }
+
+    if (faces.length > 1) {
+      return {
+        'isValid': false,
+        'message': 'Multiple faces detected - only you',
+      };
+    }
+
+    final face = faces.first;
+
+    final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
+    final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
+    
+    if (leftEyeOpen < 0.3 || rightEyeOpen < 0.3) {
+      return {
+        'isValid': false,
+        'message': 'Please open your eyes',
+      };
+    }
+
+    final headY = (face.headEulerAngleY ?? 0.0).abs();
+    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
+    
+    if (headY > 25.0) {
+      final direction = (face.headEulerAngleY ?? 0.0) > 0 ? 'right' : 'left';
+      return {
+        'isValid': false,
+        'message': 'Turn head to $direction',
+      };
+    }
+    
+    if (headZ > 25.0) {
+      return {
+        'isValid': false,
+        'message': 'Keep head straight - don\'t tilt',
+      };
+    }
+
+    final imageFile = File(imagePath);
+    final imageBytes = await imageFile.readAsBytes();
+    final image = img.decodeImage(imageBytes);
+    
+    if (image != null) {
+      final imageArea = image.width * image.height;
+      final faceArea = face.boundingBox.width * face.boundingBox.height;
+      final faceRatio = faceArea / imageArea;
+      
+      if (faceRatio < 0.12) {
+        return {
+          'isValid': false,
+          'message': 'Move closer to camera',
+        };
+      }
+
+      if (faceRatio > 0.85) {
+        return {
+          'isValid': false,
+          'message': 'Too close - move back',
+        };
+      }
+    }
+
+    return {
+      'isValid': true,
+      'message': 'Perfect! Processing...',
+    };
+  }
+
   Future<void> _registerFace(String imagePath) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
       _currentStep = 'Face detected!';
+      _overlayColor = Colors.green;
     });
 
     try {
       final imageFile = File(imagePath);
 
       setState(() {
-        _currentStep = 'Validating face quality...';
+        _currentStep = 'Extracting features...';
       });
 
-      await _faceService.validatePhotoQuality(imagePath);
-
-      setState(() {
-        _currentStep = 'Extracting face features (AI)...';
-      });
-
-      // Extract face features using TFLite
       final faceTemplate = await _faceService.extractFaceFeatures(imagePath);
       
       debugPrint('Face template extracted:');
@@ -177,7 +275,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       final processedFile = await _processImage(imageFile);
 
       setState(() {
-        _currentStep = 'Uploading face template...';
+        _currentStep = 'Uploading...';
       });
 
       await _storageService.uploadFaceTemplate(
@@ -191,7 +289,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       }
 
       setState(() {
-        _currentStep = 'Registering face template...';
+        _currentStep = 'Saving template...';
       });
 
       await _biometricService.registerFaceTemplate(
@@ -230,7 +328,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                   ),
                   const SizedBox(height: 24),
                   const Text(
-                    'All Set!',
+                    'Registration Complete!',
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -241,7 +339,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Face recognition active\n(Powered by AI)',
+                    'Face recognition is now active',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
@@ -266,8 +364,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     } catch (e) {
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
-        _currentStep = 'Position your face...';
+        _currentStep = 'Position your face';
         _isLoading = false;
+        _overlayColor = Colors.white;
       });
       
       _startFaceDetection();
@@ -283,7 +382,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         return imageFile;
       }
 
-      final flipped = img.flipHorizontal(image);
+      var enhanced = img.adjustColor(
+        image,
+        brightness: 1.1,
+        contrast: 1.15,
+      );
+
+      final flipped = img.flipHorizontal(enhanced);
       
       final resized = img.copyResize(
         flipped,
@@ -291,7 +396,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         interpolation: img.Interpolation.average,
       );
 
-      final compressedBytes = img.encodeJpg(resized, quality: 85);
+      final compressedBytes = img.encodeJpg(resized, quality: 90);
 
       final tempDir = await Directory.systemTemp.createTemp();
       final processedFile = File('${tempDir.path}/processed_face.jpg');
@@ -313,6 +418,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -323,16 +430,23 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
-          'Register Face (AI)',
+          'Register Face',
           style: TextStyle(color: Colors.white),
         ),
       ),
       body: Stack(
         children: [
-          // Camera Preview
+          // ===== FULL CAMERA BACKGROUND (SAMA SEPERTI ATTENDANCE) =====
           if (_isCameraInitialized && _cameraController != null)
-            SizedBox.expand(
-              child: CameraPreview(_cameraController!),
+            Positioned.fill(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _cameraController!.value.previewSize?.height ?? 1,
+                  height: _cameraController!.value.previewSize?.width ?? 1,
+                  child: CameraPreview(_cameraController!),
+                ),
+              ),
             )
           else
             const Center(
@@ -342,17 +456,64 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           // Face overlay guide
           if (_isCameraInitialized && _isModelInitialized)
             Center(
-              child: Container(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
                 width: 280,
                 height: 350,
                 decoration: BoxDecoration(
                   border: Border.all(
                     color: _isLoading 
                         ? Colors.green 
-                        : (_isProcessing ? Colors.blue : Colors.white),
+                        : _overlayColor,
                     width: 3,
                   ),
                   borderRadius: BorderRadius.circular(200),
+                ),
+              ),
+            ),
+
+          // Guidance message overlay
+          if (_guidanceMessage.isNotEmpty && !_isLoading)
+            Positioned(
+              top: 100,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                decoration: BoxDecoration(
+                  color: _overlayColor == Colors.red 
+                      ? Colors.red.withValues(alpha: 0.9)
+                      : _overlayColor == Colors.orange
+                          ? Colors.orange.withValues(alpha: 0.9)
+                          : Colors.blue.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      _overlayColor == Colors.red 
+                          ? Icons.error_outline
+                          : _overlayColor == Colors.orange
+                              ? Icons.warning_amber
+                              : Icons.face,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _guidanceMessage,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -383,7 +544,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ),
                     SizedBox(width: 12),
                     Text(
-                      'Loading AI Model...',
+                      'Loading Model...',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 14,

@@ -78,10 +78,10 @@ class _FaceAttendanceMultiUserPageState
   void initState() {
     super.initState();
     _enableKioskMode();
+    _loadOrganizationTimezone(); // Load timezone dulu
     _initializeFaceService();
     _initializeCamera();
     _getCurrentLocation();
-    _loadOrganizationTimezone();
   }
 
   Future<void> _loadOrganizationTimezone() async {
@@ -96,10 +96,10 @@ class _FaceAttendanceMultiUserPageState
         setState(() {
           _organizationTimezone = org['timezone'] as String;
         });
-        debugPrint('Organization timezone loaded: $_organizationTimezone');
+        debugPrint('✅ Organization timezone loaded: $_organizationTimezone');
       }
     } catch (e) {
-      debugPrint('Error loading organization timezone: $e');
+      debugPrint('⚠️ Error loading organization timezone: $e');
     }
   }
 
@@ -118,30 +118,30 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<void> _initializeFaceService() async {
-  try {
-    setState(() {
-      _currentStep = 'Loading AI model...';
-    });
-    
-    await _faceService.initialize();
-    
-    debugPrint('✅ TFLite model initialized');
-    
-    setState(() {
-      _currentStep = 'Siap - Posisikan wajah Anda';
-    });
-  } catch (e) {
-    debugPrint('!!! Failed to initialize TFLite: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to load AI model: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    try {
+      setState(() {
+        _currentStep = 'Loading AI model...';
+      });
+      
+      await _faceService.initialize();
+      
+      debugPrint('✅ TFLite model initialized');
+      
+      setState(() {
+        _currentStep = 'Siap - Posisikan wajah Anda';
+      });
+    } catch (e) {
+      debugPrint('!!! Failed to initialize TFLite: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load AI model: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
-}
 
   Future<void> _initializeCamera() async {
     try {
@@ -216,174 +216,188 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<void> _scanForFaces() async {
-  if (_cameraController == null ||
-      !_cameraController!.value.isInitialized ||
-      _isProcessing) {
-    return;
-  }
-
-  setState(() {
-    _isProcessing = true;
-  });
-
-  try {
-    debugPrint('=== STARTING MULTI-FACE SCAN (TFLite) ===');
-    
-    final image = await _cameraController!.takePicture();
-    final imageFile = File(image.path);
-    
-    // Detect faces using ML Kit
-    final faces = await _faceService.detectFaces(image.path);
-    
-    debugPrint('Total faces detected: ${faces.length}');
-
-    if (faces.isEmpty) {
-      // Clean up temp file
-      await imageFile.delete();
-      
-      setState(() {
-        _detectedFaces = [];
-        _currentStep = 'Tidak ada wajah terdeteksi';
-      });
-      
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted && !_isProcessing) {
-          setState(() {
-            _currentStep = 'Siap - Posisikan wajah Anda';
-          });
-        }
-      });
+    if (_cameraController == null ||
+        !_cameraController!.value.isInitialized ||
+        _isProcessing) {
       return;
     }
 
-    final imageSize = await _getImageSize(imageFile);
-    final imageWidth = imageSize?.width ??
-        _cameraController?.value.previewSize?.height ??
-        1080.0;
-    final imageHeight = imageSize?.height ??
-        _cameraController?.value.previewSize?.width ??
-        1920.0;
-
-    // Map face bounding boxes for overlay
-    final detectedFacesMap = faces.map((face) {
-      final boundingBox = face.boundingBox;
-      final left = (boundingBox.left / imageWidth).clamp(0.0, 1.0);
-      final top = (boundingBox.top / imageHeight).clamp(0.0, 1.0);
-      final width = (boundingBox.width / imageWidth).clamp(0.0, 1.0);
-      final height = (boundingBox.height / imageHeight).clamp(0.0, 1.0);
-
-      return {
-        'left': left,
-        'top': top,
-        'width': width,
-        'height': height,
-      };
-    }).toList();
-
     setState(() {
-      _detectedFaces = detectedFacesMap;
-      _currentStep = 'Terdeteksi ${faces.length} wajah - Memproses AI...';
+      _isProcessing = true;
     });
 
-    // Process up to 5 faces
-    final facesToProcess = faces.take(5).toList();
-    final processedUsers = <Map<String, dynamic>>[];
+    try {
+      debugPrint('=== STARTING MULTI-FACE SCAN (TFLite) ===');
+      
+      final image = await _cameraController!.takePicture();
+      final imageFile = File(image.path);
+      
+      // Detect faces using ML Kit
+      final faces = await _faceService.detectFaces(image.path);
+      
+      debugPrint('Total faces detected: ${faces.length}');
 
-    for (int i = 0; i < facesToProcess.length; i++) {
-      try {
-        debugPrint('Processing face ${i + 1}/${facesToProcess.length} with TFLite');
+      if (faces.isEmpty) {
+        await imageFile.delete();
         
-        // Extract features using TFLite (requires image path)
-        final capturedTemplate = await _faceService.buildTemplateFromFace(
-          facesToProcess[i],
-          image.path,
-        );
+        setState(() {
+          _detectedFaces = [];
+          _currentStep = 'Tidak ada wajah terdeteksi';
+        });
         
-        debugPrint('Extracted embedding size: ${capturedTemplate['embeddingSize']}');
-        
-        // Identify user with higher threshold for TFLite
-        final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
-          capturedTemplate: capturedTemplate,
-          organizationId: widget.organizationId,
-          threshold: 0.80, // Higher threshold for better accuracy
-        );
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted && !_isProcessing) {
+            setState(() {
+              _currentStep = 'Siap - Posisikan wajah Anda';
+            });
+          }
+        });
+        return;
+      }
 
-        if (bestMatch != null) {
-          final userId = bestMatch['organization_member_id'] as int;
+      final imageSize = await _getImageSize(imageFile);
+      final imageWidth = imageSize?.width ??
+          _cameraController?.value.previewSize?.height ??
+          1080.0;
+      final imageHeight = imageSize?.height ??
+          _cameraController?.value.previewSize?.width ??
+          1920.0;
+
+      // Map face bounding boxes for overlay
+      final detectedFacesMap = faces.map((face) {
+        final boundingBox = face.boundingBox;
+        final left = (boundingBox.left / imageWidth).clamp(0.0, 1.0);
+        final top = (boundingBox.top / imageHeight).clamp(0.0, 1.0);
+        final width = (boundingBox.width / imageWidth).clamp(0.0, 1.0);
+        final height = (boundingBox.height / imageHeight).clamp(0.0, 1.0);
+
+        return {
+          'left': left,
+          'top': top,
+          'width': width,
+          'height': height,
+        };
+      }).toList();
+
+      setState(() {
+        _detectedFaces = detectedFacesMap;
+        _currentStep = 'Terdeteksi ${faces.length} wajah - Memproses AI...';
+      });
+
+      // Process faces ONE BY ONE and check cooldown BEFORE processing
+      final processedUsers = <Map<String, dynamic>>[];
+      final facesToProcess = faces.take(5).toList();
+
+      for (int i = 0; i < facesToProcess.length; i++) {
+        try {
+          debugPrint('Processing face ${i + 1}/${facesToProcess.length} with TFLite');
           
-          // Check cooldown
+          // Extract features using TFLite
+          final capturedTemplate = await _faceService.buildTemplateFromFace(
+            facesToProcess[i],
+            image.path,
+          );
+          
+          debugPrint('Extracted embedding size: ${capturedTemplate['embeddingSize']}');
+          
+          // Identify user with threshold
+          final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
+            capturedTemplate: capturedTemplate,
+            organizationId: widget.organizationId,
+            threshold: 0.75, // Balanced threshold
+          );
+
+          if (bestMatch == null) {
+            debugPrint('Face ${i + 1}: No match found');
+            continue;
+          }
+
+          final userId = bestMatch['organization_member_id'] as int;
+          final userName = bestMatch['user_name'] ?? 'Unknown';
+          final similarity = bestMatch['similarity'] as double;
+          
+          debugPrint('Face ${i + 1}: Matched $userName (${(similarity * 100).toStringAsFixed(1)}%)');
+          
+          // Check cooldown BEFORE adding to processedUsers
           if (_processedUserTimestamps.containsKey(userId)) {
             final lastProcessTime = _processedUserTimestamps[userId]!;
             final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
             
             if (timeSinceLastProcess < _userCooldown) {
-              debugPrint('User $userId in cooldown, skipping');
+              final remainingSeconds = (_userCooldown - timeSinceLastProcess).inSeconds;
+              debugPrint('⏱️  User $userName in cooldown, ${remainingSeconds}s remaining');
               continue;
             }
           }
 
+          // User valid dan tidak dalam cooldown
           processedUsers.add({
             'user': bestMatch,
             'imageFile': imageFile,
             'faceIndex': i,
           });
+          
+          debugPrint('✅ User $userName added to processing queue');
+          
+        } catch (e) {
+          debugPrint('Error processing face $i: $e');
+          continue;
+        }
+      }
+
+      // Process attendances
+      if (processedUsers.isNotEmpty) {
+        debugPrint('Processing ${processedUsers.length} valid users');
+        await _processMultipleAttendances(processedUsers);
+      } else {
+        debugPrint('No valid users to process');
+        setState(() {
+          _currentStep = 'Wajah tidak dikenali atau masih dalam cooldown';
+        });
+        
+        await SystemSound.play(SystemSoundType.alert);
+        
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted && !_isProcessing) {
+            setState(() {
+              _currentStep = 'Siap - Posisikan wajah Anda';
+              _detectedFaces = [];
+            });
+          }
+        });
+      }
+
+      // Clean up temp file
+      try {
+        if (await imageFile.exists()) {
+          await imageFile.delete();
         }
       } catch (e) {
-        debugPrint('Error processing face $i: $e');
-        continue;
+        debugPrint('Failed to delete temp file: $e');
       }
-    }
 
-    if (processedUsers.isNotEmpty) {
-      await _processMultipleAttendances(processedUsers);
-    } else {
+    } catch (e) {
+      debugPrint('!!! ERROR in multi-face scan: $e');
       setState(() {
-        _currentStep = 'Wajah tidak dikenali - Silakan daftar terlebih dahulu';
+        _currentStep = 'Error: ${e.toString()}';
+        _detectedFaces = [];
       });
       
-      await SystemSound.play(SystemSoundType.alert);
-      
-      Future.delayed(const Duration(seconds: 2), () {
+      Future.delayed(const Duration(seconds: 3), () {
         if (mounted && !_isProcessing) {
           setState(() {
             _currentStep = 'Siap - Posisikan wajah Anda';
-            _detectedFaces = [];
           });
         }
       });
-    }
-
-    // Clean up temp file after processing
-    try {
-      if (await imageFile.exists()) {
-        await imageFile.delete();
-      }
-    } catch (e) {
-      debugPrint('Failed to delete temp file: $e');
-    }
-
-  } catch (e) {
-    debugPrint('!!! ERROR in multi-face scan: $e');
-    setState(() {
-      _currentStep = 'Error: ${e.toString()}';
-      _detectedFaces = [];
-    });
-    
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted && !_isProcessing) {
+    } finally {
+      if (mounted) {
         setState(() {
-          _currentStep = 'Siap - Posisikan wajah Anda';
+          _isProcessing = false;
         });
       }
-    });
-  } finally {
-    if (mounted) {
-      setState(() {
-        _isProcessing = false;
-      });
     }
   }
-}
 
   Future<void> _processMultipleAttendances(
     List<Map<String, dynamic>> usersData,
@@ -395,10 +409,15 @@ class _FaceAttendanceMultiUserPageState
         final user = userData['user'];
         final imageFile = userData['imageFile'] as File;
         final memberId = user['organization_member_id'] as int;
+        final userName = user['user_name'] ?? 'Unknown';
         
-        // Auto-detect: Check if already checked in today
+        debugPrint('Processing attendance for: $userName (ID: $memberId)');
+        
+        // Check attendance status SEBELUM proses
         final isCheckIn = await _shouldCheckIn(memberId);
         final attendanceType = isCheckIn ? 'check_in' : 'check_out';
+        
+        debugPrint('Action for $userName: $attendanceType');
         
         // Upload photo
         final photoUrl = await _storageService.uploadAttendancePhoto(
@@ -417,13 +436,13 @@ class _FaceAttendanceMultiUserPageState
           };
         }
 
-        // Record attendance
+        // Record attendance with organization timezone
         if (isCheckIn) {
           await _attendanceService.checkIn(
             organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
-            organizationTimezone: _organizationTimezone,
+            organizationTimezone: _organizationTimezone, // ✅ Pass timezone
             location: locationData,
           );
         } else {
@@ -431,7 +450,7 @@ class _FaceAttendanceMultiUserPageState
             organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
-            organizationTimezone: _organizationTimezone,
+            organizationTimezone: _organizationTimezone, // ✅ Pass timezone
             location: locationData,
           );
         }
@@ -439,7 +458,7 @@ class _FaceAttendanceMultiUserPageState
         // Update last used
         await _biometricService.updateLastUsed(user['biometric_id']);
 
-        // Update timestamp
+        // Update timestamp AFTER successful attendance
         _processedUserTimestamps[memberId] = DateTime.now();
 
         // Add to list
@@ -450,25 +469,25 @@ class _FaceAttendanceMultiUserPageState
             final now = DateTime.now();
             final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
             
-            // Add to top of list
             _recentAttendanceList.insert(0, {
-              'name': user['user_name'] ?? 'Unknown',
+              'name': userName,
               'time': timeStr,
-              'type': isCheckIn ? 'check_in' : 'check_out',
+              'type': attendanceType,
               'timestamp': now,
             });
 
-            // Keep max 10
             if (_recentAttendanceList.length > 10) {
               _recentAttendanceList.removeLast();
             }
           });
         }
 
-        debugPrint('✅ Attendance recorded: ${user['user_name']} - $attendanceType');
+        debugPrint('✅ Attendance recorded: $userName - $attendanceType');
 
       } catch (e) {
-        debugPrint('!!! ERROR processing user: $e');
+        final userName = userData['user']['user_name'] ?? 'Unknown';
+        debugPrint('!!! ERROR processing $userName: $e');
+        // Jangan update timestamp jika gagal
       }
     }
 
@@ -495,69 +514,66 @@ class _FaceAttendanceMultiUserPageState
 
   /// Check if user should check in (true) or check out (false)
   Future<bool> _shouldCheckIn(int organizationMemberId) async {
-  try {
-    final supabase = Supabase.instance.client;
-    // Use organization timezone for date calculation
-    final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+    try {
+      // ✅ Use organization timezone for date calculation
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
 
-    debugPrint('=== CHECKING ATTENDANCE STATUS ===');
-    debugPrint('Member ID: $organizationMemberId');
-    debugPrint('Date: $todayStr');
+      debugPrint('=== CHECKING ATTENDANCE STATUS ===');
+      debugPrint('Member ID: $organizationMemberId');
+      debugPrint('Date: $todayStr (Timezone: $_organizationTimezone)');
 
-    final record = await supabase
-        .from('attendance_records')
-        .select('status, actual_check_in, actual_check_out') // ✅ Nama kolom yang benar
-        .eq('organization_member_id', organizationMemberId)
-        .eq('attendance_date', todayStr)
-        .maybeSingle();
+      final record = await _supabase
+          .from('attendance_records')
+          .select('status, actual_check_in, actual_check_out')
+          .eq('organization_member_id', organizationMemberId)
+          .eq('attendance_date', todayStr)
+          .maybeSingle();
 
-    if (record == null) {
-      debugPrint('✅ No record today → CHECK IN');
+      if (record == null) {
+        debugPrint('✅ No record today → CHECK IN');
+        return true;
+      }
+
+      final status = record['status'] as String?;
+      final actualCheckIn = record['actual_check_in'];
+      final actualCheckOut = record['actual_check_out'];
+      
+      debugPrint('Current status: $status');
+      debugPrint('Check in: $actualCheckIn');
+      debugPrint('Check out: $actualCheckOut');
+
+      // If checked in but NOT checked out yet → CHECK OUT
+      if (actualCheckIn != null && actualCheckOut == null) {
+        debugPrint('✅ Already checked in, not checked out → CHECK OUT');
+        return false;
+      }
+
+      // If both check in and check out exist → CHECK IN (new shift)
+      if (actualCheckIn != null && actualCheckOut != null) {
+        debugPrint('✅ Already checked out → CHECK IN (new shift)');
+        return true;
+      }
+
+      // Status-based fallback
+      if (status == 'present' || status == 'checked_in') {
+        debugPrint('✅ Status is present/checked_in → CHECK OUT');
+        return false;
+      }
+
+      if (status == 'checked_out' || status == 'absent') {
+        debugPrint('✅ Status is checked_out/absent → CHECK IN');
+        return true;
+      }
+
+      // Default: check in
+      debugPrint('✅ Default → CHECK IN');
       return true;
+      
+    } catch (e) {
+      debugPrint('!!! ERROR checking attendance status: $e');
+      throw Exception('Cannot determine attendance status: $e');
     }
-
-    final status = record['status'] as String?;
-    final actualCheckIn = record['actual_check_in'];
-    final actualCheckOut = record['actual_check_out'];
-    
-    debugPrint('Current status: $status');
-    debugPrint('Check in: $actualCheckIn');
-    debugPrint('Check out: $actualCheckOut');
-
-    // If checked in but NOT checked out yet → CHECK OUT
-    if (actualCheckIn != null && actualCheckOut == null) {
-      debugPrint('✅ Already checked in, not checked out → CHECK OUT');
-      return false;
-    }
-
-    // If both check in and check out exist → CHECK IN (new shift)
-    if (actualCheckIn != null && actualCheckOut != null) {
-      debugPrint('✅ Already checked out → CHECK IN (new shift)');
-      return true;
-    }
-
-    // Status-based fallback
-    if (status == 'present' || status == 'checked_in') {
-      debugPrint('✅ Status is present/checked_in → CHECK OUT');
-      return false;
-    }
-
-    if (status == 'checked_out' || status == 'absent') {
-      debugPrint('✅ Status is checked_out/absent → CHECK IN');
-      return true;
-    }
-
-    // Default: check in
-    debugPrint('✅ Default → CHECK IN');
-    return true;
-    
-  } catch (e) {
-    debugPrint('!!! ERROR checking attendance status: $e');
-    
-    // Don't default to check in - throw error instead
-    throw Exception('Cannot determine attendance status: $e');
   }
-}
 
   @override
   void dispose() {
@@ -636,12 +652,10 @@ class _FaceAttendanceMultiUserPageState
             // ===== FACE DETECTION OVERLAYS =====
             if (_detectedFaces.isNotEmpty && _cameraController != null)
               ..._detectedFaces.map((face) {
-                // Get camera preview dimensions
                 final cameraAspectRatio = _cameraController!.value.aspectRatio;
                 final screenWidth = screenSize.width;
                 final screenHeight = screenSize.height;
                 
-                // Calculate actual preview dimensions maintaining aspect ratio
                 double previewWidth, previewHeight;
                 if (screenWidth / screenHeight > cameraAspectRatio) {
                   previewHeight = screenHeight;
@@ -651,7 +665,6 @@ class _FaceAttendanceMultiUserPageState
                   previewHeight = screenWidth / cameraAspectRatio;
                 }
                 
-                // Calculate offsets to center the preview
                 final offsetX = (screenWidth - previewWidth) / 2;
                 final offsetY = (screenHeight - previewHeight) / 2;
                 
@@ -677,7 +690,7 @@ class _FaceAttendanceMultiUserPageState
                 );
               }),
 
-            // ===== TOP APP BAR (TRANSPARAN) =====
+            // ===== TOP APP BAR =====
             Positioned(
               top: 0,
               left: 0,
@@ -734,13 +747,13 @@ class _FaceAttendanceMultiUserPageState
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(width: 48), // Balance
+                    const SizedBox(width: 48),
                   ],
                 ),
               ),
             ),
 
-            // ===== STATUS OVERLAY (TRANSPARAN) =====
+            // ===== STATUS OVERLAY =====
             Positioned(
               top: 120,
               left: 0,
@@ -783,7 +796,7 @@ class _FaceAttendanceMultiUserPageState
               ),
             ),
 
-            // ===== ATTENDANCE LIST (TRANSPARAN, MUNCUL JIKA ADA DATA) =====
+            // ===== ATTENDANCE LIST =====
             if (_recentAttendanceList.isNotEmpty)
               Positioned(
                 bottom: 0,
@@ -792,7 +805,7 @@ class _FaceAttendanceMultiUserPageState
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeOut,
-                  height: screenSize.height * 0.4, // 40% dari screen
+                  height: screenSize.height * 0.4,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
@@ -806,7 +819,6 @@ class _FaceAttendanceMultiUserPageState
                   ),
                   child: Column(
                     children: [
-                      // List Header
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
@@ -848,8 +860,6 @@ class _FaceAttendanceMultiUserPageState
                           ],
                         ),
                       ),
-
-                      // Attendance List
                       Expanded(
                         child: ListView.builder(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
