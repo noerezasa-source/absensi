@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../helpers/timezone_helper.dart';
+import '../helpers/rfid_mode_helper.dart';
 import '../services/attendance_service.dart';
 import '../services/role_service.dart';
 import '../widgets/petugas_bottom_nav.dart';
@@ -57,6 +58,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     _loadUserProfile(); // Load profile if not passed
     _loadOrganizationTimezone();
     _loadOrganizationInfo();
+    _loadRfidMode(); // Load RFID mode from SharedPreferences
     _refreshAll();
   }
 
@@ -85,6 +87,35 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       }
     } catch (e) {
       debugPrint('Error loading user profile: $e');
+    }
+  }
+
+  Future<void> _loadRfidMode() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      final savedMode = await RfidModeHelper.getRfidMode(organizationId);
+      if (mounted) {
+        setState(() {
+          _useRfidForAttendance = savedMode;
+        });
+        debugPrint('RFID mode loaded: $_useRfidForAttendance for org $organizationId');
+      }
+    } catch (e) {
+      debugPrint('Error loading RFID mode: $e');
+    }
+  }
+
+  Future<void> _saveRfidMode(bool enabled) async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      await RfidModeHelper.saveRfidMode(organizationId, enabled);
+      debugPrint('RFID mode saved: $enabled for org $organizationId');
+    } catch (e) {
+      debugPrint('Error saving RFID mode: $e');
     }
   }
 
@@ -149,7 +180,10 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     try {
       debugPrint('Loading today statistics for organization $organizationId...');
       
-      final stats = await _attendanceService.getOrganizationTodayStats(organizationId);
+      final stats = await _attendanceService.getOrganizationTodayStats(
+        organizationId,
+        organizationTimezone: _organizationTimezone,
+      );
       
       if (mounted) {
         setState(() {
@@ -362,6 +396,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
             _currentNavIndex = 0;
             if (rfidMode != null) {
               _useRfidForAttendance = rfidMode;
+              _saveRfidMode(rfidMode); // Save to SharedPreferences
             }
           });
           // Reload profile after returning from profile page

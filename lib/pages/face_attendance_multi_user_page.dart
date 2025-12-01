@@ -11,6 +11,7 @@ import '../services/biometric_service.dart';
 import '../services/attendance_service.dart';
 import '../services/supabase_storage_service.dart';
 import '../services/face_recognition_tflite_service.dart';
+import '../helpers/timezone_helper.dart';
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
@@ -34,11 +35,13 @@ class _FaceAttendanceMultiUserPageState
   final BiometricService _biometricService = BiometricService();
   final AttendanceService _attendanceService = AttendanceService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
+  final SupabaseClient _supabase = Supabase.instance.client;
 
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
   String _currentStep = 'Siap - Posisikan wajah Anda';
   Position? _currentPosition;
+  String _organizationTimezone = 'Asia/Jakarta'; // Default timezone
 
   Timer? _continuousScanTimer;
   
@@ -78,6 +81,26 @@ class _FaceAttendanceMultiUserPageState
     _initializeFaceService();
     _initializeCamera();
     _getCurrentLocation();
+    _loadOrganizationTimezone();
+  }
+
+  Future<void> _loadOrganizationTimezone() async {
+    try {
+      final org = await _supabase
+          .from('organizations')
+          .select('timezone')
+          .eq('id', widget.organizationId)
+          .maybeSingle();
+
+      if (org != null && org['timezone'] != null) {
+        setState(() {
+          _organizationTimezone = org['timezone'] as String;
+        });
+        debugPrint('Organization timezone loaded: $_organizationTimezone');
+      }
+    } catch (e) {
+      debugPrint('Error loading organization timezone: $e');
+    }
   }
 
   Future<void> _enableKioskMode() async {
@@ -400,6 +423,7 @@ class _FaceAttendanceMultiUserPageState
             organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
+            organizationTimezone: _organizationTimezone,
             location: locationData,
           );
         } else {
@@ -407,6 +431,7 @@ class _FaceAttendanceMultiUserPageState
             organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
+            organizationTimezone: _organizationTimezone,
             location: locationData,
           );
         }
@@ -472,9 +497,8 @@ class _FaceAttendanceMultiUserPageState
   Future<bool> _shouldCheckIn(int organizationMemberId) async {
   try {
     final supabase = Supabase.instance.client;
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final todayStr = today.toIso8601String().split('T').first;
+    // Use organization timezone for date calculation
+    final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
 
     debugPrint('=== CHECKING ATTENDANCE STATUS ===');
     debugPrint('Member ID: $organizationMemberId');

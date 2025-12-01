@@ -6,6 +6,7 @@ import '../services/biometric_service.dart';
 import '../services/role_service.dart';
 import '../services/attendance_service.dart';
 import '../models/attendance_record.dart';
+import '../helpers/rfid_mode_helper.dart';
 import '../widgets/petugas_bottom_nav_simple.dart';
 import 'face_registration_page.dart';
 import 'login.dart';
@@ -67,6 +68,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
     _loadOrganizationInfo();
     _loadTodayAttendance();
     _loadMemberRfidCard();
+    _loadRfidMode(); // Load RFID mode from SharedPreferences
     if (_userProfile == null) {
       _loadUserProfile();
     } else {
@@ -169,6 +171,35 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
       }
     } catch (e) {
       debugPrint('Error loading organization info: $e');
+    }
+  }
+
+  Future<void> _loadRfidMode() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      final savedMode = await RfidModeHelper.getRfidMode(organizationId);
+      if (mounted) {
+        setState(() {
+          _rfidMode = savedMode;
+        });
+        debugPrint('RFID mode loaded: $_rfidMode for org $organizationId');
+      }
+    } catch (e) {
+      debugPrint('Error loading RFID mode: $e');
+    }
+  }
+
+  Future<void> _saveRfidMode(bool enabled) async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      await RfidModeHelper.saveRfidMode(organizationId, enabled);
+      debugPrint('RFID mode saved: $enabled for org $organizationId');
+    } catch (e) {
+      debugPrint('Error saving RFID mode: $e');
     }
   }
 
@@ -992,6 +1023,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
                                 setState(() {
                                   _rfidMode = value;
                                 });
+                                _saveRfidMode(value); // Save to SharedPreferences
                               },
                               activeColor: primaryColor,
                             ),

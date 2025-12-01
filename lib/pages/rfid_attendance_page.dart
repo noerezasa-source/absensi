@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/attendance_record.dart';
 import '../services/attendance_service.dart';
+import '../helpers/timezone_helper.dart';
 
 class RfidAttendancePage extends StatefulWidget {
   final int organizationMemberId;
@@ -28,6 +29,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   final FocusNode _cardFocusNode = FocusNode();
 
   final List<_AttendanceEntry> _entries = [];
+  String _organizationTimezone = 'Asia/Jakarta'; // Default timezone
 
   int? get _organizationId =>
       widget.memberData['organization_id'] as int?;
@@ -35,11 +37,34 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   @override
   void initState() {
     super.initState();
+    _loadOrganizationTimezone();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _cardFocusNode.requestFocus();
       }
     });
+  }
+
+  Future<void> _loadOrganizationTimezone() async {
+    final organizationId = _organizationId;
+    if (organizationId == null) return;
+
+    try {
+      final org = await _supabase
+          .from('organizations')
+          .select('timezone')
+          .eq('id', organizationId)
+          .maybeSingle();
+
+      if (org != null && org['timezone'] != null) {
+        setState(() {
+          _organizationTimezone = org['timezone'] as String;
+        });
+        debugPrint('Organization timezone loaded: $_organizationTimezone');
+      }
+    } catch (e) {
+      debugPrint('Error loading organization timezone: $e');
+    }
   }
 
   @override
@@ -148,8 +173,23 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
       if (memberId == null) return;
 
-      final todayRecord =
-          await _attendanceService.getTodayAttendance(memberId);
+      // Verify that the member belongs to the current organization
+      final memberOrgId = memberInfo['organization_id'] as int?;
+      if (memberOrgId != _organizationId) {
+        debugPrint('Member belongs to different organization: $memberOrgId vs $_organizationId');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Kartu RFID tidak terdaftar di organisasi ini'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final todayRecord = await _attendanceService.getTodayAttendance(
+        memberId,
+        organizationTimezone: _organizationTimezone,
+      );
 
       AttendanceRecord record;
       String action;
@@ -158,6 +198,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           organizationMemberId: memberId,
           photoUrl: '',
           method: 'rfid_card_mobile',
+          organizationTimezone: _organizationTimezone,
           rawData: {
             'card_number': cardNumber,
             'scanned_by_member_id': widget.organizationMemberId,
@@ -169,6 +210,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           organizationMemberId: memberId,
           photoUrl: '',
           method: 'rfid_card_mobile',
+          organizationTimezone: _organizationTimezone,
           rawData: {
             'card_number': cardNumber,
             'scanned_by_member_id': widget.organizationMemberId,
@@ -224,6 +266,21 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
     final isCheckIn = entry.action == 'check_in';
     final isCheckOut = entry.action == 'check_out';
+
+    // Convert UTC timestamps to organization timezone
+    final checkInTime = entry.attendance.actualCheckIn != null
+        ? TimezoneHelper.convertUtcToOrgTimezone(
+            entry.attendance.actualCheckIn!,
+            _organizationTimezone,
+          )
+        : null;
+
+    final checkOutTime = entry.attendance.actualCheckOut != null
+        ? TimezoneHelper.convertUtcToOrgTimezone(
+            entry.attendance.actualCheckOut!,
+            _organizationTimezone,
+          )
+        : null;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -298,7 +355,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
               Expanded(
                 child: _buildAttendanceInfoTile(
                   label: 'Check In',
-                  value: _formatTime(entry.attendance.actualCheckIn),
+                  value: _formatTime(checkInTime),
                   icon: Icons.login,
                   color: Colors.green,
                 ),
@@ -307,7 +364,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
               Expanded(
                 child: _buildAttendanceInfoTile(
                   label: 'Check Out',
-                  value: _formatTime(entry.attendance.actualCheckOut),
+                  value: _formatTime(checkOutTime),
                   icon: Icons.logout,
                   color: Colors.red,
                 ),
@@ -398,4 +455,3 @@ class _AttendanceEntry {
     required this.timestamp,
   });
 }
-

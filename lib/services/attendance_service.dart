@@ -2,6 +2,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/attendance_record.dart';
+import '../helpers/timezone_helper.dart';
 
 class AttendanceService {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -11,6 +12,7 @@ class AttendanceService {
     required int organizationMemberId,
     required String photoUrl,
     required String method,
+    String? organizationTimezone,
     Map<String, dynamic>? location,
     int? deviceId,
     String? ipAddress,
@@ -19,8 +21,13 @@ class AttendanceService {
     Map<String, dynamic>? rawData,
   }) async {
     try {
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
+      // Use organization timezone for date calculation, or default to device timezone
+      final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone);
+      
+      // Get current UTC time (universal, represents "now")
+      final nowUtc = TimezoneHelper.getCurrentUtcTime();
+      
       final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
 
       // Cek apakah sudah ada record hari ini
@@ -28,7 +35,7 @@ class AttendanceService {
           .from('attendance_records')
           .select()
           .eq('organization_member_id', organizationMemberId)
-          .eq('attendance_date', today.toIso8601String().split('T')[0])
+          .eq('attendance_date', todayStr)
           .maybeSingle();
 
       Map<String, dynamic> recordData;
@@ -43,12 +50,12 @@ class AttendanceService {
 
         // Update existing record (save as UTC)
         recordData = {
-          'actual_check_in': now.toUtc().toIso8601String(),
+          'actual_check_in': nowUtc.toIso8601String(),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
           'check_in_location': locationWithPhoto,
           'status': 'present',
-          'updated_at': now.toUtc().toIso8601String(),
+          'updated_at': nowUtc.toIso8601String(),
         };
 
         await _supabase
@@ -58,13 +65,13 @@ class AttendanceService {
 
         recordData['id'] = existingRecord['id'];
         recordData['organization_member_id'] = organizationMemberId;
-        recordData['attendance_date'] = today.toIso8601String().split('T')[0];
+        recordData['attendance_date'] = todayStr;
       } else {
         // Create new record
         recordData = {
           'organization_member_id': organizationMemberId,
-          'attendance_date': today.toIso8601String().split('T')[0],
-          'actual_check_in': now.toUtc().toIso8601String(),
+          'attendance_date': todayStr,
+          'actual_check_in': nowUtc.toIso8601String(),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
           'check_in_location': locationWithPhoto,
@@ -106,6 +113,7 @@ class AttendanceService {
     required int organizationMemberId,
     required String photoUrl,
     required String method,
+    String? organizationTimezone,
     Map<String, dynamic>? location,
     int? deviceId,
     String? ipAddress,
@@ -114,15 +122,19 @@ class AttendanceService {
     Map<String, dynamic>? rawData,
   }) async {
     try {
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
+      // Use organization timezone for date calculation, or default to device timezone
+      final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone);
+      
+      // Get current UTC time (universal, represents "now")
+      final nowUtc = TimezoneHelper.getCurrentUtcTime();
 
       // Cari record hari ini
       final existingRecord = await _supabase
           .from('attendance_records')
           .select()
           .eq('organization_member_id', organizationMemberId)
-          .eq('attendance_date', today.toIso8601String().split('T')[0])
+          .eq('attendance_date', todayStr)
           .maybeSingle();
 
       if (existingRecord == null) {
@@ -142,18 +154,18 @@ class AttendanceService {
 
       // Calculate work duration
       final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
-      final workDuration = now.difference(checkInTime).inMinutes;
+      final workDuration = nowUtc.difference(checkInTime).inMinutes;
 
       final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
 
       // Update record
       final recordData = {
-        'actual_check_out': now.toUtc().toIso8601String(),
+        'actual_check_out': nowUtc.toIso8601String(),
         'check_out_method': method,
         'check_out_photo_url': photoUrl,
         'check_out_location': locationWithPhoto,
         'work_duration_minutes': workDuration,
-        'updated_at': now.toIso8601String(),
+        'updated_at': nowUtc.toIso8601String(),
       };
 
       await _supabase
@@ -188,14 +200,14 @@ class AttendanceService {
   }
 
   // Get today's attendance
-  Future<AttendanceRecord?> getTodayAttendance(int organizationMemberId) async {
+  Future<AttendanceRecord?> getTodayAttendance(
+    int organizationMemberId, {
+    String? organizationTimezone,
+  }) async {
     try {
-      final today = DateTime.now();
-      final todayStr = DateTime(
-        today.year,
-        today.month,
-        today.day,
-      ).toIso8601String().split('T')[0];
+      // Use organization timezone for date calculation, or default to device timezone
+      final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone);
 
       final record = await _supabase
           .from('attendance_records')
@@ -269,7 +281,7 @@ class AttendanceService {
         'organization_member_id': organizationMemberId,
         'attendance_record_id': attendanceRecordId,
         'event_type': eventType,
-        'event_time': DateTime.now().toUtc().toIso8601String(),
+        'event_time': TimezoneHelper.getCurrentUtcTime().toIso8601String(),
         'method': method,
         'location': location,
         'device_id': deviceId,
@@ -291,13 +303,13 @@ class AttendanceService {
     }
   }
 
-  Future<Map<String, int>> getOrganizationTodayStats(int organizationId) async {
-    final today = DateTime.now();
-    final todayStr = DateTime(
-      today.year,
-      today.month,
-      today.day,
-    ).toIso8601String().split('T')[0];
+  Future<Map<String, int>> getOrganizationTodayStats(
+    int organizationId, {
+    String? organizationTimezone,
+  }) async {
+    // Use organization timezone for date calculation, or default to device timezone
+    final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+    final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone);
 
     try {
       final records = await _supabase

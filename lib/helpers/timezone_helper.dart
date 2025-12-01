@@ -72,5 +72,36 @@ class TimezoneHelper {
       return dateTime.toString();
     }
   }
+
+  /// Get current UTC time (universal, represents "now" globally)
+  /// This is what should be saved to database
+  static DateTime getCurrentUtcTime() {
+    return DateTime.now().toUtc();
+  }
+
+  /// Get current date in organization timezone (YYYY-MM-DD)
+  /// This determines what "today" means for the organization
+  static String getCurrentDateInOrgTimezone(String organizationTimezone) {
+    // Get current UTC time
+    final nowUtc = DateTime.now().toUtc();
+    
+    // Convert to organization timezone to get the date
+    final offset = _getTimezoneOffset(organizationTimezone);
+    final nowInOrgTz = nowUtc.add(Duration(hours: offset));
+    
+    return '${nowInOrgTz.year}-${nowInOrgTz.month.toString().padLeft(2, '0')}-${nowInOrgTz.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Convert UTC DateTime to organization timezone DateTime
+  static DateTime convertUtcToOrgTimezone(DateTime utcDateTime, String organizationTimezone) {
+    final offset = _getTimezoneOffset(organizationTimezone);
+    return utcDateTime.add(Duration(hours: offset));
+  }
+
+  /// Convert organization timezone DateTime to UTC DateTime
+  static DateTime convertOrgTimezoneToUtc(DateTime orgDateTime, String organizationTimezone) {
+    final offset = _getTimezoneOffset(organizationTimezone);
+    return orgDateTime.subtract(Duration(hours: offset));
+  }
 }
 
