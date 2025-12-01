@@ -357,43 +357,60 @@ class AttendanceService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getOrganizationRecentActivities({
-    required int organizationId,
-    int limit = 10,
-  }) async {
-    try {
-      final logs = await _supabase
-          .from('attendance_logs')
-          .select('''
+ // Modifikasi di attendance_service.dart
+Future<List<Map<String, dynamic>>> getOrganizationRecentActivities({
+  required int organizationId,
+  int limit = 10,
+}) async {
+  try {
+    final logs = await _supabase
+        .from('attendance_logs')
+        .select('''
+          id,
+          event_type,
+          event_time,
+          method,
+          organization_member_id,
+          attendance_record_id,
+          organization_members!inner(
             id,
-            event_type,
-            event_time,
-            method,
-            organization_members!inner(
-              id,
-              organization_id,
-              user_profiles!inner(
-                display_name,
-                first_name,
-                last_name,
-                profile_photo_url
-              )
-            ),
-            attendance_records (
-              attendance_date,
-              status
+            organization_id,
+            user_profiles!inner(
+              display_name,
+              first_name,
+              middle_name,
+              last_name,
+              profile_photo_url
             )
-          ''')
-          .eq('organization_members.organization_id', organizationId)
-          .inFilter('method', ['face_recognition', 'face_recognition_kiosk', 'rfid_card', 'rfid_card_mobile'])
-          .order('event_time', ascending: false)
-          .limit(limit);
+          ),
+          attendance_records!left(
+            id,
+            attendance_date,
+            status
+          )
+        ''')
+        .eq('organization_members.organization_id', organizationId)
+        .inFilter('method', [
+          'face_recognition',
+          'face_recognition_kiosk',
+          'rfid_card',
+          'rfid_card_mobile',
+          'manual'
+        ])
+        .order('event_time', ascending: false)
+        .limit(limit * 2); // Ambil lebih banyak untuk filter
 
-      return List<Map<String, dynamic>>.from(logs);
-    } catch (e) {
-      throw Exception('Failed to load recent activities: $e');
-    }
+    // Filter hanya yang masih punya attendance_records
+    final filteredLogs = (logs as List)
+        .where((log) => log['attendance_records'] != null)
+        .take(limit)
+        .toList();
+
+    return List<Map<String, dynamic>>.from(filteredLogs);
+  } catch (e) {
+    throw Exception('Failed to load recent activities: $e');
   }
+}
 
   Map<String, dynamic>? _decorateLocationWithPhoto(
     Map<String, dynamic>? location,

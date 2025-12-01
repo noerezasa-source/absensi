@@ -1,0 +1,30 @@
+--- a/lib/pages/petugas_dashboard.dart
++++ b/lib/pages/petugas_dashboard.dart
+@@ -7,6 +7,7 @@ import '../services/role_service.dart';
+ import '../widgets/petugas_bottom_nav.dart';
+ import 'face_attendance_multi_user_page.dart';
+ import 'petugas_profile_page.dart';
+ import 'rfid_attendance_page.dart';
++import 'manual_check_page.dart';
+ 
+ class PetugasDashboardPage extends StatefulWidget {
+@@ -817,9 +818,16 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
+                           color: Colors.blue.shade50,
+                           iconColor: Colors.blue,
+                           onTap: () {
+-                            ScaffoldMessenger.of(context).showSnackBar(
+-                              const SnackBar(content: Text('Manual check coming soon')),
+-                            );
++                            Navigator.push(
++                              context,
++                              MaterialPageRoute(
++                                builder: (context) => ManualCheckPage(
++                                  organizationMemberId: widget.organizationMemberId,
++                                  memberData: widget.memberData,
++                                ),
++                              ),
++                            ).then((_) {
++                              _refreshAll();
++                            });
+                           },
+                         ),

@@ -30,6 +30,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   final List<_AttendanceEntry> _entries = [];
   String _organizationTimezone = 'Asia/Jakarta'; // Default timezone
+  String _organizationName = ''; // Organization name
+  String _attendanceMode = 'check_in'; // 'check_in', 'check_out'
+  DateTime _currentTime = DateTime.now();
 
   int? get _organizationId =>
       widget.memberData['organization_id'] as int?;
@@ -37,7 +40,8 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   @override
   void initState() {
     super.initState();
-    _loadOrganizationTimezone();
+    _loadOrganizationData();
+    _startClock();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _cardFocusNode.requestFocus();
@@ -45,25 +49,43 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     });
   }
 
-  Future<void> _loadOrganizationTimezone() async {
+  void _startClock() {
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(minutes: 1));
+      if (mounted) {
+        setState(() {
+          _currentTime = DateTime.now();
+        });
+        return true;
+      }
+      return false;
+    });
+  }
+
+  Future<void> _loadOrganizationData() async {
     final organizationId = _organizationId;
     if (organizationId == null) return;
 
     try {
       final org = await _supabase
           .from('organizations')
-          .select('timezone')
+          .select('timezone, name')
           .eq('id', organizationId)
           .maybeSingle();
 
-      if (org != null && org['timezone'] != null) {
+      if (org != null) {
         setState(() {
-          _organizationTimezone = org['timezone'] as String;
+          if (org['timezone'] != null) {
+            _organizationTimezone = org['timezone'] as String;
+          }
+          if (org['name'] != null) {
+            _organizationName = org['name'] as String;
+          }
         });
-        debugPrint('Organization timezone loaded: $_organizationTimezone');
+        debugPrint('Organization data loaded: $_organizationName ($_organizationTimezone)');
       }
     } catch (e) {
-      debugPrint('Error loading organization timezone: $e');
+      debugPrint('Error loading organization data: $e');
     }
   }
 
@@ -79,9 +101,23 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: const Text('RFID Attendance Mode'),
+        title: Text(
+          _organizationName.isEmpty ? 'RFID Attendance Mode' : _organizationName,
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         backgroundColor: const Color(0xFF9333EA),
         foregroundColor: Colors.white,
+        actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 16),
+            child: const Icon(
+              Icons.credit_card,
+              size: 28,
+            ),
+          ),
+        ],
       ),
       body: GestureDetector(
         onTap: () => _cardFocusNode.requestFocus(),
@@ -89,6 +125,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
+              // Clock and Mode Switcher Card
+              _buildClockAndModeCard(),
+              const SizedBox(height: 16),
               // Hidden field untuk menangkap input dari scanner
               Offstage(
                 offstage: true,
@@ -122,6 +161,117 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                       ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClockAndModeCard() {
+    // Convert current time to organization timezone
+    final orgTime = TimezoneHelper.convertUtcToOrgTimezone(
+      _currentTime.toUtc(),
+      _organizationTimezone,
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Clock Section
+          Expanded(
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.access_time,
+                  color: Color(0xFF9333EA),
+                  size: 28,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  _formatTime(orgTime)!,
+                  style: const TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF9333EA),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Mode Switcher Toggle
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'Mode',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildToggleButton('In', 'check_in'),
+                    _buildToggleButton('Out', 'check_out'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToggleButton(String label, String mode) {
+    final isSelected = _attendanceMode == mode;
+    Color buttonColor;
+    
+    if (mode == 'check_in') {
+      buttonColor = Colors.green;
+    } else {
+      buttonColor = Colors.red;
+    }
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _attendanceMode = mode;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? buttonColor : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: isSelected ? Colors.white : Colors.grey.shade700,
           ),
         ),
       ),
@@ -193,7 +343,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
       AttendanceRecord record;
       String action;
-      if (todayRecord == null || todayRecord.actualCheckIn == null) {
+      
+      if (_attendanceMode == 'check_in') {
+        // Force check in mode
         record = await _attendanceService.checkIn(
           organizationMemberId: memberId,
           photoUrl: '',
@@ -205,7 +357,8 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           },
         );
         action = 'check_in';
-      } else if (todayRecord.actualCheckOut == null) {
+      } else {
+        // Force check out mode
         record = await _attendanceService.checkOut(
           organizationMemberId: memberId,
           photoUrl: '',
@@ -217,9 +370,6 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           },
         );
         action = 'check_out';
-      } else {
-        record = todayRecord;
-        action = 'completed';
       }
 
       setState(() {

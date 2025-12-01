@@ -8,6 +8,7 @@ import '../widgets/petugas_bottom_nav.dart';
 import 'face_attendance_multi_user_page.dart';
 import 'petugas_profile_page.dart';
 import 'rfid_attendance_page.dart';
+import 'manual_check_page.dart';
 
 class PetugasDashboardPage extends StatefulWidget {
   final int organizationMemberId;
@@ -100,7 +101,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         setState(() {
           _useRfidForAttendance = savedMode;
         });
-        debugPrint('RFID mode loaded: $_useRfidForAttendance for org $organizationId');
+        debugPrint(
+          'RFID mode loaded: $_useRfidForAttendance for org $organizationId',
+        );
       }
     } catch (e) {
       debugPrint('Error loading RFID mode: $e');
@@ -176,15 +179,17 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       _isLoadingStats = true;
       _errorMessage = null;
     });
-    
+
     try {
-      debugPrint('Loading today statistics for organization $organizationId...');
-      
+      debugPrint(
+        'Loading today statistics for organization $organizationId...',
+      );
+
       final stats = await _attendanceService.getOrganizationTodayStats(
         organizationId,
         organizationTimezone: _organizationTimezone,
       );
-      
+
       if (mounted) {
         setState(() {
           _checkedInCount = stats['checked_in'] ?? 0;
@@ -207,105 +212,111 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   Future<void> _refreshAll() async {
     debugPrint('=== REFRESHING ALL DATA ===');
-    await Future.wait([
-      _loadTodayStats(),
-      _loadRecentActivities(),
-    ]);
+    await Future.wait([_loadTodayStats(), _loadRecentActivities()]);
   }
 
-  Future<void> _loadRecentActivities() async {
-    final organizationId = widget.memberData['organization_id'] as int?;
-    if (organizationId == null) {
-      setState(() {
-        _isLoadingActivities = false;
-        _errorMessage = 'Organization data not found';
-      });
-      return;
-    }
-
+ Future<void> _loadRecentActivities() async {
+  final organizationId = widget.memberData['organization_id'] as int?;
+  if (organizationId == null) {
     setState(() {
-      _isLoadingActivities = true;
+      _isLoadingActivities = false;
+      _errorMessage = 'Organization data not found';
     });
+    return;
+  }
 
-    try {
-      final activities = await _attendanceService.getOrganizationRecentActivities(
-        organizationId: organizationId,
-        limit: 6,
-      );
+  setState(() {
+    _isLoadingActivities = true;
+  });
 
-      if (!mounted) return;
+  try {
+    // Get recent activities (semua method termasuk manual)
+    final activities = await _attendanceService.getOrganizationRecentActivities(
+      organizationId: organizationId,
+      limit: 10, // Ambil lebih banyak untuk filter manual
+    );
 
-      final groupedActivities = <String, Map<String, dynamic>>{};
+    if (!mounted) return;
 
-      for (final activity in activities) {
-        final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
-        final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
-        final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
+    final groupedActivities = <String, Map<String, dynamic>>{};
 
-        final memberId = member['id']?.toString() ?? activity['organization_member_id']?.toString() ?? '';
-        DateTime? eventTime;
-        final eventTimeStr = activity['event_time'] as String?;
-        if (eventTimeStr != null) {
-          eventTime = TimezoneHelper.parseAndConvert(
-            eventTimeStr,
-            _organizationTimezone,
-          );
-        }
+    for (final activity in activities) {
+      final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
+      final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
+      final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
 
-        final attendanceDate = (record['attendance_date'] as String?) ??
-            (eventTimeStr != null ? eventTimeStr.split('T').first : '');
-        final key = '$memberId-$attendanceDate';
-
-        final entry = groupedActivities.putIfAbsent(key, () {
-          return {
-            'name': _composeUserName(profile),
-            'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
-            'status': record['status'] as String?,
-            'checkInTime': null,
-            'checkOutTime': null,
-            'lastAction': null,
-            'method': null,
-            'lastUpdated': null,
-          };
-        });
-
-        if (activity['event_type'] == 'check_in') {
-          entry['checkInTime'] = eventTime;
-        } else if (activity['event_type'] == 'check_out') {
-          entry['checkOutTime'] = eventTime;
-        }
-
-        entry['lastAction'] = activity['event_type'];
-        entry['method'] = activity['method'];
-        entry['lastUpdated'] = eventTime;
+      final memberId = member['id']?.toString() ?? activity['organization_member_id']?.toString() ?? '';
+      DateTime? eventTime;
+      final eventTimeStr = activity['event_time'] as String?;
+      if (eventTimeStr != null) {
+        eventTime = TimezoneHelper.parseAndConvert(
+          eventTimeStr,
+          _organizationTimezone,
+        );
       }
 
-      final mappedActivities = groupedActivities.values.toList()
-        ..sort((a, b) {
-          final aTime = a['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bTime = b['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return bTime.compareTo(aTime);
-        });
+      final attendanceDate = (record['attendance_date'] as String?) ??
+          (eventTimeStr != null ? eventTimeStr.split('T').first : '');
+      final key = '$memberId-$attendanceDate';
 
-      setState(() {
-        _recentActivities = mappedActivities;
-        _isLoadingActivities = false;
+      final entry = groupedActivities.putIfAbsent(key, () {
+        return {
+          'name': _composeUserName(profile),
+          'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
+          'status': record['status'] as String?,
+          'checkInTime': null,
+          'checkOutTime': null,
+          'checkInMethod': null,
+          'checkOutMethod': null,
+          'lastAction': null,
+          'method': null,
+          'lastUpdated': null,
+        };
       });
-    } catch (e) {
-      debugPrint('!!! ERROR loading recent activities: $e');
-      if (!mounted) return;
-      setState(() {
-        _isLoadingActivities = false;
-        _recentActivities = [];
-        _errorMessage ??= 'Failed to load recent activities: $e';
-      });
+
+      // Simpan method untuk setiap event
+      if (activity['event_type'] == 'check_in') {
+        entry['checkInTime'] = eventTime;
+        entry['checkInMethod'] = activity['method']; // Simpan method check in
+      } else if (activity['event_type'] == 'check_out') {
+        entry['checkOutTime'] = eventTime;
+        entry['checkOutMethod'] = activity['method']; // Simpan method check out
+      }
+
+      entry['lastAction'] = activity['event_type'];
+      entry['method'] = activity['method'];
+      entry['lastUpdated'] = eventTime;
     }
+
+    final mappedActivities = groupedActivities.values.toList()
+      ..sort((a, b) {
+        final aTime = a['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = b['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+
+    // Ambil hanya 6 activity teratas setelah sorting
+    final limitedActivities = mappedActivities.take(6).toList();
+
+    setState(() {
+      _recentActivities = limitedActivities;
+      _isLoadingActivities = false;
+    });
+  } catch (e) {
+    debugPrint('!!! ERROR loading recent activities: $e');
+    if (!mounted) return;
+    setState(() {
+      _isLoadingActivities = false;
+      _recentActivities = [];
+      _errorMessage ??= 'Failed to load recent activities: $e';
+    });
   }
+}
 
   Future<void> _navigateToMultiUserFaceAttendance(String? type) async {
     try {
       final organizationId = widget.memberData['organization_id'];
-      
+
       if (organizationId == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Organization ID not found')),
@@ -329,9 +340,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       }
     } catch (e) {
       debugPrint('Error navigating to multi-user face attendance: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -408,8 +419,29 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   String _getCurrentDate() {
     final now = DateTime.now();
-    final weekday = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
-    final month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][now.month - 1];
+    final weekday = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ][now.weekday - 1];
+    final month = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ][now.month - 1];
     return '$weekday, ${now.day} $month ${now.year}';
   }
 
@@ -429,11 +461,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     final firstName = profile['first_name'] as String? ?? '';
     final middleName = profile['middle_name'] as String? ?? '';
     final lastName = profile['last_name'] as String? ?? '';
-    
+
     if (middleName.isNotEmpty) {
       return '$firstName $middleName $lastName'.trim();
     }
-    
+
     return '$firstName $lastName'.trim();
   }
 
@@ -446,17 +478,17 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     if (profile == null || profile['profile_photo_url'] == null) {
       return null;
     }
-    
+
     final photoPath = profile['profile_photo_url'] as String;
-    
+
     if (photoPath.trim().isEmpty) {
       return null;
     }
-    
+
     if (photoPath.startsWith('http://') || photoPath.startsWith('https://')) {
       return photoPath;
     }
-    
+
     return _supabase.storage
         .from('profile-photos')
         .getPublicUrl('mass-profile/$photoPath');
@@ -507,19 +539,21 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   String _formatEventTime(DateTime? time) {
     if (time == null) return 'Unknown time';
-    
+
     // Get current time in organization timezone for comparison
     final nowUtc = DateTime.now().toUtc();
-    final nowOrg = TimezoneHelper.parseAndConvert(
-      nowUtc.toIso8601String(),
-      _organizationTimezone,
-    ) ?? nowUtc;
-    
+    final nowOrg =
+        TimezoneHelper.parseAndConvert(
+          nowUtc.toIso8601String(),
+          _organizationTimezone,
+        ) ??
+        nowUtc;
+
     final isToday =
-        nowOrg.year == time.year && 
-        nowOrg.month == time.month && 
+        nowOrg.year == time.year &&
+        nowOrg.month == time.month &&
         nowOrg.day == time.day;
-    
+
     final hour = time.hour.toString().padLeft(2, '0');
     final minute = time.minute.toString().padLeft(2, '0');
     final timeStr = '$hour:$minute';
@@ -630,13 +664,14 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                           ? Image.network(
                                               _getProfilePhotoUrl()!,
                                               fit: BoxFit.cover,
-                                              errorBuilder: (context, error, stackTrace) {
-                                                return const Icon(
-                                                  Icons.person,
-                                                  size: 40,
-                                                  color: Colors.grey,
-                                                );
-                                              },
+                                              errorBuilder:
+                                                  (context, error, stackTrace) {
+                                                    return const Icon(
+                                                      Icons.person,
+                                                      size: 40,
+                                                      color: Colors.grey,
+                                                    );
+                                                  },
                                             )
                                           : const Icon(
                                               Icons.person,
@@ -674,8 +709,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      _getFullName().isNotEmpty 
-                                          ? _getFullName() 
+                                      _getFullName().isNotEmpty
+                                          ? _getFullName()
                                           : 'User',
                                       style: const TextStyle(
                                         fontSize: 18,
@@ -704,7 +739,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                           ),
                                           const SizedBox(width: 6),
                                           Text(
-                                            _roleService.getRoleName(widget.memberData),
+                                            _roleService.getRoleName(
+                                              widget.memberData,
+                                            ),
                                             style: const TextStyle(
                                               fontSize: 12,
                                               color: Color(0xFF9333EA),
@@ -728,7 +765,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                           const SizedBox(width: 6),
                                           Expanded(
                                             child: Text(
-                                              _organization!['name'] ?? 'Unknown Organization',
+                                              _organization!['name'] ??
+                                                  'Unknown Organization',
                                               style: TextStyle(
                                                 fontSize: 13,
                                                 color: Colors.grey.shade600,
@@ -763,8 +801,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.warning_amber_rounded,
-                            color: Colors.redAccent, size: 18),
+                        const Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.redAccent,
+                          size: 18,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -777,8 +818,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.close,
-                              size: 16, color: Colors.redAccent),
+                          icon: const Icon(
+                            Icons.close,
+                            size: 16,
+                            color: Colors.redAccent,
+                          ),
                           onPressed: () {
                             setState(() {
                               _errorMessage = null;
@@ -791,8 +835,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                 ),
 
               const SizedBox(height: 24),
-
-            
 
               // ---------- QUICK ACTIONS ----------
               Padding(
@@ -818,9 +860,18 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                           color: Colors.blue.shade50,
                           iconColor: Colors.blue,
                           onTap: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Manual check coming soon')),
-                            );
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ManualCheckPage(
+                                  organizationMemberId:
+                                      widget.organizationMemberId,
+                                  memberData: widget.memberData,
+                                ),
+                              ),
+                            ).then((_) {
+                              _refreshAll(); // Refresh data setelah kembali dari Manual Check
+                            });
                           },
                         ),
                       ],
@@ -905,7 +956,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         TextButton(
                           onPressed: () {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Full history coming soon')),
+                              const SnackBar(
+                                content: Text('Full history coming soon'),
+                              ),
                             );
                           },
                           child: const Text('View All'),
@@ -920,9 +973,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: const Center(
-                          child: CircularProgressIndicator(),
-                        ),
+                        child: const Center(child: CircularProgressIndicator()),
                       )
                     else if (_recentActivities.isEmpty)
                       Container(
@@ -982,102 +1033,173 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(
-              fontSize: 14,
-              color: Colors.black87,
-            ),
+            style: const TextStyle(fontSize: 14, color: Colors.black87),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildActivityItem(Map<String, dynamic> activity) {
-    final name = activity['name'] as String? ?? 'Unknown User';
-    final photoUrl = activity['photoUrl'] as String?;
-    final lastUpdated = activity['lastUpdated'] as DateTime?;
-    final checkInTime = activity['checkInTime'] as DateTime?;
-    final checkOutTime = activity['checkOutTime'] as DateTime?;
+ Widget _buildActivityItem(Map<String, dynamic> activity) {
+  final name = activity['name'] as String? ?? 'Unknown User';
+  final photoUrl = activity['photoUrl'] as String?;
+  final lastUpdated = activity['lastUpdated'] as DateTime?;
+  final checkInTime = activity['checkInTime'] as DateTime?;
+  final checkOutTime = activity['checkOutTime'] as DateTime?;
+  final checkInMethod = activity['checkInMethod'] as String?;
+  final checkOutMethod = activity['checkOutMethod'] as String?;
 
-    final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
-        ? NetworkImage(photoUrl)
-        : const AssetImage('images/logo.png');
+  final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
+      ? NetworkImage(photoUrl)
+      : const AssetImage('images/logo.png');
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 26,
-                backgroundImage: avatarImage,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+  return Container(
+    margin: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.03),
+          blurRadius: 10,
+          offset: const Offset(0, 4),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            CircleAvatar(
+              radius: 26,
+              backgroundImage: avatarImage,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _formatEventTime(lastUpdated),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                      ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatEventTime(lastUpdated),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatusChip(
-                  'CHECK IN  ${_formatShortTime(checkInTime)}',
-                  Colors.green.shade800,
-                  Colors.green.shade50,
-                ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildStatusChipWithMethod(
+                'CHECK IN',
+                _formatShortTime(checkInTime),
+                checkInMethod,
+                Colors.green.shade800,
+                Colors.green.shade50,
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildStatusChip(
-                  'CHECK OUT ${_formatShortTime(checkOutTime)}',
-                  Colors.blue.shade800,
-                  Colors.blue.shade50,
-                ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildStatusChipWithMethod(
+                'CHECK OUT',
+                _formatShortTime(checkOutTime),
+                checkOutMethod,
+                Colors.blue.shade800,
+                Colors.blue.shade50,
               ),
-            ],
-          ),
-        ],
-      ),
-    );
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildStatusChipWithMethod(
+  String label,
+  String time,
+  String? method,
+  Color textColor,
+  Color backgroundColor,
+) {
+  // Icon berdasarkan method
+  IconData? methodIcon;
+  if (method == 'manual') {
+    methodIcon = Icons.edit;
+  } else if (method == 'rfid') {
+    methodIcon = Icons.nfc;
+  } else if (method == 'face_recognition') {
+    methodIcon = Icons.face;
   }
 
-  Widget _buildStatusChip(String label, Color textColor, Color backgroundColor) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    decoration: BoxDecoration(
+      color: backgroundColor,
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (methodIcon != null) ...[
+              Icon(
+                methodIcon,
+                size: 12,
+                color: textColor,
+              ),
+              const SizedBox(width: 4),
+            ],
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          time,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: textColor,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+  Widget _buildStatusChip(
+    String label,
+    Color textColor,
+    Color backgroundColor,
+  ) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -1094,7 +1216,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       ),
     );
   }
-
 }
 
 // ========== SUPPORTING WIDGETS ==========
