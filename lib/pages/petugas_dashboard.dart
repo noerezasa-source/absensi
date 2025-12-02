@@ -7,6 +7,7 @@ import '../services/role_service.dart';
 import '../widgets/petugas_bottom_nav.dart';
 import 'face_attendance_multi_user_page.dart';
 import 'petugas_profile_page.dart';
+import 'petugas_records_page.dart';
 import 'rfid_attendance_page.dart';
 import 'manual_check_page.dart';
 
@@ -36,17 +37,15 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   String? _errorMessage;
   int _currentNavIndex = 0;
   bool _useRfidForAttendance = false;
-  String _organizationTimezone = 'Asia/Jakarta'; // Default to WIB
+  String _organizationTimezone = 'Asia/Jakarta';
   Map<String, dynamic>? _organization;
-  Map<String, dynamic>? _userProfile; // Store user profile locally
+  Map<String, dynamic>? _userProfile;
 
-  // Stats data
   int _checkedInCount = 0;
   int _checkedOutCount = 0;
   int _pendingCount = 0;
   int _lateCount = 0;
 
-  // Recent activity data
   List<Map<String, dynamic>> _recentActivities = [];
 
   @override
@@ -55,16 +54,15 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     debugPrint('=== PETUGAS DASHBOARD INIT (KIOSK MODE) ===');
     debugPrint('Organization Member ID: ${widget.organizationMemberId}');
     debugPrint('Role: ${_roleService.getRoleName(widget.memberData)}');
-    _userProfile = widget.userProfile; // Use passed profile if available
-    _loadUserProfile(); // Load profile if not passed
+    _userProfile = widget.userProfile;
+    _loadUserProfile();
     _loadOrganizationTimezone();
     _loadOrganizationInfo();
-    _loadRfidMode(); // Load RFID mode from SharedPreferences
+    _loadRfidMode();
     _refreshAll();
   }
 
   Future<void> _loadUserProfile() async {
-    // If userProfile already passed, don't reload
     if (_userProfile != null) return;
 
     try {
@@ -215,103 +213,100 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     await Future.wait([_loadTodayStats(), _loadRecentActivities()]);
   }
 
- Future<void> _loadRecentActivities() async {
-  final organizationId = widget.memberData['organization_id'] as int?;
-  if (organizationId == null) {
-    setState(() {
-      _isLoadingActivities = false;
-      _errorMessage = 'Organization data not found';
-    });
-    return;
-  }
-
-  setState(() {
-    _isLoadingActivities = true;
-  });
-
-  try {
-    // Get recent activities (semua method termasuk manual)
-    final activities = await _attendanceService.getOrganizationRecentActivities(
-      organizationId: organizationId,
-      limit: 10, // Ambil lebih banyak untuk filter manual
-    );
-
-    if (!mounted) return;
-
-    final groupedActivities = <String, Map<String, dynamic>>{};
-
-    for (final activity in activities) {
-      final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
-      final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
-      final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
-
-      final memberId = member['id']?.toString() ?? activity['organization_member_id']?.toString() ?? '';
-      DateTime? eventTime;
-      final eventTimeStr = activity['event_time'] as String?;
-      if (eventTimeStr != null) {
-        eventTime = TimezoneHelper.parseAndConvert(
-          eventTimeStr,
-          _organizationTimezone,
-        );
-      }
-
-      final attendanceDate = (record['attendance_date'] as String?) ??
-          (eventTimeStr != null ? eventTimeStr.split('T').first : '');
-      final key = '$memberId-$attendanceDate';
-
-      final entry = groupedActivities.putIfAbsent(key, () {
-        return {
-          'name': _composeUserName(profile),
-          'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
-          'status': record['status'] as String?,
-          'checkInTime': null,
-          'checkOutTime': null,
-          'checkInMethod': null,
-          'checkOutMethod': null,
-          'lastAction': null,
-          'method': null,
-          'lastUpdated': null,
-        };
+  Future<void> _loadRecentActivities() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) {
+      setState(() {
+        _isLoadingActivities = false;
+        _errorMessage = 'Organization data not found';
       });
-
-      // Simpan method untuk setiap event
-      if (activity['event_type'] == 'check_in') {
-        entry['checkInTime'] = eventTime;
-        entry['checkInMethod'] = activity['method']; // Simpan method check in
-      } else if (activity['event_type'] == 'check_out') {
-        entry['checkOutTime'] = eventTime;
-        entry['checkOutMethod'] = activity['method']; // Simpan method check out
-      }
-
-      entry['lastAction'] = activity['event_type'];
-      entry['method'] = activity['method'];
-      entry['lastUpdated'] = eventTime;
+      return;
     }
 
-    final mappedActivities = groupedActivities.values.toList()
-      ..sort((a, b) {
-        final aTime = a['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bTime = b['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return bTime.compareTo(aTime);
+    setState(() {
+      _isLoadingActivities = true;
+    });
+
+    try {
+      final activities = await _attendanceService.getOrganizationRecentActivities(
+        organizationId: organizationId,
+        limit: 10,
+      );
+
+      if (!mounted) return;
+
+      final groupedActivities = <String, Map<String, dynamic>>{};
+
+      for (final activity in activities) {
+        final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
+        final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
+        final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
+
+        final memberId = member['id']?.toString() ?? activity['organization_member_id']?.toString() ?? '';
+        DateTime? eventTime;
+        final eventTimeStr = activity['event_time'] as String?;
+        if (eventTimeStr != null) {
+          eventTime = TimezoneHelper.parseAndConvert(
+            eventTimeStr,
+            _organizationTimezone,
+          );
+        }
+
+        final attendanceDate = (record['attendance_date'] as String?) ??
+            (eventTimeStr != null ? eventTimeStr.split('T').first : '');
+        final key = '$memberId-$attendanceDate';
+
+        final entry = groupedActivities.putIfAbsent(key, () {
+          return {
+            'name': _composeUserName(profile),
+            'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
+            'status': record['status'] as String?,
+            'checkInTime': null,
+            'checkOutTime': null,
+            'checkInMethod': null,
+            'checkOutMethod': null,
+            'lastAction': null,
+            'method': null,
+            'lastUpdated': null,
+          };
+        });
+
+        if (activity['event_type'] == 'check_in') {
+          entry['checkInTime'] = eventTime;
+          entry['checkInMethod'] = activity['method'];
+        } else if (activity['event_type'] == 'check_out') {
+          entry['checkOutTime'] = eventTime;
+          entry['checkOutMethod'] = activity['method'];
+        }
+
+        entry['lastAction'] = activity['event_type'];
+        entry['method'] = activity['method'];
+        entry['lastUpdated'] = eventTime;
+      }
+
+      final mappedActivities = groupedActivities.values.toList()
+        ..sort((a, b) {
+          final aTime = a['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bTime = b['lastUpdated'] as DateTime? ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bTime.compareTo(aTime);
+        });
+
+      final limitedActivities = mappedActivities.take(6).toList();
+
+      setState(() {
+        _recentActivities = limitedActivities;
+        _isLoadingActivities = false;
       });
-
-    // Ambil hanya 6 activity teratas setelah sorting
-    final limitedActivities = mappedActivities.take(6).toList();
-
-    setState(() {
-      _recentActivities = limitedActivities;
-      _isLoadingActivities = false;
-    });
-  } catch (e) {
-    debugPrint('!!! ERROR loading recent activities: $e');
-    if (!mounted) return;
-    setState(() {
-      _isLoadingActivities = false;
-      _recentActivities = [];
-      _errorMessage ??= 'Failed to load recent activities: $e';
-    });
+    } catch (e) {
+      debugPrint('!!! ERROR loading recent activities: $e');
+      if (!mounted) return;
+      setState(() {
+        _isLoadingActivities = false;
+        _recentActivities = [];
+        _errorMessage ??= 'Failed to load recent activities: $e';
+      });
+    }
   }
-}
 
   Future<void> _navigateToMultiUserFaceAttendance(String? type) async {
     try {
@@ -324,7 +319,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         return;
       }
 
-      // Navigate to kiosk mode face attendance
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
@@ -348,7 +342,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   void _handleCameraButtonPress() {
     if (_useRfidForAttendance) {
-      // Mode RFID: buka halaman khusus RFID yang hanya menampilkan nama & jam hari ini
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -364,8 +357,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       return;
     }
 
-    // Mode default: face recognition multi user dengan auto-detection
-    _navigateToMultiUserFaceAttendance(null); // null = auto-detect
+    _navigateToMultiUserFaceAttendance(null);
   }
 
   void _handleNavigation(int index) {
@@ -377,22 +369,30 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
     switch (index) {
       case 0:
-        // Home - stay on current page
         break;
       case 1:
-        // Member
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Member feature coming soon')),
         );
         break;
       case 2:
-        // Records
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Records feature coming soon')),
-        );
+        Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PetugasRecordsPage(
+              organizationMemberId: widget.organizationMemberId,
+              memberData: widget.memberData,
+              userProfile: _userProfile ?? widget.userProfile,
+            ),
+          ),
+        ).then((_) {
+          setState(() {
+            _currentNavIndex = 0;
+          });
+          _refreshAll();
+        });
         break;
       case 3:
-        // Profile
         Navigator.push<bool>(
           context,
           MaterialPageRoute(
@@ -407,10 +407,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
             _currentNavIndex = 0;
             if (rfidMode != null) {
               _useRfidForAttendance = rfidMode;
-              _saveRfidMode(rfidMode); // Save to SharedPreferences
+              _saveRfidMode(rfidMode);
             }
           });
-          // Reload profile after returning from profile page
           _loadUserProfile();
         });
         break;
@@ -451,13 +450,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       return '';
     }
 
-    // Hanya gunakan display_name dari database
     final displayName = profile['display_name'] as String?;
     if (displayName != null && displayName.trim().isNotEmpty) {
       return displayName.trim();
     }
 
-    // Jika display_name tidak ada, gunakan first_name + middle_name + last_name
     final firstName = profile['first_name'] as String? ?? '';
     final middleName = profile['middle_name'] as String? ?? '';
     final lastName = profile['last_name'] as String? ?? '';
@@ -540,7 +537,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   String _formatEventTime(DateTime? time) {
     if (time == null) return 'Unknown time';
 
-    // Get current time in organization timezone for comparison
     final nowUtc = DateTime.now().toUtc();
     final nowOrg =
         TimezoneHelper.parseAndConvert(
@@ -583,7 +579,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           physics: const AlwaysScrollableScrollPhysics(),
           child: Column(
             children: [
-              // ---------- HEADER CARD ----------
+              // HEADER CARD - Diperkecil
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -592,195 +588,190 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.only(
-                    bottomLeft: Radius.circular(30),
-                    bottomRight: Radius.circular(30),
+                    bottomLeft: Radius.circular(24),
+                    bottomRight: Radius.circular(24),
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(20, 50, 20, 30),
+                padding: const EdgeInsets.fromLTRB(16, 44, 16, 20),
                 child: Column(
                   children: [
-                    // Top bar
+                    // Top bar - Diperkecil
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
                             color: Colors.white.withValues(alpha: 0.3),
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: const Icon(
                             Icons.calendar_today,
                             color: Colors.white,
-                            size: 20,
+                            size: 16,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Text(
                           _getCurrentDate(),
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 15,
+                            fontSize: 12,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 20),
-                    // Profile Card with Petugas Badge
+                    const SizedBox(height: 14),
+                    // Profile Card - Diperkecil
                     Container(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 15,
-                            offset: const Offset(0, 5),
+                            color: Colors.black.withValues(alpha: 0.08),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
                         ],
                       ),
-                      child: Column(
+                      child: Row(
                         children: [
-                          Row(
+                          // Profile Image - Diperkecil
+                          Stack(
                             children: [
-                              // Profile Image with Petugas Badge
-                              Stack(
-                                children: [
-                                  Container(
-                                    width: 80,
-                                    height: 80,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: const Color(0xFF9333EA),
-                                        width: 3,
-                                      ),
-                                      color: Colors.grey.shade100,
-                                    ),
-                                    child: ClipOval(
-                                      child: _getProfilePhotoUrl() != null
-                                          ? Image.network(
-                                              _getProfilePhotoUrl()!,
-                                              fit: BoxFit.cover,
-                                              errorBuilder:
-                                                  (context, error, stackTrace) {
-                                                    return const Icon(
-                                                      Icons.person,
-                                                      size: 40,
-                                                      color: Colors.grey,
-                                                    );
-                                                  },
-                                            )
-                                          : const Icon(
+                              Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(0xFF9333EA),
+                                    width: 2.5,
+                                  ),
+                                  color: Colors.grey.shade100,
+                                ),
+                                child: ClipOval(
+                                  child: _getProfilePhotoUrl() != null
+                                      ? Image.network(
+                                          _getProfilePhotoUrl()!,
+                                          fit: BoxFit.cover,
+                                          errorBuilder:
+                                              (context, error, stackTrace) {
+                                            return const Icon(
                                               Icons.person,
-                                              size: 40,
+                                              size: 28,
                                               color: Colors.grey,
-                                            ),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    top: 0,
-                                    right: 0,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF9333EA),
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: Colors.white,
-                                          width: 3,
+                                            );
+                                          },
+                                        )
+                                      : const Icon(
+                                          Icons.person,
+                                          size: 28,
+                                          color: Colors.grey,
                                         ),
-                                      ),
-                                      child: const Icon(
-                                        Icons.badge,
-                                        size: 18,
-                                        color: Colors.white,
-                                      ),
+                                ),
+                              ),
+                              Positioned(
+                                top: 0,
+                                right: 0,
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF9333EA),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2,
                                     ),
                                   ),
-                                ],
-                              ),
-                              const SizedBox(width: 16),
-                              // Profile Info
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _getFullName().isNotEmpty
-                                          ? _getFullName()
-                                          : 'User',
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    // Petugas Badge
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFF3E8FF),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(
-                                            Icons.badge,
-                                            size: 14,
-                                            color: Color(0xFF9333EA),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            _roleService.getRoleName(
-                                              widget.memberData,
-                                            ),
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: Color(0xFF9333EA),
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    if (_organization != null) ...[
-                                      const SizedBox(height: 8),
-                                      const SizedBox(height: 6),
-                                      // Organization
-                                      Row(
-                                        children: [
-                                          Icon(
-                                            Icons.business,
-                                            size: 14,
-                                            color: Colors.grey.shade600,
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                            child: Text(
-                                              _organization!['name'] ??
-                                                  'Unknown Organization',
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                color: Colors.grey.shade600,
-                                              ),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ],
+                                  child: const Icon(
+                                    Icons.badge,
+                                    size: 12,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                             ],
+                          ),
+                          const SizedBox(width: 12),
+                          // Profile Info - Diperkecil
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _getFullName().isNotEmpty
+                                      ? _getFullName()
+                                      : 'User',
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                // Petugas Badge - Diperkecil
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF3E8FF),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.badge,
+                                        size: 11,
+                                        color: Color(0xFF9333EA),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        _roleService.getRoleName(
+                                          widget.memberData,
+                                        ),
+                                        style: const TextStyle(
+                                          fontSize: 10,
+                                          color: Color(0xFF9333EA),
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (_organization != null) ...[
+                                  const SizedBox(height: 6),
+                                  // Organization - Diperkecil
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.business,
+                                        size: 11,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          _organization!['name'] ??
+                                              'Unknown Organization',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey.shade600,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -791,12 +782,12 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
               if (_errorMessage != null)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   child: Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: Colors.red.shade100),
                     ),
                     child: Row(
@@ -804,15 +795,15 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         const Icon(
                           Icons.warning_amber_rounded,
                           color: Colors.redAccent,
-                          size: 18,
+                          size: 16,
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             _errorMessage!,
                             style: const TextStyle(
                               color: Colors.redAccent,
-                              fontSize: 13,
+                              fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -820,9 +811,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         IconButton(
                           icon: const Icon(
                             Icons.close,
-                            size: 16,
+                            size: 14,
                             color: Colors.redAccent,
                           ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
                           onPressed: () {
                             setState(() {
                               _errorMessage = null;
@@ -834,26 +827,26 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                   ),
                 ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
-              // ---------- QUICK ACTIONS ----------
+              // QUICK ACTIONS - Diperkecil
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
                       "Quick Actions",
                       style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 8),
                         _QuickActionCard(
                           icon: Icons.people,
                           label: 'Manual Check',
@@ -870,7 +863,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                 ),
                               ),
                             ).then((_) {
-                              _refreshAll(); // Refresh data setelah kembali dari Manual Check
+                              _refreshAll();
                             });
                           },
                         ),
@@ -880,23 +873,23 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
-              // ---------- TODAY'S SUMMARY ----------
+              // TODAY'S SUMMARY - Diperkecil
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
                       "Today's Summary",
                       style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
@@ -908,7 +901,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                             iconColor: Colors.green,
                           ),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: _StatCard(
                             value: _isLoadingStats ? '-' : '$_lateCount',
@@ -918,7 +911,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                             iconColor: Colors.orange,
                           ),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: _StatCard(
                             value: _isLoadingStats ? '-' : '$_checkedOutCount',
@@ -934,11 +927,11 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
-              // ---------- RECENT ACTIVITY ----------
+              // RECENT ACTIVITY - Diperkecil
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -948,7 +941,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         const Text(
                           'Recent Activity',
                           style: TextStyle(
-                            fontSize: 18,
+                            fontSize: 14,
                             fontWeight: FontWeight.bold,
                             color: Colors.black87,
                           ),
@@ -961,40 +954,57 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                               ),
                             );
                           },
-                          child: const Text('View All'),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text(
+                            'View All',
+                            style: TextStyle(fontSize: 11),
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     if (_isLoadingActivities)
                       Container(
-                        padding: const EdgeInsets.all(40),
+                        padding: const EdgeInsets.all(32),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Center(child: CircularProgressIndicator()),
+                        child: const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
                       )
                     else if (_recentActivities.isEmpty)
                       Container(
-                        padding: const EdgeInsets.all(40),
+                        padding: const EdgeInsets.all(32),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         child: Center(
                           child: Column(
                             children: [
                               Icon(
                                 Icons.history,
-                                size: 48,
+                                size: 36,
                                 color: Colors.grey.shade300,
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 8),
                               Text(
                                 'No recent activity',
                                 style: TextStyle(
-                                  fontSize: 16,
+                                  fontSize: 12,
                                   color: Colors.grey.shade600,
                                 ),
                               ),
@@ -1012,7 +1022,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                 ),
               ),
 
-              const SizedBox(height: 100),
+              const SizedBox(height: 80),
             ],
           ),
         ),
@@ -1025,200 +1035,162 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     );
   }
 
-  Widget _buildInfoRow(IconData icon, String text) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: const Color(0xFF9333EA)),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(fontSize: 14, color: Colors.black87),
+  Widget _buildActivityItem(Map<String, dynamic> activity) {
+    final name = activity['name'] as String? ?? 'Unknown User';
+    final photoUrl = activity['photoUrl'] as String?;
+    final lastUpdated = activity['lastUpdated'] as DateTime?;
+    final checkInTime = activity['checkInTime'] as DateTime?;
+    final checkOutTime = activity['checkOutTime'] as DateTime?;
+    final checkInMethod = activity['checkInMethod'] as String?;
+    final checkOutMethod = activity['checkOutMethod'] as String?;
+
+    final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
+        ? NetworkImage(photoUrl)
+        : const AssetImage('images/logo.png');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
-        ),
-      ],
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundImage: avatarImage,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _formatEventTime(lastUpdated),
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatusChipWithMethod(
+                  'CHECK IN',
+                  _formatShortTime(checkInTime),
+                  checkInMethod,
+                  Colors.green.shade800,
+                  Colors.green.shade50,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _buildStatusChipWithMethod(
+                  'CHECK OUT',
+                  _formatShortTime(checkOutTime),
+                  checkOutMethod,
+                  Colors.blue.shade800,
+                  Colors.blue.shade50,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
- Widget _buildActivityItem(Map<String, dynamic> activity) {
-  final name = activity['name'] as String? ?? 'Unknown User';
-  final photoUrl = activity['photoUrl'] as String?;
-  final lastUpdated = activity['lastUpdated'] as DateTime?;
-  final checkInTime = activity['checkInTime'] as DateTime?;
-  final checkOutTime = activity['checkOutTime'] as DateTime?;
-  final checkInMethod = activity['checkInMethod'] as String?;
-  final checkOutMethod = activity['checkOutMethod'] as String?;
-
-  final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
-      ? NetworkImage(photoUrl)
-      : const AssetImage('images/logo.png');
-
-  return Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.03),
-          blurRadius: 10,
-          offset: const Offset(0, 4),
-        ),
-      ],
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            CircleAvatar(
-              radius: 26,
-              backgroundImage: avatarImage,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatEventTime(lastUpdated),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatusChipWithMethod(
-                'CHECK IN',
-                _formatShortTime(checkInTime),
-                checkInMethod,
-                Colors.green.shade800,
-                Colors.green.shade50,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _buildStatusChipWithMethod(
-                'CHECK OUT',
-                _formatShortTime(checkOutTime),
-                checkOutMethod,
-                Colors.blue.shade800,
-                Colors.blue.shade50,
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
-
-Widget _buildStatusChipWithMethod(
-  String label,
-  String time,
-  String? method,
-  Color textColor,
-  Color backgroundColor,
-) {
-  // Icon berdasarkan method
-  IconData? methodIcon;
-  if (method == 'manual') {
-    methodIcon = Icons.edit;
-  } else if (method == 'rfid') {
-    methodIcon = Icons.nfc;
-  } else if (method == 'face_recognition') {
-    methodIcon = Icons.face;
-  }
-
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-    decoration: BoxDecoration(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (methodIcon != null) ...[
-              Icon(
-                methodIcon,
-                size: 12,
-                color: textColor,
-              ),
-              const SizedBox(width: 4),
-            ],
-            Flexible(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 2),
-        Text(
-          time,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-            color: textColor,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-  Widget _buildStatusChip(
+  Widget _buildStatusChipWithMethod(
     String label,
+    String time,
+    String? method,
     Color textColor,
     Color backgroundColor,
   ) {
+    IconData? methodIcon;
+    if (method == 'manual') {
+      methodIcon = Icons.edit;
+    } else if (method == 'rfid') {
+      methodIcon = Icons.nfc;
+    } else if (method == 'face_recognition') {
+      methodIcon = Icons.face;
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: textColor,
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (methodIcon != null) ...[
+                Icon(
+                  methodIcon,
+                  size: 10,
+                  color: textColor,
+                ),
+                const SizedBox(width: 3),
+              ],
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            time,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: textColor,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-// ========== SUPPORTING WIDGETS ==========
+// SUPPORTING WIDGETS - Diperkecil
 
 class _QuickActionCard extends StatelessWidget {
   final IconData icon;
@@ -1242,21 +1214,21 @@ class _QuickActionCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           child: Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               color: color,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
               children: [
-                Icon(icon, color: iconColor, size: 32),
-                const SizedBox(height: 8),
+                Icon(icon, color: iconColor, size: 26),
+                const SizedBox(height: 6),
                 Text(
                   label,
                   style: const TextStyle(
-                    fontSize: 14,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
                     color: Colors.black87,
                   ),
@@ -1287,33 +1259,31 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          children: [
-            if (icon != null)
-              Icon(icon, color: iconColor ?? Colors.black54, size: 24),
-            if (icon != null) const SizedBox(height: 8),
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          if (icon != null)
+            Icon(icon, color: iconColor ?? Colors.black54, size: 20),
+          if (icon != null) const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
             ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+          ),
+        ],
       ),
     );
   }

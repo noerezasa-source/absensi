@@ -3,18 +3,20 @@ import 'package:flutter/material.dart';
 class PetugasBottomNav extends StatelessWidget {
   final int currentIndex;
   final Function(int) onNavigationTap;
-  final VoidCallback onAttendanceTap;
+  final VoidCallback? onAttendanceTap; // Opsional - null jika tidak ada tombol attendance
 
   const PetugasBottomNav({
     super.key,
     required this.currentIndex,
     required this.onNavigationTap,
-    required this.onAttendanceTap,
+    this.onAttendanceTap, // Opsional
   });
 
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
+    final hasAttendanceButton = onAttendanceTap != null;
+
     return Container(
       height: 75 + bottomPadding,
       padding: EdgeInsets.only(bottom: 8 + bottomPadding),
@@ -49,8 +51,8 @@ class PetugasBottomNav extends StatelessWidget {
                   'Member',
                   1,
                 ),
-                // Spacer untuk tombol attendance di tengah
-                const SizedBox(width: 70),
+                // Spacer untuk tombol attendance di tengah (hanya jika ada)
+                if (hasAttendanceButton) const SizedBox(width: 70),
                 _buildNavItem(
                   context,
                   Icons.list_alt_rounded,
@@ -66,43 +68,44 @@ class PetugasBottomNav extends StatelessWidget {
               ],
             ),
           ),
-          // Attendance Button di tengah yang timbul
-          Positioned(
-            left: MediaQuery.of(context).size.width / 2 - 35,
-            top: -30,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onAttendanceTap,
-                borderRadius: BorderRadius.circular(35),
-                child: Container(
-                  width: 70,
-                  height: 70,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF9333EA), Color(0xFF6B46C1)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF9333EA).withValues(alpha: 0.5),
-                        blurRadius: 20,
-                        offset: const Offset(0, 8),
-                        spreadRadius: 2,
+          // Attendance Button di tengah yang timbul (hanya jika onAttendanceTap != null)
+          if (hasAttendanceButton)
+            Positioned(
+              left: MediaQuery.of(context).size.width / 2 - 35,
+              top: -30,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onAttendanceTap,
+                  borderRadius: BorderRadius.circular(35),
+                  child: Container(
+                    width: 70,
+                    height: 70,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF9333EA), Color(0xFF6B46C1)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.how_to_reg_rounded,
-                    color: Colors.white,
-                    size: 32,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF9333EA).withValues(alpha: 0.5),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.how_to_reg_rounded,
+                      color: Colors.white,
+                      size: 32,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -164,4 +167,3 @@ class PetugasBottomNav extends StatelessWidget {
     );
   }
 }
-

@@ -1,3 +1,5 @@
+import 'package:absensimassal/pages/petugas_records_page.dart';
+import 'package:absensimassal/widgets/petugas_bottom_nav.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
@@ -7,7 +9,6 @@ import '../services/role_service.dart';
 import '../services/attendance_service.dart';
 import '../models/attendance_record.dart';
 import '../helpers/rfid_mode_helper.dart';
-import '../widgets/petugas_bottom_nav_simple.dart';
 import 'face_registration_page.dart';
 import 'login.dart';
 import 'petugas_dashboard.dart';
@@ -83,35 +84,63 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
     super.dispose();
   }
 
-  void _handleNavigation(int index) {
-    if (index == _currentNavIndex) return;
-
-    setState(() {
-      _currentNavIndex = index;
-    });
-
-    switch (index) {
-      case 0:
-        // Home - navigate back to dashboard, return current RFID mode
-        Navigator.pop(context, _rfidMode);
-        break;
-      case 1:
-        // Member
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Member feature coming soon')),
-        );
-        break;
-      case 2:
-        // Records
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Records feature coming soon')),
-        );
-        break;
-      case 3:
-        // Profile - stay on current page
-        break;
-    }
+void _handleNavigation(int index) {
+  debugPrint('=== PROFILE PAGE NAVIGATION ===');
+  debugPrint('Current index: $_currentNavIndex');
+  debugPrint('Target index: $index');
+  
+  if (index == _currentNavIndex) {
+    debugPrint('Same index, returning');
+    return;
   }
+
+  setState(() {
+    _currentNavIndex = index;
+  });
+
+  switch (index) {
+    case 0:
+      // Home - kembali ke dashboard
+      debugPrint('Navigating to Dashboard (popUntil)');
+      Navigator.popUntil(context, (route) => route.isFirst);
+      break;
+      
+    case 1:
+      // Member
+      debugPrint('Member feature - showing snackbar');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Member feature coming soon')),
+      );
+      break;
+      
+    case 2:
+      // Records - Navigate to Records Page
+      debugPrint('Navigating to Records page');
+      Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PetugasRecordsPage(
+            organizationMemberId: widget.organizationMemberId,
+            memberData: widget.memberData,
+            userProfile: _userProfile ?? widget.userProfile,
+          ),
+        ),
+      ).then((_) {
+        debugPrint('Returned from Records page');
+        if (mounted) {
+          setState(() {
+            _currentNavIndex = 3; // Kembali ke Profile index
+          });
+        }
+      });
+      break;
+      
+    case 3:
+      // Profile - stay on current page
+      debugPrint('Already on Profile page');
+      break;
+  }
+}
 
   void _populateControllers() {
     _displayNameController.text = _userProfile?['display_name'] ?? '';
@@ -1113,9 +1142,10 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
               ),
             ),
       // ---------- BOTTOM NAVIGATION ----------
-      bottomNavigationBar: PetugasBottomNavSimple(
+      bottomNavigationBar: PetugasBottomNav(
         currentIndex: _currentNavIndex,
         onNavigationTap: _handleNavigation,
+        // onAttendanceTap: tidak diberikan, jadi tombol attendance tidak muncul
       ),
     ),
     );

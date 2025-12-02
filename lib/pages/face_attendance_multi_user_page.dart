@@ -15,7 +15,7 @@ import '../helpers/timezone_helper.dart';
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
-  final String? attendanceType; // Optional, akan auto-detect
+  final String? attendanceType;
 
   const FaceAttendanceMultiUserPage({
     super.key,
@@ -26,6 +26,17 @@ class FaceAttendanceMultiUserPage extends StatefulWidget {
   @override
   State<FaceAttendanceMultiUserPage> createState() =>
       _FaceAttendanceMultiUserPageState();
+}
+
+// ✅ Message types enum
+enum MessageType {
+  idle,
+  processing,
+  loading,
+  success,
+  error,
+  warning,
+  info,
 }
 
 class _FaceAttendanceMultiUserPageState
@@ -39,22 +50,22 @@ class _FaceAttendanceMultiUserPageState
 
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
-  String _currentStep = 'Siap - Posisikan wajah Anda';
+  String? _currentMessage; // ✅ Changed to nullable - no message by default
+  MessageType _messageType = MessageType.idle;
   Position? _currentPosition;
-  String _organizationTimezone = 'Asia/Jakarta'; // Default timezone
+  String _organizationTimezone = 'Asia/Jakarta';
 
   Timer? _continuousScanTimer;
+  Timer? _messageTimer; // ✅ Timer to auto-hide messages
   
-  // Recent attendance list (max 10, shows who already checked in/out today)
   final List<Map<String, dynamic>> _recentAttendanceList = [];
   int _totalProcessedToday = 0;
 
-  // Track processed users with timestamp (cooldown 10 detik)
   final Map<int, DateTime> _processedUserTimestamps = {};
   final Duration _userCooldown = const Duration(seconds: 10);
 
-  // Detected faces on screen
   List<Map<String, dynamic>> _detectedFaces = [];
+  bool _hasFacesInView = false; // ✅ Track if faces are currently detected
 
   Future<Size?> _getImageSize(File imageFile) async {
     try {
@@ -78,10 +89,40 @@ class _FaceAttendanceMultiUserPageState
   void initState() {
     super.initState();
     _enableKioskMode();
-    _loadOrganizationTimezone(); // Load timezone dulu
+    _loadOrganizationTimezone();
     _initializeFaceService();
     _initializeCamera();
     _getCurrentLocation();
+  }
+
+  // ✅ New method to show temporary messages
+  void _showMessage(String message, MessageType type, {int seconds = 3}) {
+    _messageTimer?.cancel();
+    
+    setState(() {
+      _currentMessage = message;
+      _messageType = type;
+    });
+
+    _messageTimer = Timer(Duration(seconds: seconds), () {
+      if (mounted && !_isProcessing) {
+        setState(() {
+          _currentMessage = null;
+          _messageType = MessageType.idle;
+        });
+      }
+    });
+  }
+
+  // ✅ Clear message immediately
+  void _clearMessage() {
+    _messageTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _currentMessage = null;
+        _messageType = MessageType.idle;
+      });
+    }
   }
 
   Future<void> _loadOrganizationTimezone() async {
@@ -119,20 +160,17 @@ class _FaceAttendanceMultiUserPageState
 
   Future<void> _initializeFaceService() async {
     try {
-      setState(() {
-        _currentStep = 'Loading AI model...';
-      });
+      _showMessage('Memuat AI model...', MessageType.loading);
       
       await _faceService.initialize();
       
       debugPrint('✅ TFLite model initialized');
       
-      setState(() {
-        _currentStep = 'Siap - Posisikan wajah Anda';
-      });
+      _clearMessage();
     } catch (e) {
       debugPrint('!!! Failed to initialize TFLite: $e');
       if (mounted) {
+        _showMessage('Gagal memuat AI model', MessageType.error, seconds: 5);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to load AI model: $e'),
@@ -175,6 +213,7 @@ class _FaceAttendanceMultiUserPageState
     } catch (e) {
       debugPrint('Camera initialization error: $e');
       if (mounted) {
+        _showMessage('Kamera error', MessageType.error, seconds: 5);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Camera error: $e'),
@@ -232,27 +271,31 @@ class _FaceAttendanceMultiUserPageState
       final image = await _cameraController!.takePicture();
       final imageFile = File(image.path);
       
-      // Detect faces using ML Kit
       final faces = await _faceService.detectFaces(image.path);
       
       debugPrint('Total faces detected: ${faces.length}');
 
+      // ✅ No faces detected - only show message if faces were previously in view
       if (faces.isEmpty) {
         await imageFile.delete();
         
         setState(() {
           _detectedFaces = [];
-          _currentStep = 'Tidak ada wajah terdeteksi';
         });
+
+        // ✅ Only show "no face" message if we had faces before
+        if (_hasFacesInView) {
+          _showMessage('Wajah tidak terdeteksi', MessageType.info, seconds: 2);
+          _hasFacesInView = false;
+        }
         
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted && !_isProcessing) {
-            setState(() {
-              _currentStep = 'Siap - Posisikan wajah Anda';
-            });
-          }
-        });
         return;
+      }
+
+      // ✅ Faces detected - show instruction only on first detection
+      if (!_hasFacesInView) {
+        _hasFacesInView = true;
+        _showMessage('${faces.length} wajah terdeteksi - Memproses...', MessageType.processing);
       }
 
       final imageSize = await _getImageSize(imageFile);
@@ -263,7 +306,6 @@ class _FaceAttendanceMultiUserPageState
           _cameraController?.value.previewSize?.width ??
           1920.0;
 
-      // Map face bounding boxes for overlay
       final detectedFacesMap = faces.map((face) {
         final boundingBox = face.boundingBox;
         final left = (boundingBox.left / imageWidth).clamp(0.0, 1.0);
@@ -281,18 +323,18 @@ class _FaceAttendanceMultiUserPageState
 
       setState(() {
         _detectedFaces = detectedFacesMap;
-        _currentStep = 'Terdeteksi ${faces.length} wajah - Memproses AI...';
       });
 
-      // Process faces ONE BY ONE and check cooldown BEFORE processing
+      // Process faces
       final processedUsers = <Map<String, dynamic>>[];
       final facesToProcess = faces.take(5).toList();
+      final unrecognizedCount = 0;
+      final cooldownCount = 0;
 
       for (int i = 0; i < facesToProcess.length; i++) {
         try {
           debugPrint('Processing face ${i + 1}/${facesToProcess.length} with TFLite');
           
-          // Extract features using TFLite
           final capturedTemplate = await _faceService.buildTemplateFromFace(
             facesToProcess[i],
             image.path,
@@ -300,11 +342,10 @@ class _FaceAttendanceMultiUserPageState
           
           debugPrint('Extracted embedding size: ${capturedTemplate['embeddingSize']}');
           
-          // Identify user with threshold
           final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
             capturedTemplate: capturedTemplate,
             organizationId: widget.organizationId,
-            threshold: 0.75, // Balanced threshold
+            threshold: 0.75,
           );
 
           if (bestMatch == null) {
@@ -318,7 +359,7 @@ class _FaceAttendanceMultiUserPageState
           
           debugPrint('Face ${i + 1}: Matched $userName (${(similarity * 100).toStringAsFixed(1)}%)');
           
-          // Check cooldown BEFORE adding to processedUsers
+          // Check cooldown
           if (_processedUserTimestamps.containsKey(userId)) {
             final lastProcessTime = _processedUserTimestamps[userId]!;
             final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
@@ -326,11 +367,17 @@ class _FaceAttendanceMultiUserPageState
             if (timeSinceLastProcess < _userCooldown) {
               final remainingSeconds = (_userCooldown - timeSinceLastProcess).inSeconds;
               debugPrint('⏱️  User $userName in cooldown, ${remainingSeconds}s remaining');
+              
+              // ✅ Show specific cooldown message
+              _showMessage(
+                '$userName baru saja absen (tunggu ${remainingSeconds}s)',
+                MessageType.warning,
+                seconds: 3,
+              );
               continue;
             }
           }
 
-          // User valid dan tidak dalam cooldown
           processedUsers.add({
             'user': bestMatch,
             'imageFile': imageFile,
@@ -345,29 +392,28 @@ class _FaceAttendanceMultiUserPageState
         }
       }
 
-      // Process attendances
+      // ✅ Process results with specific messages
       if (processedUsers.isNotEmpty) {
         debugPrint('Processing ${processedUsers.length} valid users');
         await _processMultipleAttendances(processedUsers);
       } else {
-        debugPrint('No valid users to process');
-        setState(() {
-          _currentStep = 'Wajah tidak dikenali atau masih dalam cooldown';
-        });
+        // ✅ Show specific message based on why no users were processed
+        if (faces.isNotEmpty) {
+          _showMessage(
+            'Wajah tidak terdaftar atau dalam cooldown',
+            MessageType.warning,
+            seconds: 3,
+          );
+        }
         
         await SystemSound.play(SystemSoundType.alert);
         
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted && !_isProcessing) {
-            setState(() {
-              _currentStep = 'Siap - Posisikan wajah Anda';
-              _detectedFaces = [];
-            });
-          }
+        setState(() {
+          _detectedFaces = [];
         });
       }
 
-      // Clean up temp file
+      // Clean up
       try {
         if (await imageFile.exists()) {
           await imageFile.delete();
@@ -378,17 +424,10 @@ class _FaceAttendanceMultiUserPageState
 
     } catch (e) {
       debugPrint('!!! ERROR in multi-face scan: $e');
-      setState(() {
-        _currentStep = 'Error: ${e.toString()}';
-        _detectedFaces = [];
-      });
+      _showMessage('Error: ${e.toString()}', MessageType.error, seconds: 3);
       
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted && !_isProcessing) {
-          setState(() {
-            _currentStep = 'Siap - Posisikan wajah Anda';
-          });
-        }
+      setState(() {
+        _detectedFaces = [];
       });
     } finally {
       if (mounted) {
@@ -404,6 +443,9 @@ class _FaceAttendanceMultiUserPageState
   ) async {
     debugPrint('=== PROCESSING ${usersData.length} ATTENDANCES ===');
 
+    final successfulAttendances = <String>[];
+    final failedAttendances = <String>[];
+
     for (var userData in usersData) {
       try {
         final user = userData['user'];
@@ -413,20 +455,17 @@ class _FaceAttendanceMultiUserPageState
         
         debugPrint('Processing attendance for: $userName (ID: $memberId)');
         
-        // Check attendance status SEBELUM proses
         final isCheckIn = await _shouldCheckIn(memberId);
         final attendanceType = isCheckIn ? 'check_in' : 'check_out';
         
         debugPrint('Action for $userName: $attendanceType');
         
-        // Upload photo
         final photoUrl = await _storageService.uploadAttendancePhoto(
           imageFile,
           memberId,
           attendanceType,
         );
 
-        // Prepare location data
         Map<String, dynamic>? locationData;
         if (_currentPosition != null) {
           locationData = {
@@ -436,13 +475,12 @@ class _FaceAttendanceMultiUserPageState
           };
         }
 
-        // Record attendance with organization timezone
         if (isCheckIn) {
           await _attendanceService.checkIn(
             organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
-            organizationTimezone: _organizationTimezone, // ✅ Pass timezone
+            organizationTimezone: _organizationTimezone,
             location: locationData,
           );
         } else {
@@ -450,18 +488,15 @@ class _FaceAttendanceMultiUserPageState
             organizationMemberId: memberId,
             photoUrl: photoUrl,
             method: 'face_recognition_kiosk',
-            organizationTimezone: _organizationTimezone, // ✅ Pass timezone
+            organizationTimezone: _organizationTimezone,
             location: locationData,
           );
         }
 
-        // Update last used
         await _biometricService.updateLastUsed(user['biometric_id']);
 
-        // Update timestamp AFTER successful attendance
         _processedUserTimestamps[memberId] = DateTime.now();
 
-        // Add to list
         if (mounted) {
           setState(() {
             _totalProcessedToday++;
@@ -482,24 +517,38 @@ class _FaceAttendanceMultiUserPageState
           });
         }
 
+        successfulAttendances.add('$userName (${isCheckIn ? "Masuk" : "Keluar"})');
+        
         debugPrint('✅ Attendance recorded: $userName - $attendanceType');
 
       } catch (e) {
         final userName = userData['user']['user_name'] ?? 'Unknown';
         debugPrint('!!! ERROR processing $userName: $e');
-        // Jangan update timestamp jika gagal
+        failedAttendances.add(userName);
       }
     }
 
-    await SystemSound.play(SystemSoundType.click);
+    // ✅ Show result message
+    if (successfulAttendances.isNotEmpty) {
+      await SystemSound.play(SystemSoundType.click);
+      
+      final message = successfulAttendances.length == 1
+          ? 'Berhasil: ${successfulAttendances.first}'
+          : 'Berhasil: ${successfulAttendances.length} orang';
+      
+      _showMessage(message, MessageType.success, seconds: 3);
+    }
 
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted && !_isProcessing) {
-        setState(() {
-          _currentStep = 'Siap - Posisikan wajah Anda';
-          _detectedFaces = [];
-        });
-      }
+    if (failedAttendances.isNotEmpty) {
+      _showMessage(
+        'Gagal: ${failedAttendances.join(", ")}',
+        MessageType.error,
+        seconds: 4,
+      );
+    }
+
+    setState(() {
+      _detectedFaces = [];
     });
 
     _cleanupOldTimestamps();
@@ -512,10 +561,8 @@ class _FaceAttendanceMultiUserPageState
     });
   }
 
-  /// Check if user should check in (true) or check out (false)
   Future<bool> _shouldCheckIn(int organizationMemberId) async {
     try {
-      // ✅ Use organization timezone for date calculation
       final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
 
       debugPrint('=== CHECKING ATTENDANCE STATUS ===');
@@ -542,19 +589,16 @@ class _FaceAttendanceMultiUserPageState
       debugPrint('Check in: $actualCheckIn');
       debugPrint('Check out: $actualCheckOut');
 
-      // If checked in but NOT checked out yet → CHECK OUT
       if (actualCheckIn != null && actualCheckOut == null) {
         debugPrint('✅ Already checked in, not checked out → CHECK OUT');
         return false;
       }
 
-      // If both check in and check out exist → CHECK IN (new shift)
       if (actualCheckIn != null && actualCheckOut != null) {
         debugPrint('✅ Already checked out → CHECK IN (new shift)');
         return true;
       }
 
-      // Status-based fallback
       if (status == 'present' || status == 'checked_in') {
         debugPrint('✅ Status is present/checked_in → CHECK OUT');
         return false;
@@ -565,7 +609,6 @@ class _FaceAttendanceMultiUserPageState
         return true;
       }
 
-      // Default: check in
       debugPrint('✅ Default → CHECK IN');
       return true;
       
@@ -578,6 +621,7 @@ class _FaceAttendanceMultiUserPageState
   @override
   void dispose() {
     _continuousScanTimer?.cancel();
+    _messageTimer?.cancel();
     _cameraController?.dispose();
     _faceService.dispose();
     
@@ -589,6 +633,46 @@ class _FaceAttendanceMultiUserPageState
     ]);
     
     super.dispose();
+  }
+
+  // ✅ Helper to get message color
+  Color _getMessageColor() {
+    switch (_messageType) {
+      case MessageType.success:
+        return Colors.green.withValues(alpha: 0.9);
+      case MessageType.error:
+        return Colors.red.withValues(alpha: 0.9);
+      case MessageType.warning:
+        return Colors.orange.withValues(alpha: 0.9);
+      case MessageType.processing:
+        return Colors.blue.withValues(alpha: 0.9);
+      case MessageType.loading:
+        return Colors.purple.withValues(alpha: 0.9);
+      case MessageType.info:
+        return Colors.grey.withValues(alpha: 0.7);
+      case MessageType.idle:
+        return Colors.black.withValues(alpha: 0.5);
+    }
+  }
+
+  // ✅ Helper to get message icon
+  IconData? _getMessageIcon() {
+    switch (_messageType) {
+      case MessageType.success:
+        return Icons.check_circle;
+      case MessageType.error:
+        return Icons.error;
+      case MessageType.warning:
+        return Icons.warning;
+      case MessageType.processing:
+        return Icons.face;
+      case MessageType.loading:
+        return Icons.hourglass_empty;
+      case MessageType.info:
+        return Icons.info;
+      case MessageType.idle:
+        return null;
+    }
   }
 
   @override
@@ -632,7 +716,7 @@ class _FaceAttendanceMultiUserPageState
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            // ===== FULL CAMERA BACKGROUND =====
+            // Camera Preview
             if (_isCameraInitialized && _cameraController != null)
               Positioned.fill(
                 child: FittedBox(
@@ -649,7 +733,7 @@ class _FaceAttendanceMultiUserPageState
                 child: CircularProgressIndicator(color: Colors.white),
               ),
 
-            // ===== FACE DETECTION OVERLAYS =====
+            // Face Detection Overlays
             if (_detectedFaces.isNotEmpty && _cameraController != null)
               ..._detectedFaces.map((face) {
                 final cameraAspectRatio = _cameraController!.value.aspectRatio;
@@ -690,7 +774,7 @@ class _FaceAttendanceMultiUserPageState
                 );
               }),
 
-            // ===== TOP APP BAR =====
+            // Top App Bar
             Positioned(
               top: 0,
               left: 0,
@@ -753,50 +837,69 @@ class _FaceAttendanceMultiUserPageState
               ),
             ),
 
-            // ===== STATUS OVERLAY =====
-            Positioned(
-              top: 120,
-              left: 0,
-              right: 0,
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: _isProcessing 
-                      ? Colors.blue.withValues(alpha: 0.8)
-                      : Colors.black.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (_isProcessing)
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
+            // ✅ Status Message Overlay (only shows when there's a message)
+            if (_currentMessage != null)
+              Positioned(
+                top: 120,
+                left: 0,
+                right: 0,
+                child: AnimatedOpacity(
+                  opacity: _currentMessage != null ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 300),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _getMessageColor(),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
                         ),
-                      ),
-                    if (_isProcessing) const SizedBox(width: 12),
-                    Flexible(
-                      child: Text(
-                        _currentStep,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      ],
                     ),
-                  ],
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (_messageType == MessageType.processing || _messageType == MessageType.loading)
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        else if (_getMessageIcon() != null)
+                          Icon(
+                            _getMessageIcon(),
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        if (_messageType == MessageType.processing || 
+                            _messageType == MessageType.loading || 
+                            _getMessageIcon() != null)
+                          const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            _currentMessage!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
 
-            // ===== ATTENDANCE LIST =====
+            // Attendance List
             if (_recentAttendanceList.isNotEmpty)
               Positioned(
                 bottom: 0,
@@ -894,7 +997,6 @@ class _FaceAttendanceMultiUserPageState
                                 ),
                                 child: Row(
                                   children: [
-                                    // Avatar
                                     Container(
                                       width: 40,
                                       height: 40,
@@ -917,7 +1019,6 @@ class _FaceAttendanceMultiUserPageState
                                       ),
                                     ),
                                     const SizedBox(width: 12),
-                                    // Name
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -943,7 +1044,6 @@ class _FaceAttendanceMultiUserPageState
                                         ],
                                       ),
                                     ),
-                                    // Time
                                     Text(
                                       item['time'],
                                       style: TextStyle(
