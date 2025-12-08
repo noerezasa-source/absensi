@@ -1,17 +1,21 @@
-import 'dart:io';
+// lib/pages/face_attendance_multi_user_page.dart
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/biometric_service.dart';
-import '../services/attendance_service.dart';
-import '../services/supabase_storage_service.dart';
 import '../services/face_recognition_tflite_service.dart';
-import '../helpers/timezone_helper.dart';
+import '../services/offline_database_service.dart';
+import '../services/attendance_sync_service.dart';
 import '../helpers/sound_helper.dart';
+import '../widgets/mode_confirmation_dialog.dart';
+import '../models/offline_attendance.dart';
 import 'manual_check_page.dart';
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
@@ -29,15 +33,8 @@ class FaceAttendanceMultiUserPage extends StatefulWidget {
       _FaceAttendanceMultiUserPageState();
 }
 
-// ✅ Message types enum
 enum MessageType {
-  idle,
-  processing,
-  loading,
-  success,
-  error,
-  warning,
-  info,
+  idle, processing, loading, success, error, warning, info,
 }
 
 class _FaceAttendanceMultiUserPageState
@@ -45,54 +42,38 @@ class _FaceAttendanceMultiUserPageState
   CameraController? _cameraController;
   final FaceRecognitionTFLiteService _faceService = FaceRecognitionTFLiteService();
   final BiometricService _biometricService = BiometricService();
-  final AttendanceService _attendanceService = AttendanceService();
-  final SupabaseStorageService _storageService = SupabaseStorageService();
+  final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
+  final AttendanceSyncService _syncService = AttendanceSyncService();
   final SupabaseClient _supabase = Supabase.instance.client;
 
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
-  String? _currentMessage; // ✅ Changed to nullable - no message by default
+  String? _currentMessage;
   MessageType _messageType = MessageType.idle;
   Position? _currentPosition;
   String _organizationTimezone = 'Asia/Jakarta';
 
   Timer? _continuousScanTimer;
-  Timer? _messageTimer; // ✅ Timer to auto-hide messages
+  Timer? _messageTimer;
+  Timer? _scheduleCheckTimer;
   
   final List<Map<String, dynamic>> _recentAttendanceList = [];
   int _totalProcessedToday = 0;
   String _organizationName = '';
   int? _organizationMemberId;
   
-  // Work time / Break time
-  String? _workTimeMode; // 'work_time', 'break_time', or null for auto
+  String? _workTimeMode;
   Map<String, dynamic>? _memberSchedule;
-  Timer? _scheduleCheckTimer;
-  String _attendanceMode = 'check_in'; // 'check_in', 'check_out'
+  String _attendanceMode = 'check_in';
 
   final Map<int, DateTime> _processedUserTimestamps = {};
   final Duration _userCooldown = const Duration(seconds: 10);
 
   List<Map<String, dynamic>> _detectedFaces = [];
-  bool _hasFacesInView = false; // ✅ Track if faces are currently detected
+  bool _hasFacesInView = false;
 
-  Future<Size?> _getImageSize(File imageFile) async {
-    try {
-      final bytes = await imageFile.readAsBytes();
-      final completer = Completer<ui.Image>();
-      ui.decodeImageFromList(bytes, (ui.Image img) {
-        completer.complete(img);
-      });
-      final image = await completer.future;
-      return Size(
-        image.width.toDouble(),
-        image.height.toDouble(),
-      );
-    } catch (e) {
-      debugPrint('Failed to decode image size: $e');
-      return null;
-    }
-  }
+  bool _isOnline = true;
+  int _pendingSyncCount = 0;
 
   @override
   void initState() {
@@ -103,9 +84,36 @@ class _FaceAttendanceMultiUserPageState
     _initializeFaceService();
     _initializeCamera();
     _getCurrentLocation();
+    _checkConnectivity();
+    _loadPendingSyncCount();
+    _syncService.startAutoSync();
   }
 
-  // ✅ New method to show temporary messages
+  Future<void> _checkConnectivity() async {
+    final result = await Connectivity().checkConnectivity();
+    setState(() {
+      _isOnline = result != ConnectivityResult.none;
+    });
+
+    Connectivity().onConnectivityChanged.listen((results) {
+      if (mounted) {
+        setState(() {
+          _isOnline = results != ConnectivityResult.none;
+        });
+        if (_isOnline) _loadPendingSyncCount();
+      }
+    });
+  }
+
+  Future<void> _loadPendingSyncCount() async {
+    final count = await _offlineDb.getUnsyncedCount();
+    if (mounted) {
+      setState(() {
+        _pendingSyncCount = count;
+      });
+    }
+  }
+
   void _showMessage(String message, MessageType type, {int seconds = 3}) {
     _messageTimer?.cancel();
     
@@ -124,7 +132,6 @@ class _FaceAttendanceMultiUserPageState
     });
   }
 
-  // ✅ Clear message immediately
   void _clearMessage() {
     _messageTimer?.cancel();
     if (mounted) {
@@ -143,19 +150,13 @@ class _FaceAttendanceMultiUserPageState
           .eq('id', widget.organizationId)
           .maybeSingle();
 
-      if (org != null) {
+      if (org != null && mounted) {
         setState(() {
-          if (org['timezone'] != null) {
-            _organizationTimezone = org['timezone'] as String;
-          }
-          if (org['name'] != null) {
-            _organizationName = org['name'] as String;
-          }
+          _organizationTimezone = org['timezone'] as String? ?? 'Asia/Jakarta';
+          _organizationName = org['name'] as String? ?? '';
         });
-        debugPrint('✅ Organization data loaded: $_organizationName ($_organizationTimezone)');
       }
       
-      // Try to get current user's organization member ID
       final userId = _supabase.auth.currentUser?.id;
       if (userId != null) {
         final member = await _supabase
@@ -175,43 +176,28 @@ class _FaceAttendanceMultiUserPageState
         }
       }
     } catch (e) {
-      debugPrint('⚠️ Error loading organization data: $e');
+      debugPrint('Error loading org data: $e');
     }
   }
 
   Future<void> _enableKioskMode() async {
     try {
-      await SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.immersiveSticky,
-      );
-      
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-      ]);
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     } catch (e) {
-      debugPrint('Error enabling kiosk mode: $e');
+      debugPrint('Error kiosk mode: $e');
     }
   }
 
   Future<void> _initializeFaceService() async {
     try {
       _showMessage('Memuat AI model...', MessageType.loading);
-      
       await _faceService.initialize();
-      
-      debugPrint('✅ TFLite model initialized');
-      
       _clearMessage();
     } catch (e) {
-      debugPrint('!!! Failed to initialize TFLite: $e');
+      debugPrint('Failed to init TFLite: $e');
       if (mounted) {
         _showMessage('Gagal memuat AI model', MessageType.error, seconds: 5);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load AI model: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
       }
     }
   }
@@ -246,15 +232,9 @@ class _FaceAttendanceMultiUserPageState
         _startContinuousScan();
       }
     } catch (e) {
-      debugPrint('Camera initialization error: $e');
+      debugPrint('Camera error: $e');
       if (mounted) {
         _showMessage('Kamera error', MessageType.error, seconds: 5);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Camera error: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
       }
     }
   }
@@ -289,6 +269,21 @@ class _FaceAttendanceMultiUserPageState
     );
   }
 
+  Future<Size?> _getImageSize(File imageFile) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromList(bytes, (ui.Image img) {
+        completer.complete(img);
+      });
+      final image = await completer.future;
+      return Size(image.width.toDouble(), image.height.toDouble());
+    } catch (e) {
+      debugPrint('Failed to decode image size: $e');
+      return null;
+    }
+  }
+
   Future<void> _scanForFaces() async {
     if (_cameraController == null ||
         !_cameraController!.value.isInitialized ||
@@ -301,16 +296,11 @@ class _FaceAttendanceMultiUserPageState
     });
 
     try {
-      debugPrint('=== STARTING MULTI-FACE SCAN (TFLite) ===');
-      
       final image = await _cameraController!.takePicture();
       final imageFile = File(image.path);
       
       final faces = await _faceService.detectFaces(image.path);
-      
-      debugPrint('Total faces detected: ${faces.length}');
 
-      // ✅ No faces detected - only show message if faces were previously in view
       if (faces.isEmpty) {
         await imageFile.delete();
         
@@ -318,7 +308,6 @@ class _FaceAttendanceMultiUserPageState
           _detectedFaces = [];
         });
 
-        // ✅ Only show "no face" message if we had faces before
         if (_hasFacesInView) {
           _showMessage('Wajah tidak terdeteksi', MessageType.info, seconds: 2);
           _hasFacesInView = false;
@@ -327,7 +316,6 @@ class _FaceAttendanceMultiUserPageState
         return;
       }
 
-      // ✅ Faces detected - show instruction only on first detection
       if (!_hasFacesInView) {
         _hasFacesInView = true;
         _showMessage('${faces.length} wajah terdeteksi - Memproses...', MessageType.processing);
@@ -335,11 +323,9 @@ class _FaceAttendanceMultiUserPageState
 
       final imageSize = await _getImageSize(imageFile);
       final imageWidth = imageSize?.width ??
-          _cameraController?.value.previewSize?.height ??
-          1080.0;
+          _cameraController?.value.previewSize?.height ?? 1080.0;
       final imageHeight = imageSize?.height ??
-          _cameraController?.value.previewSize?.width ??
-          1920.0;
+          _cameraController?.value.previewSize?.width ?? 1920.0;
 
       final detectedFacesMap = faces.map((face) {
         final boundingBox = face.boundingBox;
@@ -360,20 +346,15 @@ class _FaceAttendanceMultiUserPageState
         _detectedFaces = detectedFacesMap;
       });
 
-      // Process faces
       final processedUsers = <Map<String, dynamic>>[];
       final facesToProcess = faces.take(5).toList();
 
       for (int i = 0; i < facesToProcess.length; i++) {
         try {
-          debugPrint('Processing face ${i + 1}/${facesToProcess.length} with TFLite');
-          
           final capturedTemplate = await _faceService.buildTemplateFromFace(
             facesToProcess[i],
             image.path,
           );
-          
-          debugPrint('Extracted embedding size: ${capturedTemplate['embeddingSize']}');
           
           final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
             capturedTemplate: capturedTemplate,
@@ -382,26 +363,18 @@ class _FaceAttendanceMultiUserPageState
           );
 
           if (bestMatch == null) {
-            debugPrint('Face ${i + 1}: No match found');
             continue;
           }
 
           final userId = bestMatch['organization_member_id'] as int;
           final userName = bestMatch['user_name'] ?? 'Unknown';
-          final similarity = bestMatch['similarity'] as double;
           
-          debugPrint('Face ${i + 1}: Matched $userName (${(similarity * 100).toStringAsFixed(1)}%)');
-          
-          // Check cooldown
           if (_processedUserTimestamps.containsKey(userId)) {
             final lastProcessTime = _processedUserTimestamps[userId]!;
             final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
             
             if (timeSinceLastProcess < _userCooldown) {
               final remainingSeconds = (_userCooldown - timeSinceLastProcess).inSeconds;
-              debugPrint('⏱️  User $userName in cooldown, ${remainingSeconds}s remaining');
-              
-              // ✅ Show specific cooldown message
               _showMessage(
                 '$userName baru saja absen (tunggu ${remainingSeconds}s)',
                 MessageType.warning,
@@ -415,9 +388,8 @@ class _FaceAttendanceMultiUserPageState
             'user': bestMatch,
             'imageFile': imageFile,
             'faceIndex': i,
+            'template': capturedTemplate,
           });
-          
-          debugPrint('✅ User $userName added to processing queue');
           
         } catch (e) {
           debugPrint('Error processing face $i: $e');
@@ -425,12 +397,9 @@ class _FaceAttendanceMultiUserPageState
         }
       }
 
-      // ✅ Process results with specific messages
       if (processedUsers.isNotEmpty) {
-        debugPrint('Processing ${processedUsers.length} valid users');
         await _processMultipleAttendances(processedUsers);
       } else {
-        // ✅ Show specific message based on why no users were processed
         if (faces.isNotEmpty) {
           _showMessage(
             'Wajah tidak terdaftar atau dalam cooldown',
@@ -446,7 +415,6 @@ class _FaceAttendanceMultiUserPageState
         });
       }
 
-      // Clean up
       try {
         if (await imageFile.exists()) {
           await imageFile.delete();
@@ -456,7 +424,7 @@ class _FaceAttendanceMultiUserPageState
       }
 
     } catch (e) {
-      debugPrint('!!! ERROR in multi-face scan: $e');
+      debugPrint('ERROR in multi-face scan: $e');
       _showMessage('Error: ${e.toString()}', MessageType.error, seconds: 3);
       
       setState(() {
@@ -474,8 +442,6 @@ class _FaceAttendanceMultiUserPageState
   Future<void> _processMultipleAttendances(
     List<Map<String, dynamic>> usersData,
   ) async {
-    debugPrint('=== PROCESSING ${usersData.length} ATTENDANCES ===');
-
     final successfulAttendances = <String>[];
     final failedAttendances = <String>[];
 
@@ -483,48 +449,43 @@ class _FaceAttendanceMultiUserPageState
       try {
         final user = userData['user'];
         final imageFile = userData['imageFile'] as File;
+        final template = userData['template'] as Map<String, dynamic>;
         final memberId = user['organization_member_id'] as int;
         final userName = user['user_name'] ?? 'Unknown';
         
-        debugPrint('Processing attendance for: $userName (ID: $memberId)');
-        
         final isCheckIn = _attendanceMode == 'check_in';
         final attendanceType = isCheckIn ? 'check_in' : 'check_out';
+        final workTimeMode = _getWorkTimeMode();
         
-        debugPrint('Action for $userName: $attendanceType');
-        
-        final photoUrl = await _storageService.uploadAttendancePhoto(
-          imageFile,
-          memberId,
-          attendanceType,
+        // Save photo locally for offline support
+        String? localPhotoPath;
+        try {
+          final tempDir = Directory.systemTemp;
+          final fileName = 'face_${memberId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          final localFile = File('${tempDir.path}/$fileName');
+          await imageFile.copy(localFile.path);
+          localPhotoPath = localFile.path;
+        } catch (e) {
+          debugPrint('Failed to save photo locally: $e');
+        }
+
+        // Save to offline database
+        final offlineAttendance = OfflineAttendance(
+          cardNumber: 'FACE_$memberId',
+          faceEmbedding: jsonEncode(template),
+          eventType: attendanceType,
+          method: 'face_recognition_kiosk',
+          timestamp: DateTime.now().toUtc().toIso8601String(),
+          photoPath: localPhotoPath,
+          latitude: _currentPosition?.latitude,
+          longitude: _currentPosition?.longitude,
+          workTimeMode: workTimeMode,
+          organizationMemberId: memberId,
+          userName: userName,
         );
-
-        Map<String, dynamic>? locationData;
-        if (_currentPosition != null) {
-          locationData = {
-            'latitude': _currentPosition!.latitude,
-            'longitude': _currentPosition!.longitude,
-            'accuracy': _currentPosition!.accuracy,
-          };
-        }
-
-        if (isCheckIn) {
-          await _attendanceService.checkIn(
-            organizationMemberId: memberId,
-            photoUrl: photoUrl,
-            method: 'face_recognition_kiosk',
-            organizationTimezone: _organizationTimezone,
-            location: locationData,
-          );
-        } else {
-          await _attendanceService.checkOut(
-            organizationMemberId: memberId,
-            photoUrl: photoUrl,
-            method: 'face_recognition_kiosk',
-            organizationTimezone: _organizationTimezone,
-            location: locationData,
-          );
-        }
+        
+        await _offlineDb.insertAttendance(offlineAttendance);
+        await _loadPendingSyncCount();
 
         await _biometricService.updateLastUsed(user['biometric_id']);
 
@@ -551,17 +512,14 @@ class _FaceAttendanceMultiUserPageState
         }
 
         successfulAttendances.add('$userName (${isCheckIn ? "Masuk" : "Keluar"})');
-        
-        debugPrint('✅ Attendance recorded: $userName - $attendanceType');
 
       } catch (e) {
         final userName = userData['user']['user_name'] ?? 'Unknown';
-        debugPrint('!!! ERROR processing $userName: $e');
+        debugPrint('ERROR processing $userName: $e');
         failedAttendances.add(userName);
       }
     }
 
-    // ✅ Show result message
     if (successfulAttendances.isNotEmpty) {
       await SoundHelper.playSuccessSound();
       
@@ -597,10 +555,7 @@ class _FaceAttendanceMultiUserPageState
   void _startScheduleCheck() {
     _scheduleCheckTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (mounted && _workTimeMode == null) {
-        // Only auto-update if not manually set
-        setState(() {
-          // Trigger rebuild to update work time/break time display
-        });
+        setState(() {});
       }
     });
   }
@@ -610,16 +565,9 @@ class _FaceAttendanceMultiUserPageState
       final today = DateTime.now();
       final todayStr = today.toIso8601String().split('T')[0];
       
-      // Get member schedule
       final schedule = await _supabase
           .from('member_schedules')
-          .select('''
-            id,
-            work_schedule_id,
-            shift_id,
-            effective_date,
-            end_date
-          ''')
+          .select('id, work_schedule_id, shift_id, effective_date, end_date')
           .eq('organization_member_id', memberId)
           .eq('is_active', true)
           .lte('effective_date', todayStr)
@@ -629,151 +577,71 @@ class _FaceAttendanceMultiUserPageState
           .maybeSingle();
 
       if (schedule != null) {
-        final workScheduleId = schedule['work_schedule_id'] as int?;
-        final shiftId = schedule['shift_id'] as int?;
-        
-        Map<String, dynamic>? scheduleData;
-        
-        if (shiftId != null) {
-          // Get shift details
-          final shift = await _supabase
-              .from('shifts')
-              .select('id, start_time, end_time')
-              .eq('id', shiftId)
-              .maybeSingle();
-          
-          if (shift != null) {
-            scheduleData = {
-              'type': 'shift',
-              'shift': shift,
-            };
-          }
-        } else if (workScheduleId != null) {
-          // Get work schedule details for today
-          final dayOfWeek = today.weekday % 7; // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-          
-          final workScheduleDetail = await _supabase
-              .from('work_schedule_details')
-              .select('day_of_week, start_time, end_time, break_start, break_end')
-              .eq('work_schedule_id', workScheduleId)
-              .eq('day_of_week', dayOfWeek)
-              .maybeSingle();
-          
-          if (workScheduleDetail != null) {
-            scheduleData = {
-              'type': 'work_schedule',
-              'detail': workScheduleDetail,
-            };
-          }
-        }
-        
-        if (scheduleData != null) {
-          final combinedSchedule = Map<String, dynamic>.from(schedule)
-            ..addAll(scheduleData);
-          setState(() {
-            _memberSchedule = combinedSchedule;
-          });
-          debugPrint('Member schedule loaded for face recognition');
-        }
+        setState(() {
+          _memberSchedule = schedule;
+        });
       }
     } catch (e) {
-      debugPrint('Error loading member schedule: $e');
+      debugPrint('Error loading schedule: $e');
     }
   }
 
   String _getWorkTimeMode() {
-    // If manually set, return that
-    if (_workTimeMode != null) {
-      return _workTimeMode!;
-    }
-
-    // Auto-determine based on schedule
-    if (_memberSchedule == null) {
-      return 'work_time'; // Default to work time
-    }
-
-    final now = DateTime.now();
-    final orgTime = TimezoneHelper.convertUtcToOrgTimezone(
-      now.toUtc(),
-      _organizationTimezone,
-    );
-    
-    final currentTimeOfDay = TimeOfDay.fromDateTime(orgTime);
-    final currentMinutes = currentTimeOfDay.hour * 60 + currentTimeOfDay.minute;
-
-    // Check if member has shift or work schedule
-    final scheduleType = _memberSchedule!['type'] as String?;
-    
-    if (scheduleType == 'shift') {
-      // Use shift timing
-      final shift = _memberSchedule!['shift'] as Map<String, dynamic>?;
-      if (shift != null) {
-        final startTimeStr = shift['start_time'] as String?;
-        final endTimeStr = shift['end_time'] as String?;
-        
-        if (startTimeStr != null && endTimeStr != null) {
-          final startTime = _parseTimeString(startTimeStr);
-          final endTime = _parseTimeString(endTimeStr);
-          
-          if (startTime != null && endTime != null) {
-            final startMinutes = startTime.hour * 60 + startTime.minute;
-            final endMinutes = endTime.hour * 60 + endTime.minute;
-            
-            // Simple logic: if within shift time, it's work time
-            if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
-              return 'work_time';
-            }
-          }
-        }
-      }
-    } else if (scheduleType == 'work_schedule') {
-      // Use work schedule details
-      final detail = _memberSchedule!['detail'] as Map<String, dynamic>?;
-      if (detail != null) {
-        final breakStartStr = detail['break_start'] as String?;
-        final breakEndStr = detail['break_end'] as String?;
-        final startTimeStr = detail['start_time'] as String?;
-        
-        if (breakStartStr != null && breakEndStr != null && startTimeStr != null) {
-          final startTime = _parseTimeString(startTimeStr);
-          final breakStart = _parseTimeString(breakStartStr);
-          final breakEnd = _parseTimeString(breakEndStr);
-          
-          if (startTime != null && breakStart != null && breakEnd != null) {
-            final startMinutes = startTime.hour * 60 + startTime.minute;
-            final breakStartMinutes = breakStart.hour * 60 + breakStart.minute;
-            final breakEndMinutes = breakEnd.hour * 60 + breakEnd.minute;
-            
-            // If current time >= start_time and < break_start: work time
-            // If current time >= break_start and < break_end: break time
-            // If current time >= break_end: work time
-            if (currentMinutes >= startMinutes && currentMinutes < breakStartMinutes) {
-              return 'work_time';
-            } else if (currentMinutes >= breakStartMinutes && currentMinutes < breakEndMinutes) {
-              return 'break_time';
-            } else if (currentMinutes >= breakEndMinutes) {
-              return 'work_time';
-            }
-          }
-        }
-      }
-    }
-
-    return 'work_time'; // Default
+    if (_workTimeMode != null) return _workTimeMode!;
+    return 'work_time';
   }
 
-  TimeOfDay? _parseTimeString(String timeStr) {
-    try {
-      final parts = timeStr.split(':');
-      if (parts.length >= 2) {
-        final hour = int.parse(parts[0]);
-        final minute = int.parse(parts[1]);
-        return TimeOfDay(hour: hour, minute: minute);
-      }
-    } catch (e) {
-      debugPrint('Error parsing time string: $timeStr, error: $e');
-    }
-    return null;
+  Future<void> _handleModeChange(String newMode) async {
+    if (_attendanceMode == newMode) return;
+
+    final confirmed = await ModeConfirmationDialog.show(
+      context: context,
+      currentMode: _attendanceMode,
+      newMode: newMode,
+      onConfirm: () {
+        setState(() => _attendanceMode = newMode);
+      },
+    );
+
+    if (confirmed != true) return;
+  }
+
+  Future<void> _showSyncDialog() async {
+    final stats = await _syncService.getSyncStats();
+    
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Sinkronisasi Data'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Total pending: ${stats['pending'] ?? 0}'),
+            Text('Berhasil: ${stats['synced'] ?? 0}'),
+            Text('Gagal: ${stats['failed'] ?? 0}'),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                await _syncService.syncAllPendingAttendances();
+                await _loadPendingSyncCount();
+              },
+              child: const Text('Mulai Sinkronisasi'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Tutup'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -783,6 +651,7 @@ class _FaceAttendanceMultiUserPageState
     _scheduleCheckTimer?.cancel();
     _cameraController?.dispose();
     _faceService.dispose();
+    _syncService.stopAutoSync();
     
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
@@ -794,7 +663,6 @@ class _FaceAttendanceMultiUserPageState
     super.dispose();
   }
 
-  // ✅ Helper to get message color
   Color _getMessageColor() {
     switch (_messageType) {
       case MessageType.success:
@@ -814,7 +682,6 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  // ✅ Helper to get message icon
   IconData? _getMessageIcon() {
     switch (_messageType) {
       case MessageType.success:
@@ -923,10 +790,7 @@ class _FaceAttendanceMultiUserPageState
                     width: width,
                     height: height,
                     decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Colors.greenAccent,
-                        width: 3,
-                      ),
+                      border: Border.all(color: Colors.greenAccent, width: 3),
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
@@ -968,9 +832,7 @@ class _FaceAttendanceMultiUserPageState
                               ),
                               ElevatedButton(
                                 onPressed: () => Navigator.of(dialogContext).pop(true),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                ),
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                                 child: const Text('Keluar'),
                               ),
                             ],
@@ -1011,6 +873,39 @@ class _FaceAttendanceMultiUserPageState
                               _buildModeToggle(),
                             ],
                           ),
+                          if (!_isOnline || _pendingSyncCount > 0) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _isOnline 
+                                    ? Colors.orange.withValues(alpha: 0.8)
+                                    : Colors.red.withValues(alpha: 0.8),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _isOnline ? Icons.cloud_queue : Icons.cloud_off,
+                                    size: 14,
+                                    color: Colors.white,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _isOnline 
+                                        ? '$_pendingSyncCount pending'
+                                        : 'Offline',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1045,7 +940,7 @@ class _FaceAttendanceMultiUserPageState
               ),
             ),
 
-            // ✅ Status Message Overlay (only shows when there's a message)
+            // Status Message Overlay
             if (_currentMessage != null)
               Positioned(
                 top: 120,
@@ -1071,7 +966,8 @@ class _FaceAttendanceMultiUserPageState
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        if (_messageType == MessageType.processing || _messageType == MessageType.loading)
+                        if (_messageType == MessageType.processing || 
+                            _messageType == MessageType.loading)
                           const SizedBox(
                             width: 18,
                             height: 18,
@@ -1081,11 +977,7 @@ class _FaceAttendanceMultiUserPageState
                             ),
                           )
                         else if (_getMessageIcon() != null)
-                          Icon(
-                            _getMessageIcon(),
-                            color: Colors.white,
-                            size: 20,
-                          ),
+                          Icon(_getMessageIcon(), color: Colors.white, size: 20),
                         if (_messageType == MessageType.processing || 
                             _messageType == MessageType.loading || 
                             _getMessageIcon() != null)
@@ -1131,10 +1023,7 @@ class _FaceAttendanceMultiUserPageState
                   child: Column(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 12,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -1147,10 +1036,7 @@ class _FaceAttendanceMultiUserPageState
                               ),
                             ),
                             Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                               decoration: BoxDecoration(
                                 color: Colors.white.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(12),
@@ -1187,10 +1073,7 @@ class _FaceAttendanceMultiUserPageState
                               builder: (context, value, child) {
                                 return Transform.translate(
                                   offset: Offset(0, 20 * (1 - value)),
-                                  child: Opacity(
-                                    opacity: value,
-                                    child: child,
-                                  ),
+                                  child: Opacity(opacity: value, child: child),
                                 );
                               },
                               child: Container(
@@ -1220,9 +1103,7 @@ class _FaceAttendanceMultiUserPageState
                                       ),
                                       child: Icon(
                                         isCheckIn ? Icons.login : Icons.logout,
-                                        color: isCheckIn 
-                                            ? Colors.greenAccent
-                                            : Colors.blueAccent,
+                                        color: isCheckIn ? Colors.greenAccent : Colors.blueAccent,
                                         size: 20,
                                       ),
                                     ),
@@ -1243,7 +1124,7 @@ class _FaceAttendanceMultiUserPageState
                                           ),
                                           const SizedBox(height: 2),
                                           Text(
-                                            '${_getWorkTimeMode() == 'break_time' ? 'Break time in' : 'Work time in'} - ${isCheckIn ? 'Check In' : 'Check Out'}',
+                                            '${_getWorkTimeMode() == 'break_time' ? 'Break time' : 'Work time'} - ${isCheckIn ? 'Check In' : 'Check Out'}',
                                             style: TextStyle(
                                               fontSize: 12,
                                               color: Colors.white.withValues(alpha: 0.7),
@@ -1257,9 +1138,7 @@ class _FaceAttendanceMultiUserPageState
                                       style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.bold,
-                                        color: isCheckIn 
-                                            ? Colors.greenAccent
-                                            : Colors.blueAccent,
+                                        color: isCheckIn ? Colors.greenAccent : Colors.blueAccent,
                                       ),
                                     ),
                                   ],
@@ -1284,9 +1163,7 @@ class _FaceAttendanceMultiUserPageState
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.3),
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1301,20 +1178,12 @@ class _FaceAttendanceMultiUserPageState
   Widget _buildToggleButton(String label, String mode, Color activeColor) {
     final isSelected = _attendanceMode == mode;
     return GestureDetector(
-      onTap: () {
-        if (_attendanceMode != mode) {
-          setState(() {
-            _attendanceMode = mode;
-          });
-        }
-      },
+      onTap: () => _handleModeChange(mode),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected
-              ? activeColor.withValues(alpha: 0.8)
-              : Colors.transparent,
+          color: isSelected ? activeColor.withValues(alpha: 0.8) : Colors.transparent,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Text(
@@ -1342,15 +1211,14 @@ class _FaceAttendanceMultiUserPageState
           child: Row(
             children: [
               Icon(
-                currentMode == 'work_time' && !isAutoMode ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                color: Color(0xFF9333EA),
+                currentMode == 'work_time' && !isAutoMode 
+                    ? Icons.radio_button_checked 
+                    : Icons.radio_button_unchecked,
+                color: const Color(0xFF9333EA),
                 size: 18,
               ),
               const SizedBox(width: 8),
-              const Text(
-                'Work time',
-                style: TextStyle(fontSize: 14),
-              ),
+              const Text('Work time', style: TextStyle(fontSize: 14)),
             ],
           ),
         ),
@@ -1359,15 +1227,14 @@ class _FaceAttendanceMultiUserPageState
           child: Row(
             children: [
               Icon(
-                currentMode == 'break_time' && !isAutoMode ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                color: Color(0xFF9333EA),
+                currentMode == 'break_time' && !isAutoMode 
+                    ? Icons.radio_button_checked 
+                    : Icons.radio_button_unchecked,
+                color: const Color(0xFF9333EA),
                 size: 18,
               ),
               const SizedBox(width: 8),
-              const Text(
-                'Break time',
-                style: TextStyle(fontSize: 14),
-              ),
+              const Text('Break time', style: TextStyle(fontSize: 14)),
             ],
           ),
         ),
@@ -1377,58 +1244,42 @@ class _FaceAttendanceMultiUserPageState
             children: [
               Icon(
                 isAutoMode ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                color: Color(0xFF9333EA),
+                color: const Color(0xFF9333EA),
                 size: 18,
               ),
               const SizedBox(width: 8),
-              const Text(
-                'Auto (berdasarkan jadwal)',
-                style: TextStyle(fontSize: 14),
-              ),
+              const Text('Auto (berdasarkan jadwal)', style: TextStyle(fontSize: 14)),
             ],
           ),
         ),
         const PopupMenuDivider(),
         PopupMenuItem<String>(
-          value: 'work_schedule',
-          child: Row(
-            children: [
-              const Icon(Icons.schedule, color: Color(0xFF9333EA), size: 18),
-              const SizedBox(width: 8),
-              const Text(
-                'Work schedule mode',
-                style: TextStyle(fontSize: 14),
-              ),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
           value: 'sign_data',
           child: Row(
             children: [
-              const Icon(Icons.sync, color: Color(0xFF9333EA), size: 18),
+              Icon(
+                _pendingSyncCount > 0 ? Icons.sync_problem : Icons.sync,
+                color: _pendingSyncCount > 0 ? Colors.orange : const Color(0xFF9333EA),
+                size: 18,
+              ),
               const SizedBox(width: 8),
-              const Text(
-                'Sign data / Sinkronisasi data',
-                style: TextStyle(fontSize: 14),
+              Text(
+                'Sinkronisasi data${_pendingSyncCount > 0 ? ' ($_pendingSyncCount)' : ''}',
+                style: const TextStyle(fontSize: 14),
               ),
             ],
           ),
         ),
       ],
     ).then((value) {
-      if (value != null) {
-        _handleMenuSelection(value);
-      }
+      if (value != null) _handleMenuSelection(value);
     });
   }
 
   void _handleMenuSelection(String value) {
     switch (value) {
       case 'work_time':
-        setState(() {
-          _workTimeMode = 'work_time';
-        });
+        setState(() => _workTimeMode = 'work_time');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mode diubah ke Work time'),
@@ -1438,9 +1289,7 @@ class _FaceAttendanceMultiUserPageState
         );
         break;
       case 'break_time':
-        setState(() {
-          _workTimeMode = 'break_time';
-        });
+        setState(() => _workTimeMode = 'break_time');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mode diubah ke Break time'),
@@ -1450,9 +1299,7 @@ class _FaceAttendanceMultiUserPageState
         );
         break;
       case 'auto':
-        setState(() {
-          _workTimeMode = null;
-        });
+        setState(() => _workTimeMode = null);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mode diubah ke Auto (berdasarkan jadwal)'),
@@ -1461,21 +1308,8 @@ class _FaceAttendanceMultiUserPageState
           ),
         );
         break;
-      case 'work_schedule':
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Work schedule mode - Coming soon'),
-            backgroundColor: Color(0xFF9333EA),
-          ),
-        );
-        break;
       case 'sign_data':
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Sign data / Sinkronisasi data - Coming soon'),
-            backgroundColor: Color(0xFF9333EA),
-          ),
-        );
+        _showSyncDialog();
         break;
     }
   }
