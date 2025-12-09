@@ -49,6 +49,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   bool _isOnline = true;
   int _pendingSyncCount = 0;
+  StreamSubscription<SyncStatus>? _syncStatusSub;
 
   int? get _organizationId => widget.memberData['organization_id'] as int?;
 
@@ -66,6 +67,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     _checkConnectivity();
     _loadPendingSyncCount();
     _syncService.startAutoSync();
+    _syncStatusSub = _syncService.syncStatusStream.listen((status) {
+      if (mounted) _loadPendingSyncCount();
+    });
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 100), () {
@@ -413,6 +417,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   void dispose() {
     _clockTimer?.cancel();
     _scheduleCheckTimer?.cancel();
+    _syncStatusSub?.cancel();
     _cardController.dispose();
     _cardFocusNode.dispose();
     _syncService.stopAutoSync();
@@ -677,18 +682,17 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       // Show popup if duplicate found (both online and offline)
       if (hasDuplicate) {
         if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: true,
-            builder: (context) => AlertDialog(
-              title: const Text('Peringatan'),
-              content: const Text('Data absennya udah ada'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK'),
-                ),
-              ],
+          final profile = memberInfo['user_profiles'] as Map<String, dynamic>? ?? {};
+          final name = userName ?? profile['display_name'] ?? '${profile['first_name'] ?? ''} ${profile['last_name'] ?? ''}'.trim();
+          final deptMap = memberInfo['departments'] as Map<String, dynamic>? ?? {};
+          final deptName = deptMap['name'] as String? ?? '-';
+          final mode = action == 'check_in' ? 'Check In' : 'Check Out';
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Duplikat: $name • $deptName • Mode $mode'),
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
             ),
           );
         }

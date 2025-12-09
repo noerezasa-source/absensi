@@ -20,20 +20,28 @@ class AttendanceSyncService {
   final SupabaseClient _supabase = Supabase.instance.client;
   
   Timer? _autoSyncTimer;
+  StreamSubscription<ConnectivityResult>? _connectivitySubscription;
   bool _isSyncing = false;
   
   final _syncStatusController = StreamController<SyncStatus>.broadcast();
   Stream<SyncStatus> get syncStatusStream => _syncStatusController.stream;
 
-  // Start auto sync every 15 seconds when online
-  void startAutoSync() {
-    _autoSyncTimer?.cancel();
-    _autoSyncTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
-      if (!_isSyncing) {
-        final isOnline = await _checkConnectivity();
-        if (isOnline) {
-          await syncPendingAttendances();
-        }
+  // Start auto sync every 30 seconds when online (keeps sending idle queue)
+  void startAutoSync({Duration interval = const Duration(seconds: 30)}) {
+    stopAutoSync();
+
+    // Periodic worker
+    _autoSyncTimer = Timer.periodic(interval, (_) async {
+      await _triggerSync(reason: 'timer');
+    });
+
+    // Fire once on startup
+    _triggerSync(reason: 'startup');
+
+    // Listen to connectivity so the queue ships immediately after back online
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((result) {
+      if (result != ConnectivityResult.none) {
+        _triggerSync(reason: 'connectivity');
       }
     });
   }
@@ -41,6 +49,8 @@ class AttendanceSyncService {
   // Stop auto sync
   void stopAutoSync() {
     _autoSyncTimer?.cancel();
+    _connectivitySubscription?.cancel();
+    _connectivitySubscription = null;
   }
 
   // Check internet connectivity
@@ -62,6 +72,25 @@ class AttendanceSyncService {
     }
   }
 
+  // Safe guard to prevent overlapping syncs and skip when queue empty
+  Future<void> _triggerSync({String reason = 'timer'}) async {
+    if (_isSyncing) return;
+
+    final pending = await _offlineDb.getUnsyncedCount();
+    if (pending == 0) {
+      return;
+    }
+
+    final isOnline = await _checkConnectivity();
+    if (!isOnline) {
+      debugPrint('⏸️ Sync skipped ($reason) - offline');
+      return;
+    }
+
+    debugPrint('🚚 Triggering sync ($reason), pending: $pending');
+    await syncPendingAttendances();
+  }
+
   // Sync all pending attendances
   Future<SyncResult> syncPendingAttendances({bool showProgress = false}) async {
     if (_isSyncing) {
@@ -74,6 +103,11 @@ class AttendanceSyncService {
     }
 
     _isSyncing = true;
+    // Always broadcast start so UI can refresh pending badge without manual action
+    _syncStatusController.add(SyncStatus(
+      isLoading: true,
+      message: 'Syncing pending attendances...',
+    ));
     
     if (showProgress) {
       _syncStatusController.add(SyncStatus(
@@ -153,11 +187,16 @@ class AttendanceSyncService {
           syncedCount++;
           debugPrint('✅ [${i + 1}/${unsyncedRecords.length}] Successfully synced record ID: ${record.id}');
           
-          // Mark as synced
+          // Mark as synced then remove from queue so antrean langsung kosong setelah terkirim
           await _offlineDb.updateSyncStatus(
             id: record.id!,
             isSynced: true,
+            syncError: null,
           );
+          final deleted = await _offlineDb.deleteAttendance(record.id!);
+          if (deleted == 0) {
+            debugPrint('⚠️ Failed to delete synced record ${record.id} (will be cleaned later)');
+          }
           
           if (showProgress) {
             _syncStatusController.add(SyncStatus(
@@ -256,6 +295,11 @@ class AttendanceSyncService {
       );
     } finally {
       _isSyncing = false;
+      // Broadcast completion so UI updates pending counter immediately
+      _syncStatusController.add(SyncStatus(
+        isLoading: false,
+        message: 'Sync finished',
+      ));
     }
   }
 
