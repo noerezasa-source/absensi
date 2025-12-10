@@ -324,6 +324,8 @@ class AttendanceSyncService {
           .maybeSingle();
       
       if (cardData == null) {
+        debugPrint('🗑️ Card ${record.cardNumber} not found in server, deleting offline record ${record.id}');
+        await _offlineDb.deleteAttendance(record.id!);
         throw Exception('RFID card not found: ${record.cardNumber}');
       }
       

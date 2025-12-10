@@ -451,6 +451,21 @@ class OfflineDatabaseService {
     }
   }
 
+  // Delete specific member from cache by card number
+  Future<void> deleteMemberFromCache(String cardNumber) async {
+    try {
+      final db = await database;
+      await db.delete(
+        'cached_members',
+        where: 'card_number = ?',
+        whereArgs: [cardNumber],
+      );
+      debugPrint('✅ Deleted member from cache: $cardNumber');
+    } catch (e) {
+      debugPrint('❌ Error deleting member from cache: $e');
+    }
+  }
+
   // Get all cached members for debugging
   Future<List<Map<String, dynamic>>> getAllCachedMembers() async {
     try {

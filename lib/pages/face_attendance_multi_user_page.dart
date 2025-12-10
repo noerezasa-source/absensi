@@ -67,7 +67,7 @@ class _FaceAttendanceMultiUserPageState
   String _attendanceMode = 'check_in';
 
   final Map<int, DateTime> _processedUserTimestamps = {};
-  final Duration _userCooldown = const Duration(seconds: 10);
+  final Duration _userCooldown = const Duration(seconds: 3);
 
   List<Map<String, dynamic>> _detectedFaces = [];
   bool _hasFacesInView = false;
@@ -128,6 +128,117 @@ class _FaceAttendanceMultiUserPageState
         _messageType = MessageType.idle;
       });
     }
+  }
+
+  void _showOverlayNotification(String message, {MessageType type = MessageType.warning}) {
+    if (!mounted) return;
+    
+    final overlay = Overlay.of(context);
+    late OverlayEntry overlayEntry;
+    
+    Color primaryColor = Colors.orange;
+    Color secondaryColor = Colors.orange.shade600;
+    IconData iconData = Icons.warning_rounded;
+    
+    switch (type) {
+      case MessageType.success:
+        primaryColor = Colors.green;
+        secondaryColor = Colors.green.shade600;
+        iconData = Icons.check_circle_rounded;
+        break;
+      case MessageType.error:
+        primaryColor = Colors.red;
+        secondaryColor = Colors.red.shade600;
+        iconData = Icons.error_rounded;
+        break;
+      case MessageType.info:
+        primaryColor = Colors.blue;
+        secondaryColor = Colors.blue.shade600;
+        iconData = Icons.info_rounded;
+        break;
+      default:
+        primaryColor = Colors.orange;
+        secondaryColor = Colors.orange.shade600;
+        iconData = Icons.warning_rounded;
+    }
+    
+    overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: 100,
+        left: 16,
+        right: 16,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [primaryColor.withOpacity(0.9), secondaryColor],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: primaryColor.withOpacity(0.3),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    iconData,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    overlayEntry.remove();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close,
+                      color: Colors.white.withOpacity(0.8),
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    
+    overlay.insert(overlayEntry);
+    
+    // Auto remove after 2 seconds
+    Future.delayed(const Duration(seconds: 2), () {
+      if (overlayEntry.mounted) {
+        overlayEntry.remove();
+      }
+    });
   }
 
   Future<void> _loadOrganizationData() async {
@@ -200,7 +311,7 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
@@ -248,7 +359,7 @@ class _FaceAttendanceMultiUserPageState
 
   void _startContinuousScan() {
     _continuousScanTimer = Timer.periodic(
-      const Duration(seconds: 2),
+      const Duration(milliseconds: 500),
       (timer) {
         if (!_isProcessing && _isCameraInitialized) {
           _scanForFaces();
@@ -288,6 +399,7 @@ class _FaceAttendanceMultiUserPageState
       final imageFile = File(image.path);
       
       final faces = await _faceService.detectFaces(image.path);
+      debugPrint('🔍 DETECTED FACES: ${faces.length} total faces');
 
       if (faces.isEmpty) {
         await imageFile.delete();
@@ -308,6 +420,11 @@ class _FaceAttendanceMultiUserPageState
         _hasFacesInView = true;
         _showMessage('${faces.length} wajah terdeteksi - Memproses...', MessageType.processing);
       }
+
+      debugPrint('📊 PROCESSING: Starting to process ${faces.length} faces');
+      int validUsers = 0;
+      int cooldownUsers = 0;
+      int unmatchedUsers = 0;
 
       final imageSize = await _getImageSize(imageFile);
       final imageWidth = imageSize?.width ??
@@ -330,12 +447,15 @@ class _FaceAttendanceMultiUserPageState
         };
       }).toList();
 
-      setState(() {
-        _detectedFaces = detectedFacesMap;
-      });
+      // Update UI once for all detected faces
+      if (_detectedFaces.length != detectedFacesMap.length) {
+        setState(() {
+          _detectedFaces = detectedFacesMap;
+        });
+      }
 
       final processedUsers = <Map<String, dynamic>>[];
-      final facesToProcess = faces.take(5).toList();
+      final facesToProcess = faces.toList();
 
       for (int i = 0; i < facesToProcess.length; i++) {
         try {
@@ -350,7 +470,10 @@ class _FaceAttendanceMultiUserPageState
             threshold: 0.75,
           );
 
+          debugPrint('👤 FACE $i: Best match result: ${bestMatch != null ? "FOUND" : "NOT FOUND"}');
+
           if (bestMatch == null) {
+            unmatchedUsers++;
             continue;
           }
 
@@ -361,13 +484,15 @@ class _FaceAttendanceMultiUserPageState
             final lastProcessTime = _processedUserTimestamps[userId]!;
             final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
             
+            debugPrint('⏰ USER $userName: Time since last process: ${timeSinceLastProcess.inSeconds}s, cooldown: ${_userCooldown.inSeconds}s');
+            
             if (timeSinceLastProcess < _userCooldown) {
               final remainingSeconds = (_userCooldown - timeSinceLastProcess).inSeconds;
-              _showMessage(
-                '$userName baru saja absen (tunggu ${remainingSeconds}s)',
-                MessageType.warning,
-                seconds: 3,
+              _showOverlayNotification(
+                '$userName cooldown ${remainingSeconds}s',
+                type: MessageType.warning,
               );
+              cooldownUsers++;
               continue;
             }
           }
@@ -378,22 +503,23 @@ class _FaceAttendanceMultiUserPageState
             'faceIndex': i,
             'template': capturedTemplate,
           });
+          validUsers++;
+          debugPrint('✅ USER $userName: Added to processing list (valid users: $validUsers)');
           
         } catch (e) {
-          debugPrint('Error processing face $i: $e');
+          debugPrint('❌ ERROR processing face $i: $e');
           continue;
         }
       }
+
+      debugPrint('📈 SUMMARY: Total faces: ${faces.length}, Valid users: $validUsers, Cooldown users: $cooldownUsers, Unmatched users: $unmatchedUsers');
+      debugPrint('🎯 PROCESSED USERS COUNT: ${processedUsers.length}');
 
       if (processedUsers.isNotEmpty) {
         await _processMultipleAttendances(processedUsers);
       } else {
         if (faces.isNotEmpty) {
-          _showMessage(
-            'Wajah tidak terdaftar atau dalam cooldown',
-            MessageType.warning,
-            seconds: 3,
-          );
+          // Tidak perlu notifikasi karena sudah ada petunjuk di box instruksi
         }
         
         await SystemSound.play(SystemSoundType.alert);
@@ -716,153 +842,29 @@ class _FaceAttendanceMultiUserPageState
         final shouldExit = await showDialog<bool>(
           context: context,
           barrierDismissible: false,
-          builder: (context) => Dialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.exit_to_app, color: Colors.red.shade600, size: 24),
+                const SizedBox(width: 8),
+                const Text('Keluar?'),
+              ],
             ),
-            elevation: 10,
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white,
-                    Colors.grey.shade50,
-                  ],
+            content: const Text('Yakin ingin keluar dari mode absensi?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Batal'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
                 ),
+                child: const Text('Keluar'),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Icon
-                  Container(
-                    width: 60,
-                    height: 60,
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.exit_to_app,
-                      color: Colors.red.shade600,
-                      size: 30,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Title
-                  const Text(
-                    'Keluar dari Mode Kiosk?',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  
-                  // Content
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.people,
-                              color: Colors.blue.shade600,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Total diproses: $_totalProcessedToday orang',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Yakin ingin keluar dari mode absensi wajah?',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade700,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  
-                  // Buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: () => Navigator.of(context).pop(false),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              side: BorderSide(color: Colors.grey.shade300),
-                            ),
-                          ),
-                          child: const Text(
-                            'Batal',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.of(context).pop(true),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            elevation: 2,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.exit_to_app, size: 16),
-                              const SizedBox(width: 6),
-                              const Text(
-                                'Keluar',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+            ],
           ),
         );
         
@@ -955,153 +957,29 @@ class _FaceAttendanceMultiUserPageState
                         final shouldExit = await showDialog<bool>(
                           context: context,
                           barrierDismissible: false,
-                          builder: (dialogContext) => Dialog(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
+                          builder: (dialogContext) => AlertDialog(
+                            title: Row(
+                              children: [
+                                Icon(Icons.exit_to_app, color: Colors.red.shade600, size: 24),
+                                const SizedBox(width: 8),
+                                const Text('Keluar?'),
+                              ],
                             ),
-                            elevation: 10,
-                            child: Container(
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(16),
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.white,
-                                    Colors.grey.shade50,
-                                  ],
+                            content: Text('Total diproses: $_totalProcessedToday orang\n\nYakin ingin keluar dari mode absensi?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(false),
+                                child: const Text('Batal'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
                                 ),
+                                child: const Text('Keluar'),
                               ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  // Icon
-                                  Container(
-                                    width: 60,
-                                    height: 60,
-                                    decoration: BoxDecoration(
-                                      color: Colors.red.shade50,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(
-                                      Icons.exit_to_app,
-                                      color: Colors.red.shade600,
-                                      size: 30,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  
-                                  // Title
-                                  const Text(
-                                    'Keluar dari Mode Kiosk?',
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black87,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  
-                                  // Content
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey.shade100,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Icon(
-                                              Icons.people,
-                                              color: Colors.blue.shade600,
-                                              size: 20,
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              'Total diproses: $_totalProcessedToday orang',
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w600,
-                                                color: Colors.black87,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          'Yakin ingin keluar dari mode absensi wajah?',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: Colors.grey.shade700,
-                                          ),
-                                          textAlign: TextAlign.center,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 20),
-                                  
-                                  // Buttons
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextButton(
-                                          onPressed: () => Navigator.of(dialogContext).pop(false),
-                                          style: TextButton.styleFrom(
-                                            padding: const EdgeInsets.symmetric(vertical: 12),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(8),
-                                              side: BorderSide(color: Colors.grey.shade300),
-                                            ),
-                                          ),
-                                          child: const Text(
-                                            'Batal',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: Colors.black87,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: ElevatedButton(
-                                          onPressed: () => Navigator.of(dialogContext).pop(true),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Colors.red,
-                                            foregroundColor: Colors.white,
-                                            padding: const EdgeInsets.symmetric(vertical: 12),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            elevation: 2,
-                                          ),
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              const Icon(Icons.exit_to_app, size: 16),
-                                              const SizedBox(width: 6),
-                                              const Text(
-                                                'Keluar',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
+                            ],
                           ),
                         );
                         

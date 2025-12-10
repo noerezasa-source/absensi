@@ -125,6 +125,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     }
   }
 
+
   Future<void> _loadOfflineAttendanceData() async {
     try {
       final offlineAttendances = await _offlineDb.getAllAttendances(limit: 100);
@@ -575,9 +576,30 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         debugPrint('🔍 Searching in offline cache...');
         cardData = await _offlineDb.findMemberByCardInCache(normalizedCardNumber, orgId);
         if (cardData != null) {
-          final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
-          final userName = _composeMemberName(memberInfo);
-          debugPrint('✅ Found member in cache: $userName');
+          // Additional validation: if online, verify card still exists in server
+          if (_isOnline) {
+            debugPrint('⚠️ Found in cache but online - verifying card still exists...');
+            final serverCardExists = await _supabase
+                .from('rfid_cards')
+                .select('id')
+                .eq('card_number', normalizedCardNumber)
+                .eq('is_active', true)
+                .maybeSingle();
+            
+            if (serverCardExists == null) {
+              debugPrint('🗑️ Card deleted from server, removing from cache and rejecting');
+              await _offlineDb.deleteMemberFromCache(normalizedCardNumber);
+              cardData = null;
+            } else {
+              final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
+              final userName = _composeMemberName(memberInfo);
+              debugPrint('✅ Found member in cache: $userName');
+            }
+          } else {
+            final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
+            final userName = _composeMemberName(memberInfo);
+            debugPrint('✅ Found member in cache: $userName');
+          }
         } else {
           debugPrint('❌ Card not found in cache');
         }
@@ -596,110 +618,103 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   }
 
   void _showDuplicateAlert(String name, String department, String mode) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withOpacity(0.5),
-      builder: (BuildContext context) {
-        // Auto dismiss after 3 seconds
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted && Navigator.of(context).canPop()) {
-            Navigator.of(context).pop();
-          }
-        });
-
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
+    // Show elegant overlay notification instead of snackbar
+    if (!mounted) return;
+    
+    final overlay = Overlay.of(context);
+    late OverlayEntry overlayEntry;
+    
+    overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: 100,
+        left: 16,
+        right: 16,
+        child: Material(
+          color: Colors.transparent,
           child: Container(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
+              gradient: LinearGradient(
+                colors: [Colors.orange.shade500, Colors.orange.shade600],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.orange.withOpacity(0.3),
                   blurRadius: 20,
-                  offset: const Offset(0, 10),
+                  offset: const Offset(0, 8),
                 ),
               ],
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
               children: [
-                // Warning Icon
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.orange.shade50,
+                    color: Colors.white.withOpacity(0.2),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
+                  child: const Icon(
                     Icons.warning_rounded,
-                    color: Colors.orange.shade600,
-                    size: 48,
+                    color: Colors.white,
+                    size: 24,
                   ),
                 ),
-                const SizedBox(height: 20),
-                
-                // Title
-                const Text(
-                  'Sudah Melakukan Absensi',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                
-                // Divider
-                Container(
-                  height: 1,
-                  color: Colors.grey.shade200,
-                ),
-                const SizedBox(height: 16),
-                
-                // Member Info
-                _buildInfoRow(Icons.person, 'Nama', name),
-                const SizedBox(height: 12),
-                _buildInfoRow(Icons.business, 'Departemen', department),
-                const SizedBox(height: 12),
-                _buildInfoRow(
-                  mode == 'Check In' ? Icons.login : Icons.logout,
-                  'Mode',
-                  mode,
-                  valueColor: mode == 'Check In' ? Colors.green : Colors.red,
-                ),
-                
-                const SizedBox(height: 20),
-                
-                // Auto close indicator
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.timer_outlined,
-                      size: 16,
-                      color: Colors.grey.shade600,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Tutup otomatis dalam 3 detik',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                        fontStyle: FontStyle.italic,
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Sudah Absen',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$name • $mode',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    overlayEntry.remove();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close,
+                      color: Colors.white.withOpacity(0.8),
+                      size: 20,
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
+    
+    overlay.insert(overlayEntry);
+    
+    // Auto remove after 3 seconds
+    Future.delayed(const Duration(seconds: 3), () {
+      if (overlayEntry.mounted) {
+        overlayEntry.remove();
+      }
+    });
   }
 
   Widget _buildInfoRow(IconData icon, String label, String value, {Color? valueColor}) {
