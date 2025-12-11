@@ -65,6 +65,9 @@ class _FaceAttendanceMultiUserPageState
   String? _workTimeMode;
   Map<String, dynamic>? _memberSchedule;
   String _attendanceMode = 'check_in';
+  Map<String, dynamic>? _selectedMode;
+  List<Map<String, dynamic>> _availableModes = [];
+  bool _isLoadingModes = false;
 
   final Map<int, DateTime> _processedUserTimestamps = {};
   final Duration _userCooldown = const Duration(seconds: 3);
@@ -748,6 +751,210 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
+  Future<void> _loadAvailableModes() async {
+    setState(() => _isLoadingModes = true);
+    try {
+      final modes = await _supabase
+          .from('shifts')
+          .select('id, code, name, start_time, end_time, description')
+          .eq('organization_id', widget.organizationId)
+          .eq('is_active', true)
+          .order('name', ascending: true);
+
+      if (mounted) {
+        setState(() {
+          _availableModes = List<Map<String, dynamic>>.from(modes);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading modes: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal memuat mode: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingModes = false);
+    }
+  }
+
+  Future<void> _openModePicker() async {
+    await _loadAvailableModes();
+    if (!mounted) return;
+
+    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.8,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(top: 12, bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      'Pilih Mode Shift',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_isLoadingModes)
+                    const Expanded(child: Center(child: CircularProgressIndicator()))
+                  else if (_availableModes.isEmpty)
+                    const Expanded(
+                      child: Center(
+                        child: Text(
+                          'Belum ada mode shift tersedia',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ListView.separated(
+                        controller: scrollController,
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        itemCount: _availableModes.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, index) {
+                          final mode = _availableModes[index];
+                          final start = mode['start_time'] as String?;
+                          final end = mode['end_time'] as String?;
+                          final isSelected = _selectedMode?['id'] == mode['id'];
+                          
+                          return ListTile(
+                            title: Text(
+                              mode['name'] ?? '-',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: start != null && end != null
+                                ? Text('$start - $end')
+                                : null,
+                            trailing: isSelected
+                                ? const Icon(Icons.check_circle, color: Colors.green)
+                                : null,
+                            onTap: () => Navigator.of(context).pop(mode),
+                          );
+                        },
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _selectedMode = selected;
+        _workTimeMode = selected['code'] as String? ?? selected['name'] as String?;
+      });
+      await _showInOutSelector();
+    }
+  }
+
+  Future<void> _showInOutSelector() async {
+    if (!mounted) return;
+    final pickedMode = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: () => Navigator.pop(context, 'check_in'),
+                        child: const Text('IN'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: () => Navigator.pop(context, 'check_out'),
+                        child: const Text('OUT'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (pickedMode != null && mounted) {
+      setState(() => _attendanceMode = pickedMode);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Mode ${pickedMode == 'check_in' ? 'IN' : 'OUT'} dipilih'
+            '${_selectedMode != null ? ' • ${_selectedMode!['name']}' : ''}',
+          ),
+          backgroundColor: const Color(0xFF9333EA),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   String _getWorkTimeMode() {
     if (_workTimeMode != null) return _workTimeMode!;
     return 'work_time';
@@ -1001,23 +1208,8 @@ class _FaceAttendanceMultiUserPageState
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(height: 6),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                _getWorkTimeMode() == 'break_time' ? 'Waktu Istirahat' : 'Waktu Kerja',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              _buildAttendanceModeToggle(),
-                            ],
-                          ),
                           if (!_isOnline) ...[
+                            const SizedBox(height: 6),
                             const SizedBox(height: 8),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1140,102 +1332,100 @@ class _FaceAttendanceMultiUserPageState
               ),
 
             // Attendance List - White Table (Always Visible)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                height: screenSize.height * 0.25,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(12),
-                    topRight: Radius.circular(12),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 10,
-                      offset: const Offset(0, -4),
+            DraggableScrollableSheet(
+              minChildSize: 0.2,
+              initialChildSize: 0.25,
+              maxChildSize: 0.6,
+              builder: (context, scrollController) {
+                return Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
                     ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    // Table Header
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade50,
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(12),
-                          topRight: Radius.circular(12),
-                        ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 10,
+                        offset: const Offset(0, -4),
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Data Absensi',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
-                            ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(12),
+                            topRight: Radius.circular(12),
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade600,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '$_totalProcessedToday',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 10,
+                        ),
+                        child: Column(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 4,
+                              margin: const EdgeInsets.only(bottom: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade300,
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Table Content
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        child: _recentAttendanceList.isEmpty
-                            ? Center(
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.people_outline,
-                                      size: 32,
-                                      color: Colors.grey.shade400,
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      'Belum ada data absensi',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade600,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      'Arahkan wajah ke kamera untuk memulai',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.grey.shade500,
-                                      ),
-                                    ),
-                                  ],
+                            const Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Data Absensi',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black87,
                                 ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: _recentAttendanceList.isEmpty
+                            ? ListView(
+                                controller: scrollController,
+                                padding: const EdgeInsets.all(16),
+                                children: [
+                                  Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.people_outline,
+                                        size: 32,
+                                        color: Colors.grey.shade400,
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'Belum ada data absensi',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade600,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        'Arahkan wajah ke kamera untuk memulai',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               )
                             : ListView.builder(
+                                controller: scrollController,
+                                padding: const EdgeInsets.all(8),
                                 itemCount: _recentAttendanceList.length,
                                 itemBuilder: (context, index) {
                                   final item = _recentAttendanceList[index];
@@ -1329,10 +1519,10 @@ class _FaceAttendanceMultiUserPageState
                                 },
                               ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
+                    ],
+                  ),
+                );
+              },
             ),
           ],
         ),
@@ -1448,6 +1638,31 @@ class _FaceAttendanceMultiUserPageState
   }
 
   void _showMenu(BuildContext context) {
-    // Menu is disabled - no options available
+    showMenu<String>(
+      context: context,
+      position: const RelativeRect.fromLTRB(80, 50, 0, 0),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'mode_picker',
+          child: Row(
+            children: [
+              Icon(Icons.tune, size: 18),
+              SizedBox(width: 8),
+              Text('Pilih mode'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value != null) _handleMenuSelection(value);
+    });
+  }
+
+  void _handleMenuSelection(String value) {
+    switch (value) {
+      case 'mode_picker':
+        _openModePicker();
+        break;
+    }
   }
 }

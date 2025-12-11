@@ -9,7 +9,6 @@ import '../services/offline_database_service.dart';
 import '../services/attendance_sync_service.dart';
 import '../helpers/timezone_helper.dart';
 import '../helpers/sound_helper.dart';
-import '../widgets/mode_confirmation_dialog.dart';
 import 'manual_check_page.dart';
 
 class RfidAttendancePage extends StatefulWidget {
@@ -41,6 +40,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   String _organizationTimezone = 'Asia/Jakarta';
   String _organizationName = '';
   String _attendanceMode = 'check_in';
+  Map<String, dynamic>? _selectedMode;
+  List<Map<String, dynamic>> _availableModes = [];
+  bool _isLoadingModes = false;
   DateTime _currentTime = DateTime.now();
   
   String? _workTimeMode;
@@ -287,6 +289,227 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     }
   }
 
+  Future<void> _loadAvailableModes() async {
+    if (_isLoadingModes) return;
+    final orgId = _organizationId;
+    if (orgId == null) return;
+
+    setState(() => _isLoadingModes = true);
+    try {
+      final modes = await _supabase
+          .from('shifts')
+          .select('id, code, name, start_time, end_time, description')
+          .eq('organization_id', orgId)
+          .eq('is_active', true)
+          .order('name', ascending: true);
+
+      setState(() {
+        _availableModes = List<Map<String, dynamic>>.from(modes);
+      });
+    } catch (e) {
+      debugPrint('Error loading modes: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal memuat mode: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingModes = false);
+    }
+  }
+
+  Future<void> _openModePicker() async {
+    await _loadAvailableModes();
+    if (!mounted) return;
+
+    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.8,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(top: 12, bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      'Pilih Mode Shift',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_isLoadingModes)
+                    const Expanded(child: Center(child: CircularProgressIndicator()))
+                  else if (_availableModes.isEmpty)
+                    const Expanded(
+                      child: Center(
+                        child: Text(
+                          'Belum ada mode shift tersedia',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ListView.separated(
+                        controller: scrollController,
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        itemCount: _availableModes.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, index) {
+                          final mode = _availableModes[index];
+                          final start = mode['start_time'] as String?;
+                          final end = mode['end_time'] as String?;
+                          final isSelected = _selectedMode?['id'] == mode['id'];
+                          
+                          return ListTile(
+                            title: Text(
+                              mode['name'] ?? '-',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: start != null && end != null
+                                ? Text('$start - $end')
+                                : null,
+                            trailing: isSelected
+                                ? const Icon(Icons.check_circle, color: Colors.green)
+                                : null,
+                            onTap: () => Navigator.of(context).pop(mode),
+                          );
+                        },
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _selectedMode = selected;
+        _workTimeMode = selected['code'] as String? ?? selected['name'] as String?;
+      });
+      await _showInOutSelector();
+    }
+  }
+
+  Future<void> _showInOutSelector() async {
+    if (!mounted) return;
+    final pickedMode = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: () => Navigator.pop(context, 'check_in'),
+                        child: const Text('IN'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: () => Navigator.pop(context, 'check_out'),
+                        child: const Text('OUT'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (pickedMode != null && mounted) {
+      setState(() => _attendanceMode = pickedMode);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Mode ${pickedMode == 'check_in' ? 'IN' : 'OUT'} dipilih'
+            '${_selectedMode != null ? ' • ${_selectedMode!['name']}' : ''}',
+          ),
+          backgroundColor: const Color(0xFF9333EA),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  String _currentModeLabel() {
+    final modeName = _selectedMode?['name'] as String?;
+    if (modeName == null || modeName.isEmpty) return 'Mode belum dipilih';
+    return 'Mode: $modeName';
+  }
+
+  String _attendanceModeLabel() {
+    return _attendanceMode == 'check_in' ? 'IN' : 'OUT';
+  }
+
+  String _modeButtonLabel() {
+    final modeName = _selectedMode?['name'] as String?;
+    return (modeName == null || modeName.isEmpty) ? 'Pilih mode' : modeName;
+  }
+
   String _getWorkTimeMode() {
     if (_workTimeMode != null) return _workTimeMode!;
     if (_memberSchedule == null) return 'work_time';
@@ -423,26 +646,6 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     _cardFocusNode.dispose();
     _syncService.stopAutoSync();
     super.dispose();
-  }
-
-  Future<void> _handleModeChange(String newMode) async {
-    if (_attendanceMode == newMode) return;
-
-    await ModeConfirmationDialog.show(
-      context: context,
-      currentMode: _attendanceMode,
-      newMode: newMode,
-      onConfirm: () {
-        setState(() => _attendanceMode = newMode);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Mode diubah ke ${newMode == 'check_in' ? 'Check In' : 'Check Out'}'),
-            backgroundColor: const Color(0xFF9333EA),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      },
-    );
   }
 
   Future<Map<String, dynamic>?> _findMemberByCard(String cardNumber) async {
@@ -1138,61 +1341,22 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  _getWorkTimeMode() == 'break_time' ? 'Waktu Istirahat' : 'Waktu Kerja',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    color: Color(0xFF9333EA),
-                    fontWeight: FontWeight.bold,
+                ElevatedButton(
+                  onPressed: _openModePicker,
+                  child: Text(
+                    _modeButtonLabel(),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF9333EA),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                 ),
-                const SizedBox(height: 12),
-                _buildAttendanceModeToggle(),
               ],
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildAttendanceModeToggle() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey.shade200,
-        borderRadius: BorderRadius.circular(25),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildToggleButton('In', 'check_in'),
-          _buildToggleButton('Out', 'check_out'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildToggleButton(String label, String mode) {
-    final isSelected = _attendanceMode == mode;
-    final buttonColor = mode == 'check_in' ? Colors.green : Colors.red;
-
-    return GestureDetector(
-      onTap: () => _handleModeChange(mode),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? buttonColor : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: isSelected ? Colors.white : Colors.grey.shade700,
-          ),
-        ),
       ),
     );
   }
@@ -1331,6 +1495,16 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       context: context,
       position: const RelativeRect.fromLTRB(80, 50, 0, 0),
       items: <PopupMenuEntry<String>>[
+        const PopupMenuItem<String>(
+          value: 'mode_picker',
+          child: Row(
+            children: [
+              Icon(Icons.tune, size: 18),
+              SizedBox(width: 8),
+              Text('Pilih mode'),
+            ],
+          ),
+        ),
         PopupMenuItem<String>(
           value: 'sign_data',
           child: Row(
@@ -1356,6 +1530,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   void _handleMenuSelection(String value) {
     switch (value) {
+      case 'mode_picker':
+        _openModePicker();
+        break;
       case 'sign_data':
         _showSyncDialog();
         break;
