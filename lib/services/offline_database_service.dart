@@ -1,4 +1,6 @@
 // lib/services/offline_database_service.dart
+import 'dart:convert';
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:flutter/foundation.dart';
@@ -23,7 +25,7 @@ class OfflineDatabaseService {
 
     return await openDatabase(
       path,
-      version: 2, // Increment version for migration
+      version: 4, // Increment version for migration
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -40,6 +42,8 @@ class OfflineDatabaseService {
         method TEXT NOT NULL,
         timestamp TEXT NOT NULL,
         photo_path TEXT,
+        captured_photo_base64 TEXT,
+        profile_photo_base64 TEXT,
         latitude REAL,
         longitude REAL,
         work_time_mode TEXT,
@@ -70,6 +74,7 @@ class OfflineDatabaseService {
         first_name TEXT,
         last_name TEXT,
         profile_photo_url TEXT,
+        profile_photo_base64 TEXT,
         department_id INTEGER,
         department_name TEXT,
         organization_id INTEGER NOT NULL,
@@ -102,6 +107,7 @@ class OfflineDatabaseService {
           first_name TEXT,
           last_name TEXT,
           profile_photo_url TEXT,
+          profile_photo_base64 TEXT,
           department_id INTEGER,
           department_name TEXT,
           organization_id INTEGER NOT NULL,
@@ -118,6 +124,40 @@ class OfflineDatabaseService {
       
       await db.execute('''
         CREATE INDEX IF NOT EXISTS idx_org_member ON cached_members(organization_member_id)
+      ''');
+    }
+
+    if (oldVersion < 3) {
+      // Add base64 fields for photos and captured faces
+      await db.execute('ALTER TABLE offline_attendances ADD COLUMN captured_photo_base64 TEXT');
+      await db.execute('ALTER TABLE offline_attendances ADD COLUMN profile_photo_base64 TEXT');
+      await db.execute('ALTER TABLE cached_members ADD COLUMN profile_photo_base64 TEXT');
+    }
+
+    if (oldVersion < 4) {
+      // Create biometric data table for offline face validation
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS biometric_data (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          organization_member_id INTEGER NOT NULL,
+          biometric_type TEXT NOT NULL,
+          template_data TEXT NOT NULL,
+          device_id INTEGER,
+          enrollment_date TEXT NOT NULL,
+          last_used_at TEXT,
+          is_active INTEGER DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(organization_member_id, biometric_type)
+        )
+      ''');
+
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_biometric_member ON biometric_data(organization_member_id)
+      ''');
+      
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_biometric_type ON biometric_data(biometric_type)
       ''');
     }
   }
@@ -144,11 +184,11 @@ class OfflineDatabaseService {
   Future<List<OfflineAttendance>> getUnsyncedAttendances() async {
     try {
       final db = await database;
-      // Only get RFID records, skip face_recognition_kiosk since it syncs directly now
+      // Include RFID and Face Recognition records
       final results = await db.query(
         'offline_attendances',
-        where: 'is_synced = ? AND method = ?',
-        whereArgs: [0, 'rfid_card_mobile'],
+        where: 'is_synced = ? AND method IN (?, ?)',
+        whereArgs: [0, 'rfid_card_mobile', 'face_recognition_kiosk'],
         orderBy: 'created_at ASC',
       );
       return results.map((map) => OfflineAttendance.fromMap(map)).toList();
@@ -255,10 +295,10 @@ class OfflineDatabaseService {
   Future<int> getUnsyncedCount() async {
     try {
       final db = await database;
-      // Only count RFID records, skip face_recognition_kiosk since it syncs directly now
+      // Count RFID and face recognition records
       final result = await db.rawQuery(
-        'SELECT COUNT(*) as count FROM offline_attendances WHERE is_synced = 0 AND method = ?',
-        ['rfid_card_mobile'],
+        'SELECT COUNT(*) as count FROM offline_attendances WHERE is_synced = 0 AND method IN (?, ?)',
+        ['rfid_card_mobile', 'face_recognition_kiosk'],
       );
       return Sqflite.firstIntValue(result) ?? 0;
     } catch (e) {
@@ -318,6 +358,10 @@ class OfflineDatabaseService {
       final firstName = profile?['first_name'] as String?;
       final lastName = profile?['last_name'] as String?;
       final profilePhotoUrl = profile?['profile_photo_url'] as String?;
+      String? profilePhotoBase64;
+      if (profilePhotoUrl != null && profilePhotoUrl.isNotEmpty) {
+        profilePhotoBase64 = await _downloadPhotoAsBase64(profilePhotoUrl);
+      }
 
       // Extract department data
       final department = memberInfo['departments'] as Map<String, dynamic>?;
@@ -331,6 +375,7 @@ class OfflineDatabaseService {
         'first_name': firstName,
         'last_name': lastName,
         'profile_photo_url': profilePhotoUrl,
+        'profile_photo_base64': profilePhotoBase64,
         'department_id': departmentId,
         'department_name': departmentName,
         'organization_id': memberInfo['organization_id'],
@@ -403,7 +448,10 @@ class OfflineDatabaseService {
             'display_name': cachedMember['display_name'],
             'first_name': cachedMember['first_name'],
             'last_name': cachedMember['last_name'],
-            'profile_photo_url': cachedMember['profile_photo_url'],
+            'profile_photo_url': cachedMember['profile_photo_base64'] != null && (cachedMember['profile_photo_base64'] as String).isNotEmpty
+                ? 'data:image/jpeg;base64,${cachedMember['profile_photo_base64']}'
+                : cachedMember['profile_photo_url'],
+            'profile_photo_base64': cachedMember['profile_photo_base64'],
           },
           'departments': cachedMember['department_name'] != null 
             ? {
@@ -415,6 +463,49 @@ class OfflineDatabaseService {
       };
     } catch (e) {
       debugPrint('❌ Error finding member in cache: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> findMemberByOrgIdInCache(int organizationMemberId) async {
+    try {
+      final db = await database;
+      final results = await db.query(
+        'cached_members',
+        where: 'organization_member_id = ? AND is_active = 1',
+        whereArgs: [organizationMemberId],
+        limit: 1,
+      );
+
+      if (results.isEmpty) return null;
+      final cachedMember = results.first;
+
+      return {
+        'organization_member_id': cachedMember['organization_member_id'],
+        'organization_members': {
+          'id': cachedMember['organization_member_id'],
+          'organization_id': cachedMember['organization_id'],
+          'user_id': cachedMember['user_id'],
+          'department_id': cachedMember['department_id'],
+          'user_profiles': {
+            'display_name': cachedMember['display_name'],
+            'first_name': cachedMember['first_name'],
+            'last_name': cachedMember['last_name'],
+            'profile_photo_url': cachedMember['profile_photo_base64'] != null && (cachedMember['profile_photo_base64'] as String).isNotEmpty
+                ? 'data:image/jpeg;base64,${cachedMember['profile_photo_base64']}'
+                : cachedMember['profile_photo_url'],
+            'profile_photo_base64': cachedMember['profile_photo_base64'],
+          },
+          'departments': cachedMember['department_name'] != null
+              ? {
+                  'id': cachedMember['department_id'],
+                  'name': cachedMember['department_name'],
+                }
+              : null,
+        }
+      };
+    } catch (e) {
+      debugPrint('❌ Error finding member by orgId in cache: $e');
       return null;
     }
   }
@@ -477,6 +568,26 @@ class OfflineDatabaseService {
     }
   }
 
+  Future<String?> _downloadPhotoAsBase64(String url) async {
+    try {
+      final uri = Uri.parse(url);
+      final client = HttpClient();
+      final request = await client.getUrl(uri);
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        debugPrint('⚠️ Failed to download photo ($url): HTTP ${response.statusCode}');
+        return null;
+      }
+
+      final bytes = await consolidateHttpClientResponseBytes(response);
+      return base64Encode(bytes);
+    } catch (e) {
+      debugPrint('⚠️ Could not download photo: $e');
+      return null;
+    }
+  }
+
   // Check for duplicate attendance on the same day
   Future<bool> hasDuplicateAttendance({
     required int organizationMemberId,
@@ -486,17 +597,16 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       
-      // Parse the timestamp to get the date
-      final results = await db.query(
+      final result = await db.query(
         'offline_attendances',
-        where: 'organization_member_id = ? AND event_type = ?',
-        whereArgs: [organizationMemberId, eventType],
+        where: 'organization_member_id = ? AND event_type = ? AND DATE(created_at) = ?',
+        whereArgs: [organizationMemberId, eventType, attendanceDate],
         orderBy: 'created_at DESC',
       );
 
       // Check if any record exists for the same date
-      for (final record in results) {
-        final timestamp = record['timestamp'] as String;
+      for (final record in result) {
+        final timestamp = record['created_at'] as String;
         final recordDate = DateTime.parse(timestamp).toUtc();
         final recordDateStr = '${recordDate.year}-${recordDate.month.toString().padLeft(2, '0')}-${recordDate.day.toString().padLeft(2, '0')}';
         
@@ -509,6 +619,199 @@ class OfflineDatabaseService {
     } catch (e) {
       debugPrint('Error checking duplicate attendance: $e');
       return false;
+    }
+  }
+
+  // Biometric data operations for offline face validation
+  Future<void> cacheBiometricData({
+    required int organizationMemberId,
+    required String biometricType,
+    required String templateData,
+    int? deviceId,
+  }) async {
+    try {
+      final db = await database;
+      final now = DateTime.now().toIso8601String();
+      
+      await db.insert(
+        'biometric_data',
+        {
+          'organization_member_id': organizationMemberId,
+          'biometric_type': biometricType,
+          'template_data': templateData,
+          'device_id': deviceId,
+          'enrollment_date': now,
+          'last_used_at': now,
+          'is_active': 1,
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      
+      debugPrint('✅ Cached biometric data for member $organizationMemberId, type: $biometricType');
+    } catch (e) {
+      debugPrint('❌ Error caching biometric data: $e');
+    }
+  }
+
+  Future<bool> hasBiometricData({
+    required int organizationMemberId,
+    required String biometricType,
+  }) async {
+    try {
+      final db = await database;
+      
+      final result = await db.query(
+        'biometric_data',
+        where: 'organization_member_id = ? AND biometric_type = ? AND is_active = 1',
+        whereArgs: [organizationMemberId, biometricType],
+      );
+      
+      return result.isNotEmpty;
+    } catch (e) {
+      debugPrint('Error checking biometric data: $e');
+      return false;
+    }
+  }
+
+  Future<String?> getBiometricTemplate({
+    required int organizationMemberId,
+    required String biometricType,
+  }) async {
+    try {
+      final db = await database;
+      
+      final result = await db.query(
+        'biometric_data',
+        where: 'organization_member_id = ? AND biometric_type = ? AND is_active = 1',
+        whereArgs: [organizationMemberId, biometricType],
+        limit: 1,
+      );
+      
+      if (result.isNotEmpty) {
+        return result.first['template_data'] as String?;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error getting biometric template: $e');
+      return null;
+    }
+  }
+
+  Future<void> updateBiometricLastUsed({
+    required int organizationMemberId,
+    required String biometricType,
+  }) async {
+    try {
+      final db = await database;
+      final now = DateTime.now().toIso8601String();
+      
+      await db.update(
+        'biometric_data',
+        {'last_used_at': now, 'updated_at': now},
+        where: 'organization_member_id = ? AND biometric_type = ?',
+        whereArgs: [organizationMemberId, biometricType],
+      );
+    } catch (e) {
+      debugPrint('Error updating biometric last used: $e');
+    }
+  }
+
+  Future<void> clearBiometricData() async {
+    try {
+      final db = await database;
+      await db.delete('biometric_data');
+      debugPrint('✅ Cleared all biometric data');
+    } catch (e) {
+      debugPrint('Error clearing biometric data: $e');
+    }
+  }
+
+  // ✅ NEW: Get all biometric data with user info from SQLite for offline use
+  Future<List<Map<String, dynamic>>> getAllBiometricDataWithUserInfo({
+    required int organizationId,
+  }) async {
+    try {
+      final db = await database;
+      
+      // Get all biometric data for the organization
+      // Join with cached_members to get user info (using direct columns, not JSON)
+      final biometricResults = await db.rawQuery('''
+        SELECT 
+          bd.id,
+          bd.organization_member_id,
+          bd.template_data,
+          bd.enrollment_date,
+          bd.last_used_at,
+          cm.id as cm_id,
+          cm.user_id,
+          cm.employee_id,
+          cm.department_id,
+          cm.first_name,
+          cm.last_name,
+          cm.display_name,
+          cm.profile_photo_url,
+          cm.department_name
+        FROM biometric_data bd
+        LEFT JOIN cached_members cm ON bd.organization_member_id = cm.organization_member_id
+          AND cm.organization_id = ?
+          AND cm.is_active = 1
+        WHERE bd.biometric_type = 'face_recognition'
+          AND bd.is_active = 1
+      ''', [organizationId]);
+
+      final results = <Map<String, dynamic>>[];
+      
+      for (var row in biometricResults) {
+        try {
+          // Build result in same format as Supabase query
+          final result = {
+            'id': row['id'],
+            'organization_member_id': row['organization_member_id'],
+            'template_data': row['template_data'],
+            'enrollment_date': row['enrollment_date'],
+            'last_used_at': row['last_used_at'],
+            'organization_members': row['cm_id'] != null ? {
+              'id': row['organization_member_id'],
+              'user_id': row['user_id'],
+              'organization_id': organizationId,
+              'employee_id': row['employee_id'],
+              'department_id': row['department_id'],
+              'user_profiles': row['first_name'] != null ? {
+                'id': row['cm_id'], // Use cached_members id as proxy
+                'first_name': row['first_name'],
+                'last_name': row['last_name'],
+                'display_name': row['display_name'] ?? '${row['first_name']} ${row['last_name']}',
+                'profile_photo_url': row['profile_photo_url'],
+              } : null,
+              'departments': row['department_name'] != null ? {
+                'id': row['department_id'],
+                'name': row['department_name'],
+              } : null,
+            } : {
+              'id': row['organization_member_id'],
+              'user_id': null,
+              'organization_id': organizationId,
+              'employee_id': null,
+              'department_id': null,
+              'user_profiles': null,
+              'departments': null,
+            },
+          };
+          
+          results.add(result);
+        } catch (e) {
+          debugPrint('Error parsing biometric row: $e');
+          continue;
+        }
+      }
+      
+      debugPrint('✅ Retrieved ${results.length} biometric templates from SQLite for offline use');
+      return results;
+    } catch (e) {
+      debugPrint('❌ Error getting biometric data from SQLite: $e');
+      return [];
     }
   }
 }

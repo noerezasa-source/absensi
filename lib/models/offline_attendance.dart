@@ -7,6 +7,8 @@ class OfflineAttendance {
   final String method; // 'rfid_card_mobile' or 'face_recognition_kiosk'
   final String timestamp; // ISO8601 string
   final String? photoPath; // Local file path
+  final String? capturedPhotoBase64; // Local photo in base64 for sync/offline UI
+  final String? profilePhotoBase64; // Cached profile photo base64 for offline UI
   final double? latitude;
   final double? longitude;
   final String? workTimeMode; // 'work_time' or 'break_time'
@@ -24,6 +26,8 @@ class OfflineAttendance {
     required this.method,
     required this.timestamp,
     this.photoPath,
+    this.capturedPhotoBase64,
+    this.profilePhotoBase64,
     this.latitude,
     this.longitude,
     this.workTimeMode,
@@ -43,6 +47,8 @@ class OfflineAttendance {
       'method': method,
       'timestamp': timestamp,
       'photo_path': photoPath,
+      'captured_photo_base64': capturedPhotoBase64,
+      'profile_photo_base64': profilePhotoBase64,
       'latitude': latitude,
       'longitude': longitude,
       'work_time_mode': workTimeMode,
@@ -63,6 +69,8 @@ class OfflineAttendance {
       method: map['method'] as String,
       timestamp: map['timestamp'] as String,
       photoPath: map['photo_path'] as String?,
+      capturedPhotoBase64: map['captured_photo_base64'] as String?,
+      profilePhotoBase64: map['profile_photo_base64'] as String?,
       latitude: map['latitude'] as double?,
       longitude: map['longitude'] as double?,
       workTimeMode: map['work_time_mode'] as String?,
@@ -82,6 +90,8 @@ class OfflineAttendance {
     String? method,
     String? timestamp,
     String? photoPath,
+    String? capturedPhotoBase64,
+    String? profilePhotoBase64,
     double? latitude,
     double? longitude,
     String? workTimeMode,
@@ -99,6 +109,8 @@ class OfflineAttendance {
       method: method ?? this.method,
       timestamp: timestamp ?? this.timestamp,
       photoPath: photoPath ?? this.photoPath,
+      capturedPhotoBase64: capturedPhotoBase64 ?? this.capturedPhotoBase64,
+      profilePhotoBase64: profilePhotoBase64 ?? this.profilePhotoBase64,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       workTimeMode: workTimeMode ?? this.workTimeMode,

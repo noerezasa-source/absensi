@@ -12,14 +12,14 @@ class FaceRecognitionTFLiteService {
   Interpreter? _interpreter;
   bool _isInitialized = false;
 
-  // Model config
-  static const int inputSize = 112;
-  static const int embeddingSize = 192;
+  // Model config - MobileFaceNet (optimized for mobile/offline)
+  int inputSize = 112; // MobileFaceNet uses 112x112
+  int embeddingSize = 192; // MobileFaceNet produces 192-dim embeddings
   
   // ✅ IMPROVED: Stricter quality thresholds
-  static const double minFaceQualityScore = 0.6;
-  static const double minEyeOpenProbability = 0.4;
-  static const double maxHeadRotation = 20.0;
+  static const double minFaceQualityScore = 0.7;
+  static const double minEyeOpenProbability = 0.5;
+  static const double maxHeadRotation = 15.0;
   
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -29,7 +29,7 @@ class FaceRecognitionTFLiteService {
         enableClassification: true,
         enableTracking: false,
         performanceMode: FaceDetectorMode.accurate,
-        minFaceSize: 0.12, // ✅ Slightly increased for better quality
+        minFaceSize: 0.15, // ✅ Increased for better quality
       ),
     );
   }
@@ -50,9 +50,17 @@ class FaceRecognitionTFLiteService {
       final inputShape = _interpreter!.getInputTensor(0).shape;
       final outputShape = _interpreter!.getOutputTensor(0).shape;
       
-      debugPrint('Input shape: $inputShape');
-      debugPrint('Output shape: $outputShape');
-      debugPrint('✅ TFLite model loaded successfully');
+      // Update actual model dimensions
+      if (inputShape.length >= 3) {
+        inputSize = inputShape[1]; // Typically [1, 160, 160, 3] or [1, 112, 112, 3]
+      }
+      if (outputShape.length >= 2) {
+        embeddingSize = outputShape[1]; // Typically [1, 512] or [1, 192]
+      }
+      
+      debugPrint('Input shape: $inputShape (using inputSize: $inputSize)');
+      debugPrint('Output shape: $outputShape (using embeddingSize: $embeddingSize)');
+      debugPrint('✅ TFLite model (mobile_face_net.tflite) loaded successfully');
       
       _isInitialized = true;
     } catch (e) {
@@ -92,7 +100,7 @@ class FaceRecognitionTFLiteService {
   }
 
   // ✅ IMPROVED: Filter faces by quality before processing
-  bool isValidFaceForRecognition(Face face) {
+  bool isValidFaceForRecognition(Face face, {bool allowSidePose = false}) {
     // Check eye openness
     final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
     final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
@@ -101,12 +109,27 @@ class FaceRecognitionTFLiteService {
       return false;
     }
     
-    // Check head rotation
-    final headY = (face.headEulerAngleY ?? 0.0).abs();
-    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
-    if (headY > maxHeadRotation || headZ > maxHeadRotation) {
-      debugPrint('❌ Face rejected: Head rotation too large');
-      return false;
+    // Check head rotation (skip for side poses in multi-template registration)
+    if (!allowSidePose) {
+      final headY = (face.headEulerAngleY ?? 0.0).abs();
+      final headZ = (face.headEulerAngleZ ?? 0.0).abs();
+      if (headY > maxHeadRotation || headZ > maxHeadRotation) {
+        debugPrint('❌ Face rejected: Head rotation too large');
+        return false;
+      }
+    } else {
+      // For side poses, only check Z rotation (no tilting), allow Y rotation up to 50 degrees
+      final headZ = (face.headEulerAngleZ ?? 0.0).abs();
+      final headY = (face.headEulerAngleY ?? 0.0).abs();
+      if (headZ > maxHeadRotation) {
+        debugPrint('❌ Face rejected: Head tilt too large (Z: ${headZ.toStringAsFixed(1)}°)');
+        return false;
+      }
+      if (headY > 50.0) {
+        debugPrint('❌ Face rejected: Head rotation too extreme (Y: ${headY.toStringAsFixed(1)}°)');
+        return false;
+      }
+      debugPrint('✅ Side pose accepted: headY=${headY.toStringAsFixed(1)}°, headZ=${headZ.toStringAsFixed(1)}°');
     }
     
     // Check face size
@@ -116,9 +139,10 @@ class FaceRecognitionTFLiteService {
       return false;
     }
     
-    // Calculate overall quality
+    // Calculate overall quality (relaxed for side poses)
     final qualityScore = calculateFaceQuality(face);
-    if (qualityScore < minFaceQualityScore) {
+    final minQuality = allowSidePose ? (minFaceQualityScore * 0.85) : minFaceQualityScore;
+    if (qualityScore < minQuality) {
       debugPrint('❌ Face rejected: Quality score too low (${qualityScore.toStringAsFixed(2)})');
       return false;
     }
@@ -127,7 +151,10 @@ class FaceRecognitionTFLiteService {
     return true;
   }
 
-  Future<Map<String, dynamic>> extractFaceFeatures(String imagePath) async {
+  Future<Map<String, dynamic>> extractFaceFeatures(
+    String imagePath, {
+    bool allowSidePose = false,
+  }) async {
     if (!_isInitialized) {
       await initialize();
     }
@@ -144,9 +171,9 @@ class FaceRecognitionTFLiteService {
 
     final face = faces.first;
     
-    // ✅ IMPROVED: Validate face quality
-    if (!isValidFaceForRecognition(face)) {
-      throw Exception('Face quality insufficient. Please ensure good lighting and look straight at camera');
+    // ✅ IMPROVED: Validate face quality (allow side poses for multi-template)
+    if (!isValidFaceForRecognition(face, allowSidePose: allowSidePose)) {
+      throw Exception('Face quality insufficient. Please ensure good lighting${allowSidePose ? '' : ' and look straight at camera'}');
     }
 
     final imageFile = File(imagePath);
@@ -158,7 +185,8 @@ class FaceRecognitionTFLiteService {
     }
 
     final enhancedImage = _enhanceImageForLowLight(image);
-    final faceImage = _cropFaceWithMargin(enhancedImage, face.boundingBox);
+    final alignedImage = _alignFaceByEyes(enhancedImage, face);
+    final faceImage = _cropFaceWithMargin(alignedImage, face.boundingBox);
     final embedding = await _getEmbedding(faceImage);
 
     return _buildTemplate(face, embedding);
@@ -166,14 +194,15 @@ class FaceRecognitionTFLiteService {
 
   Future<Map<String, dynamic>> buildTemplateFromFace(
     Face face,
-    String imagePath,
-  ) async {
+    String imagePath, {
+    bool allowSidePose = false,
+  }) async {
     if (!_isInitialized) {
       await initialize();
     }
 
     // ✅ IMPROVED: Validate face quality before processing
-    if (!isValidFaceForRecognition(face)) {
+    if (!isValidFaceForRecognition(face, allowSidePose: allowSidePose)) {
       throw Exception('Face quality insufficient');
     }
 
@@ -186,56 +215,58 @@ class FaceRecognitionTFLiteService {
     }
 
     final enhancedImage = _enhanceImageForLowLight(image);
-    final faceImage = _cropFaceWithMargin(enhancedImage, face.boundingBox);
+    final alignedImage = _alignFaceByEyes(enhancedImage, face);
+    final faceImage = _cropFaceWithMargin(alignedImage, face.boundingBox);
     final embedding = await _getEmbedding(faceImage);
 
     return _buildTemplate(face, embedding);
   }
 
-  /// Enhance image for low light conditions
+  /// Enhance image for better recognition quality (consistent with registration)
   img.Image _enhanceImageForLowLight(img.Image image) {
-    int totalBrightness = 0;
-    int pixelCount = 0;
-    
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
-        final pixel = image.getPixel(x, y);
-        final brightness = (0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b).toInt();
-        totalBrightness += brightness;
-        pixelCount++;
-      }
-    }
-    
-    final avgBrightness = totalBrightness / pixelCount;
-    
-    // ✅ IMPROVED: More aggressive enhancement for consistency
-    if (avgBrightness < 100) {
-      debugPrint('Low light detected (brightness: ${avgBrightness.toStringAsFixed(1)}), enhancing...');
-      
-      final brightnessFactor = 1.4 + ((100 - avgBrightness) / 180);
-      final contrastFactor = 1.25 + ((100 - avgBrightness) / 250);
-      
-      return img.adjustColor(
-        image,
-        brightness: brightnessFactor,
-        contrast: contrastFactor,
-        saturation: 1.15,
-      );
-    } else if (avgBrightness < 130) {
-      debugPrint('Medium-low light (brightness: ${avgBrightness.toStringAsFixed(1)}), slight enhancement...');
-      
-      return img.adjustColor(
-        image,
-        brightness: 1.2,
-        contrast: 1.15,
-        saturation: 1.05,
-      );
-    }
-    
+    // ✅ IMPROVED: Apply consistent enhancement for all images (same as registration)
+    // This ensures attendance photos have same quality as registration photos
     return img.adjustColor(
       image,
-      contrast: 1.08,
+      brightness: 1.1,   // Slight brightness boost for better visibility
+      contrast: 1.15,    // Increased contrast for better feature extraction
+      saturation: 1.05,  // Slight saturation boost
+      gamma: 1.1,        // Gamma correction for better exposure balance
     );
+  }
+
+  /// Align face by rotating to make eyes horizontal
+  /// This improves recognition accuracy by ensuring consistent face orientation
+  img.Image _alignFaceByEyes(img.Image image, Face face) {
+    try {
+      final leftEye = face.landmarks[FaceLandmarkType.leftEye];
+      final rightEye = face.landmarks[FaceLandmarkType.rightEye];
+      
+      if (leftEye == null || rightEye == null) {
+        return image; // Can't align without eye landmarks
+      }
+      
+      // Calculate angle between eyes
+      final leftEyePos = leftEye.position;
+      final rightEyePos = rightEye.position;
+      
+      final dx = rightEyePos.x - leftEyePos.x;
+      final dy = rightEyePos.y - leftEyePos.y;
+      
+      // Only rotate if angle is significant (>2 degrees)
+      final angleRad = atan2(dy, dx);
+      final angleDeg = angleRad * 180 / pi;
+      
+      if (angleDeg.abs() > 2.0) {
+        // Rotate image to align eyes horizontally
+        return img.copyRotate(image, angle: -angleDeg, interpolation: img.Interpolation.cubic);
+      }
+      
+      return image;
+    } catch (e) {
+      debugPrint('⚠️ Face alignment failed: $e');
+      return image; // Return original if alignment fails
+    }
   }
 
   img.Image _cropFaceWithMargin(img.Image image, Rect boundingBox) {
@@ -342,7 +373,21 @@ class FaceRecognitionTFLiteService {
     };
   }
 
-  // ✅ IMPROVED: More robust comparison with quality weighting
+  // ✅ NEW: Build multi-template with 3 poses (front, left, right)
+  Map<String, dynamic> buildMultiTemplate(List<Map<String, dynamic>> templates) {
+    if (templates.length != 3) {
+      throw Exception('Multi-template requires exactly 3 templates (front, left, right)');
+    }
+
+    return {
+      'version': 4, // Version 4 for multi-template
+      'templates': templates,
+      'templateCount': templates.length,
+      'embeddingSize': templates.first['embeddingSize'] ?? 192,
+    };
+  }
+
+  // ✅ IMPROVED: More robust comparison with quality weighting and better normalization
   double compareFaces(
     Map<String, dynamic> template1,
     Map<String, dynamic> template2,
@@ -359,27 +404,23 @@ class FaceRecognitionTFLiteService {
       return 0.0;
     }
 
-    // Calculate cosine similarity
+    // Calculate cosine similarity (embeddings are already normalized)
     double dotProduct = 0.0;
     for (int i = 0; i < embedding1.length; i++) {
       dotProduct += embedding1[i] * embedding2[i];
     }
 
-    // ✅ IMPROVED: Use raw cosine similarity (already normalized embeddings)
+    // Cosine similarity is already in range [-1, 1], normalize to [0, 1]
     final cosineSimilarity = dotProduct.clamp(-1.0, 1.0);
-    
-    // Convert from [-1, 1] to [0, 1]
     final similarity = (cosineSimilarity + 1.0) / 2.0;
     
-    // ✅ NEW: Apply quality weighting
-    final quality1 = (template1['qualityScore'] as num?)?.toDouble() ?? 0.8;
-    final quality2 = (template2['qualityScore'] as num?)?.toDouble() ?? 0.8;
-    final avgQuality = (quality1 + quality2) / 2.0;
+    // ✅ IMPROVED: Quality weighting with better boost for high quality matches
+    // ✅ REMOVED QUALITY BOOST: Quality boost was causing false positives
+    // Use raw similarity to prevent multiple people matching with high scores
+    // Quality is still used for validation, but not for boosting similarity
+    // This ensures only the truly best match is selected
     
-    // Boost similarity if both faces are high quality
-    final weightedSimilarity = similarity * (0.7 + avgQuality * 0.3);
-    
-    return weightedSimilarity.clamp(0.0, 1.0);
+    return similarity;
   }
 
   Future<bool> validatePhotoQuality(String imagePath) async {
@@ -397,7 +438,7 @@ class FaceRecognitionTFLiteService {
       final face = faces.first;
 
       // ✅ Use the new validation method
-      if (!isValidFaceForRecognition(face)) {
+      if (!isValidFaceForRecognition(face, allowSidePose: false)) {
         final qualityScore = calculateFaceQuality(face);
         throw Exception('Face quality insufficient (score: ${qualityScore.toStringAsFixed(2)})');
       }

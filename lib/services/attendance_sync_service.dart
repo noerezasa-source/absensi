@@ -1,5 +1,6 @@
 // lib/services/attendance_sync_service.dart
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -352,9 +353,13 @@ class AttendanceSyncService {
         }
       }
     } 
-    // For Face Recognition: Use stored member ID and update member data
-    else if (record.organizationMemberId != null) {
-      memberId = record.organizationMemberId!;
+    // For Face Recognition: Use stored member ID (or derive from FACE_{id}) and update member data
+    else if (record.method == 'face_recognition_kiosk') {
+      if (record.organizationMemberId != null) {
+        memberId = record.organizationMemberId!;
+      } else {
+        memberId = _extractMemberIdFromFaceCard(record.cardNumber);
+      }
       
       debugPrint('🔄 Syncing face recognition attendance for member ID: $memberId');
       
@@ -418,12 +423,30 @@ class AttendanceSyncService {
       throw Exception('Cannot determine organization member ID. Method: ${record.method}, CardNumber: ${record.cardNumber}');
     }
 
-    // Upload photo if exists
+    // Upload photo if exists (use saved file or base64 fallback)
     String photoUrl = '';
-    if (record.photoPath != null && record.photoPath!.isNotEmpty) {
-      try {
-        final photoFile = File(record.photoPath!);
-        if (await photoFile.exists()) {
+    File? tempPhotoFile;
+    try {
+      File? photoFile;
+      if (record.photoPath != null && record.photoPath!.isNotEmpty) {
+        final file = File(record.photoPath!);
+        if (await file.exists()) {
+          photoFile = file;
+        }
+      }
+
+      // Fallback to captured base64 if no file available
+      if (photoFile == null && record.capturedPhotoBase64?.isNotEmpty == true) {
+        final bytes = base64Decode(record.capturedPhotoBase64!);
+        final tempPath = '${Directory.systemTemp.path}/offline_face_${record.id ?? DateTime.now().millisecondsSinceEpoch}.jpg';
+        tempPhotoFile = File(tempPath);
+        await tempPhotoFile.writeAsBytes(bytes, flush: true);
+        photoFile = tempPhotoFile;
+        debugPrint('🗂️ Recreated photo from base64 for member $memberId at $tempPath');
+      }
+
+      if (photoFile != null) {
+        try {
           debugPrint('📸 Uploading photo for member $memberId...');
           photoUrl = await _storageService.uploadAttendancePhoto(
             photoFile,
@@ -431,15 +454,19 @@ class AttendanceSyncService {
             record.eventType,
           );
           debugPrint('✅ Photo uploaded successfully: $photoUrl');
-        } else {
-          debugPrint('⚠️ Photo file does not exist: ${record.photoPath}');
+        } catch (e) {
+          debugPrint('⚠️ Failed to upload photo (continuing without photo): $e');
         }
-      } catch (e) {
-        debugPrint('⚠️ Failed to upload photo (continuing without photo): $e');
-        // Continue without photo - attendance can still be recorded
+      } else {
+        debugPrint('ℹ️ No photo available for member $memberId');
       }
-    } else {
-      debugPrint('ℹ️ No photo path provided for member $memberId');
+    } finally {
+      // Clean up temporary file created from base64
+      if (tempPhotoFile != null) {
+        try {
+          await tempPhotoFile.delete();
+        } catch (_) {}
+      }
     }
 
     // Prepare location data
@@ -531,6 +558,18 @@ class AttendanceSyncService {
   void dispose() {
     stopAutoSync();
     _syncStatusController.close();
+  }
+
+  int _extractMemberIdFromFaceCard(String cardNumber) {
+    try {
+      if (cardNumber.startsWith('FACE_')) {
+        final idPart = cardNumber.replaceFirst('FACE_', '');
+        return int.parse(idPart);
+      }
+    } catch (_) {
+      // fallthrough
+    }
+    throw Exception('Invalid face card number: $cardNumber');
   }
 }
 

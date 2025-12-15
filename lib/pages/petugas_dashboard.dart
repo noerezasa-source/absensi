@@ -252,6 +252,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       for (final activity in activities) {
         final member = activity['organization_members'] as Map<String, dynamic>? ?? {};
         final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
+        final department = member['departments'] as Map<String, dynamic>? ?? {};
         final record = activity['attendance_records'] as Map<String, dynamic>? ?? {};
 
         final memberId = member['id']?.toString() ?? activity['organization_member_id']?.toString() ?? '';
@@ -272,6 +273,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           return {
             'name': _composeUserName(profile),
             'photoUrl': _resolveProfilePhotoUrl(profile['profile_photo_url'] as String?),
+            'department': department['name'] as String? ?? 'No Department',
             'status': record['status'] as String?,
             'checkInTime': null,
             'checkOutTime': null,
@@ -1087,13 +1089,16 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     final checkInMethod = activity['checkInMethod'] as String?;
     final checkOutMethod = activity['checkOutMethod'] as String?;
 
+    // Get department info from the activity data
+    final department = activity['department'] as String? ?? 'No Department';
+
     final ImageProvider avatarImage = (photoUrl != null && photoUrl.isNotEmpty)
         ? NetworkImage(photoUrl)
         : const AssetImage('images/logo.png');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -1110,11 +1115,29 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 20,
-                backgroundImage: avatarImage,
+              // Profile Photo - smaller
+              Container(
+                width: 45,
+                height: 45,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF9333EA), width: 2),
+                  color: Colors.grey.shade100,
+                ),
+                child: ClipOval(
+                  child: photoUrl != null && photoUrl.isNotEmpty
+                      ? Image.network(
+                          photoUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Icon(Icons.person, size: 22, color: Colors.grey);
+                          },
+                        )
+                      : const Icon(Icons.person, size: 22, color: Colors.grey),
+                ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
+              // User Info with Department
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1122,9 +1145,18 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                     Text(
                       name,
                       style: const TextStyle(
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      department,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -1132,7 +1164,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                       _formatEventTime(lastUpdated),
                       style: TextStyle(
                         fontSize: 10,
-                        color: Colors.grey.shade600,
+                        color: Colors.grey.shade500,
                       ),
                     ),
                   ],
@@ -1140,26 +1172,73 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          // Status Information without icons
           Row(
             children: [
               Expanded(
-                child: _buildStatusChipWithMethod(
-                  'CHECK IN',
-                  _formatShortTime(checkInTime),
-                  checkInMethod,
-                  Colors.green.shade800,
-                  Colors.green.shade50,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Check In',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.green.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _formatShortTime(checkInTime),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green.shade800,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 8),
               Expanded(
-                child: _buildStatusChipWithMethod(
-                  'CHECK OUT',
-                  _formatShortTime(checkOutTime),
-                  checkOutMethod,
-                  Colors.blue.shade800,
-                  Colors.blue.shade50,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Check Out',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.blue.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _formatShortTime(checkOutTime),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue.shade800,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],

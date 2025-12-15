@@ -46,6 +46,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
   bool _isEditMode = false;
   bool _isSaving = false;
   bool _rfidMode = false;
+  String _attendanceMode = 'face'; // Default to face
   int _currentNavIndex = 3; // Profile is index 3
   Map<String, dynamic>? _userProfile;
   Map<String, dynamic>? _organization;
@@ -228,8 +229,11 @@ void _handleNavigation(int index) {
       if (mounted) {
         setState(() {
           _rfidMode = savedMode;
+          // Set attendance mode based on RFID mode
+          _attendanceMode = _rfidMode ? 'rfid' : 'face';
         });
         debugPrint('RFID mode loaded: $_rfidMode for org $organizationId');
+        debugPrint('Attendance mode set to: $_attendanceMode');
       }
     } catch (e) {
       debugPrint('Error loading RFID mode: $e');
@@ -1044,34 +1048,42 @@ void _handleNavigation(int index) {
 
                         const SizedBox(height: 16),
 
-                        // Attendance Mode (RFID)
+                        // Attendance Mode Selection
                         _buildSectionCard(
                           title: 'Attendance Mode',
-                          icon: Icons.nfc,
+                          icon: Icons.fingerprint,
                           children: [
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text(
-                                'Use RFID for Attendance',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.black87,
+                            DropdownButtonFormField<String>(
+                              value: _attendanceMode,
+                              decoration: const InputDecoration(
+                                labelText: 'Select Mode',
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                              items: const [
+                                DropdownMenuItem(value: 'face', child: Text('Face Recognition')),
+                                DropdownMenuItem(value: 'rfid', child: Text('RFID Card')),
+                                DropdownMenuItem(value: 'finger', enabled: false, child: Text('Fingerprint (Soon)')),
+                              ],
+                              onChanged: (value) {
+                                if (value != null && value != 'finger') {
+                                  setState(() {
+                                    _attendanceMode = value;
+                                    _rfidMode = value == 'rfid';
+                                  });
+                                  _saveRfidMode(_rfidMode);
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            if (_attendanceMode == 'rfid' && _memberCardNumber != null)
+                              Text(
+                                'Card: $_memberCardNumber',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.green,
                                 ),
                               ),
-                              subtitle: Text(
-                                _memberCardNumber == null
-                                    ? 'No active RFID card found for this member'
-                                    : 'RFID Card: $_memberCardNumber',
-                              ),
-                              value: _rfidMode,
-                              onChanged: (value) {
-                                setState(() {
-                                  _rfidMode = value;
-                                });
-                                _saveRfidMode(value); // Save to SharedPreferences
-                              },
-                              activeColor: primaryColor,
-                            ),
                             const SizedBox(height: 12),
                             if (_isLoadingAttendance)
                               const Center(
@@ -1101,19 +1113,9 @@ void _handleNavigation(int index) {
                                     _formatTime(_todayAttendance!.actualCheckOut),
                                   ),
                                 ],
-                              )
-                            else
-                              const Text(
-                                'No attendance record for today',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.grey,
-                                ),
                               ),
                           ],
                         ),
-
-                        const SizedBox(height: 16),
 
                         // Account Settings Card
                         _buildSectionCard(

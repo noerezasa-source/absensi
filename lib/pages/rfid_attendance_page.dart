@@ -87,6 +87,13 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           _loadOfflineAttendanceData();
         }
       });
+      
+      // Trigger initial mode selection after page loads
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _loadAvailableModes();
+        }
+      });
     });
   }
 
@@ -225,8 +232,67 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   void _startScheduleCheck() {
     _scheduleCheckTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
-      if (mounted && _workTimeMode == null) setState(() {});
+      if (mounted) {
+        _updateModeBasedOnSchedule();
+        if (_workTimeMode == null) setState(() {});
+      }
     });
+  }
+
+  void _updateModeBasedOnSchedule() {
+    if (_memberSchedule == null || _availableModes.isEmpty) return;
+    
+    final newWorkTimeMode = _getWorkTimeMode();
+    if (newWorkTimeMode != _workTimeMode) {
+      setState(() {
+        _workTimeMode = newWorkTimeMode;
+        // Auto-select mode based on work time mode
+        _autoSelectModeFromWorkTimeMode();
+      });
+    }
+    
+    // Also check if we need to auto-select mode even if work time mode hasn't changed
+    // This handles the case when modes are loaded after schedule is set
+    if (_selectedMode == null && _availableModes.isNotEmpty) {
+      _autoSelectModeFromWorkTimeMode();
+    }
+  }
+
+  void _autoSelectModeFromWorkTimeMode() {
+    if (_workTimeMode == null || _availableModes.isEmpty) return;
+    
+    // Find matching mode based on work time mode
+    Map<String, dynamic>? matchingMode;
+    for (var mode in _availableModes) {
+      final modeCode = mode['code'] as String? ?? mode['name'] as String? ?? '';
+      final modeName = mode['name'] as String? ?? '';
+      
+      if (_workTimeMode == 'break_time' && 
+          (modeCode.toLowerCase().contains('break') || modeName.toLowerCase().contains('break'))) {
+        matchingMode = mode;
+        break;
+      } else if (_workTimeMode == 'work_time' && 
+          (modeCode.toLowerCase().contains('work') || modeName.toLowerCase().contains('kerja'))) {
+        matchingMode = mode;
+        break;
+      } else if (_workTimeMode == 'overtime' && 
+          (modeCode.toLowerCase().contains('overtime') || modeName.toLowerCase().contains('lembur'))) {
+        matchingMode = mode;
+        break;
+      }
+    }
+    
+    // If no specific match, select the first available mode
+    if (matchingMode == null && _availableModes.isNotEmpty) {
+      matchingMode = _availableModes.first;
+    }
+    
+    if (matchingMode != null && _selectedMode?['id'] != matchingMode['id']) {
+      setState(() {
+        _selectedMode = matchingMode;
+        _workTimeMode = matchingMode?['code'] as String? ?? matchingMode?['name'] as String? ?? _workTimeMode;
+      });
+    }
   }
 
   Future<void> _loadMemberSchedule() async {
@@ -246,7 +312,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           .maybeSingle();
 
       if (schedule != null) {
-        final scheduleMap = schedule as Map<String, dynamic>;
+        final scheduleMap = schedule;
         final shiftId = scheduleMap['shift_id'] as int?;
         final workScheduleId = scheduleMap['work_schedule_id'] as int?;
         
@@ -278,7 +344,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         }
         
         if (scheduleData != null) {
-          final scheduleDataMap = scheduleData as Map<String, dynamic>;
+          final scheduleDataMap = scheduleData;
           setState(() {
             _memberSchedule = Map<String, dynamic>.from(scheduleMap)..addAll(scheduleDataMap);
           });
@@ -317,7 +383,11 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoadingModes = false);
+      if (mounted) {
+        setState(() => _isLoadingModes = false);
+        // Trigger auto mode selection after modes are loaded
+        _updateModeBasedOnSchedule();
+      }
     }
   }
 
@@ -845,7 +915,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.orange.withOpacity(0.3),
+                  color: Colors.orange.withValues(alpha: 0.3),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -856,7 +926,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -883,7 +953,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                       Text(
                         '$name • $mode',
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.white.withValues(alpha: 0.9),
                           fontSize: 14,
                         ),
                       ),
@@ -898,7 +968,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                     padding: const EdgeInsets.all(4),
                     child: Icon(
                       Icons.close,
-                      color: Colors.white.withOpacity(0.8),
+                      color: Colors.white.withValues(alpha: 0.8),
                       size: 20,
                     ),
                   ),
@@ -926,7 +996,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF9333EA).withOpacity(0.1),
+            color: const Color(0xFF9333EA).withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
@@ -1298,7 +1368,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withValues(alpha: 0.08),
             blurRadius: 15,
             offset: const Offset(0, 5),
             spreadRadius: 1,
@@ -1386,7 +1456,18 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     final isCheckIn = entry.action == 'check_in';
     final timeString = _formatTime(entry.timestamp);
     final workTimeMode = entry.workTimeMode ?? 'work_time';
-    final modePrefix = workTimeMode == 'break_time' ? 'Break time in' : 'Work time in';
+    
+    // Get display mode name - use selected mode if available, otherwise format work time mode
+    String displayMode;
+    if (_selectedMode != null && _selectedMode!['name'] != null) {
+      displayMode = _selectedMode!['name'] as String;
+    } else {
+      // Fallback to formatted work time mode
+      displayMode = workTimeMode == 'break_time' ? 'Break Time' : 
+                   workTimeMode == 'overtime' ? 'Overtime' : 'Work Time';
+    }
+    
+    final modePrefix = isCheckIn ? displayMode : '$displayMode Out';
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1395,7 +1476,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
