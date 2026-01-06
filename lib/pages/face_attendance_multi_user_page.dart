@@ -76,7 +76,7 @@ class _FaceAttendanceMultiUserPageState
   List<Map<String, dynamic>> _availableModes = [];
   bool _isLoadingModes = false;
 
-  final Map<int, DateTime> _processedUserTimestamps = {};
+  final Map<String, DateTime> _processedUserTimestamps = {};
   final Duration _userCooldown = const Duration(minutes: 5); // ✅ INCREASED: 5 minutes cooldown to prevent duplicate processing
 
   List<Map<String, dynamic>> _detectedFaces = [];
@@ -215,6 +215,20 @@ class _FaceAttendanceMultiUserPageState
       }
 
       final capturedBase64 = await _encodeFileToBase64(localPhotoPath);
+      
+      // ✅ MULTI-SHIFT: Encode full shift details if available
+      String modeToSave = _getWorkTimeMode();
+      if (_selectedMode != null) {
+        try {
+          // Combine the code with full details
+          final shiftData = Map<String, dynamic>.from(_selectedMode!);
+          shiftData['mode_code'] = modeToSave; // Ensure the simple code is preserved
+          modeToSave = jsonEncode(shiftData);
+        } catch (e) {
+          debugPrint('Failed to encode shift data: $e');
+        }
+      }
+
       final record = OfflineAttendance(
         cardNumber: 'FACE_$memberId',
         faceEmbedding: jsonEncode(template),
@@ -226,7 +240,7 @@ class _FaceAttendanceMultiUserPageState
         profilePhotoBase64: profilePhotoBase64,
         latitude: _currentPosition?.latitude,
         longitude: _currentPosition?.longitude,
-        workTimeMode: _getWorkTimeMode(),
+        workTimeMode: modeToSave,
         organizationMemberId: memberId,
         userName: userName,
         isSynced: false,
@@ -428,13 +442,13 @@ class _FaceAttendanceMultiUserPageState
 
   Future<void> _initializeFaceService() async {
     try {
-      _showMessage('Memuat AI model...', MessageType.loading);
+      _showMessage('Menyiapkan...', MessageType.loading);
       await _faceService.initialize();
       _clearMessage();
     } catch (e) {
       debugPrint('Failed to init TFLite: $e');
       if (mounted) {
-        _showMessage('Gagal memuat AI model', MessageType.error, seconds: 5);
+        _showMessage('Gagal inisialisasi', MessageType.error, seconds: 5);
       }
     }
   }
@@ -464,7 +478,7 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.medium, // ✅ Changed to medium for better performance (high was too slow)
+        ResolutionPreset.high, // ✅ UPDATED: High resolution for HD preview asked by user
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
@@ -491,7 +505,7 @@ class _FaceAttendanceMultiUserPageState
     } catch (e) {
       debugPrint('Camera error: $e');
       if (mounted) {
-        _showMessage('Kamera error: ${e.toString()}', MessageType.error, seconds: 5);
+        _showMessage('Gagal Kamera', MessageType.error, seconds: 5);
         setState(() {
           _isCameraInitialized = false;
         });
@@ -519,10 +533,10 @@ class _FaceAttendanceMultiUserPageState
   }
 
   void _startContinuousScan() {
-    // ✅ OPTIMIZED: Reduced scan frequency and added debouncing
+    // ✅ OPTIMIZED: 250ms provides better responsiveness while keeping camera stable
     // ✅ FIXED: Prevent camera restart by checking if camera is still initialized
     _continuousScanTimer = Timer.periodic(
-      const Duration(milliseconds: 400), // ✅ FASTER: 400ms
+      const Duration(milliseconds: 250), // ✅ FASTER: 250ms (Balanced Speed)
       (timer) {
         if (!_isProcessing && 
             _isCameraInitialized && 
@@ -564,18 +578,18 @@ class _FaceAttendanceMultiUserPageState
     _isProcessing = true;
 
     try {
-      // ✅ OPTIMIZED: Take picture and detect faces (already async, but add timeout)
+      // ✅ FAST: 1s timeout is sufficient for modern phones, fail fast if stuck
       final image = await _cameraController!.takePicture().timeout(
-        const Duration(seconds: 1, milliseconds: 500),
+        const Duration(milliseconds: 1000), // ✅ FASTER: 1s timeout
         onTimeout: () {
           throw TimeoutException('Camera takePicture timeout');
         },
       );
       final imageFile = File(image.path);
       
-      // ✅ OPTIMIZED: Add timeout to face detection to prevent hanging
+      // ✅ OPTIMIZED: Reduce detection timeout for real-time feel
       final faces = await _faceService.detectFaces(image.path).timeout(
-        const Duration(seconds: 2),
+        const Duration(milliseconds: 800), // ✅ FASTER: 800ms to allow UI updates
         onTimeout: () {
           debugPrint('⚠️ Face detection timeout');
           return <Face>[];
@@ -633,25 +647,40 @@ class _FaceAttendanceMultiUserPageState
       
       for (int i = 0; i < faces.length; i++) {
         final face = faces[i];
-// Fix for face detection bounding box to cover full face
-// Replace lines 623-627 in face_attendance_multi_user_page.dart with this code:
-
-// Fix for face detection bounding box to cover full face
-// Replace lines 623-627 in face_attendance_multi_user_page.dart with this code:
-
-final boundingBox = face.boundingBox;
+        final boundingBox = face.boundingBox;
         
-// Expand bounding box slightly (reduced from 0.3 to 0.15 for better fit when close)
-final expansionFactor = 0.15; 
-final expandedLeft = (boundingBox.left - (boundingBox.width * expansionFactor)).clamp(0.0, imageWidth - 1);
-final expandedTop = (boundingBox.top - (boundingBox.height * expansionFactor * 0.8)).clamp(0.0, imageHeight - 1); 
-final expandedRight = (boundingBox.right + (boundingBox.width * expansionFactor)).clamp(0.0, imageWidth - 1);
-final expandedBottom = (boundingBox.bottom + (boundingBox.height * expansionFactor * 1.2)).clamp(0.0, imageHeight - 1); 
+        // ✅ DYNAMIC EXPANSION: Adjust box size based on face distance
+        // Calculate face size ratio to determine distance
+        final faceArea = boundingBox.width * boundingBox.height;
+        final imageArea = imageWidth * imageHeight;
+        final faceRatio = faceArea / imageArea;
+        
+        // Dynamic expansion factor based on face size:
+        // Dynamic scaling based on face distance (face-to-image ratio)
+      // Large ratio (> 0.25) means face is close -> Use TIGHT box for accuracy (User request: "jangan terlalu besar")
+      // Small ratio (< 0.12) means face is far -> Use slight expansion to catch movements
+      double expansionFactor = 0.05; // Default small
+      
+      if (faceRatio > 0.25) {
+        expansionFactor = 0.0; // ✅ TIGHT FIT (No expansion) when face is close
+      } else if (faceRatio > 0.12) {
+        expansionFactor = 0.05; // ✅ Minimal expansion for medium distance
+      } else {
+        expansionFactor = 0.10; // ✅ Moderate expansion only for very far faces
+      }
+      
+      final double expansionX = boundingBox.width * expansionFactor;
+      final double expansionY = boundingBox.height * expansionFactor;
+      
+      final expandedLeft = (boundingBox.left - expansionX).clamp(0.0, imageWidth - 1);
+      final expandedTop = (boundingBox.top - expansionY * 1.5).clamp(0.0, imageHeight - 1); // Less top expansion
+      final expandedRight = (boundingBox.right + expansionX).clamp(0.0, imageWidth - 1);
+      final expandedBottom = (boundingBox.bottom + expansionY).clamp(0.0, imageHeight - 1); 
 
-final left = (expandedLeft / imageWidth).clamp(0.0, 1.0);
-final top = (expandedTop / imageHeight).clamp(0.0, 1.0);
-final width = ((expandedRight - expandedLeft) / imageWidth).clamp(0.0, 1.0);
-final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
+        final left = (expandedLeft / imageWidth).clamp(0.0, 1.0);
+        final top = (expandedTop / imageHeight).clamp(0.0, 1.0);
+        final width = ((expandedRight - expandedLeft) / imageWidth).clamp(0.0, 1.0);
+        final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
 
         final trackingId = face.trackingId;
         Map<String, dynamic>? knownFace;
@@ -719,6 +748,14 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
         final trackingId = facesToProcess[i].trackingId;
         
         // ✅ OPTIMIZATION: Skip processing if we already know who this is (via trackingId)
+        // This keeps the green box stable without re-running heavy recognition
+        final existingFace = detectedFacesMap[i];
+        if ((existingFace['status'] == 'success' || existingFace['status'] == 'cooldown') && 
+             existingFace['name'] != null) {
+           debugPrint('⏭️ Skipped recognition for trackingId $trackingId (${existingFace['name']})');
+           // Face is already recognized and displayed green, no need to re-process
+           continue; 
+        }
         if (trackingId != null && _persistentFaceTracker.containsKey(trackingId)) {
            // We already have this face in our tracker, UI is already updated above.
            // We just need to ensure we don't re-process duplicate attendance if not needed.
@@ -790,7 +827,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
       if (e is TimeoutException) {
         debugPrint('⚠️ Camera timeout - skipping this frame');
       } else {
-        _showMessage('Error: ${e.toString()}', MessageType.error, seconds: 3);
+        // _showMessage('Terjadi kesalahan', MessageType.error, 3);
       }
       
       if (mounted) {
@@ -800,9 +837,8 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
         });
       }
     } finally {
-      // ✅ OPTIMIZED: Add cooldown after processing to prevent rapid scanning
+      // ✅ OPTIMIZED: No cooldown delay for real-time performance
       _isProcessing = false;
-      await Future.delayed(const Duration(milliseconds: 100)); // Increased cooldown
     }
   }
   
@@ -819,11 +855,11 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
     try {
       while (_processingQueue.isNotEmpty) {
         final task = _processingQueue.removeAt(0);
-        await task.timeout(const Duration(seconds: 15), onTimeout: () {
+        await task.timeout(const Duration(seconds: 10), onTimeout: () {
           debugPrint('⚠️ Queue task timeout');
         });
-        // Small delay between tasks to prevent overload
-        await Future.delayed(const Duration(milliseconds: 300));
+        // Minimal delay between tasks for better performance
+        await Future.delayed(const Duration(milliseconds: 100));
       }
     } finally {
       _isQueueProcessing = false;
@@ -960,21 +996,40 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
         }
       }
       
-      // ✅ IMPROVED: Check cooldown first
-      if (_processedUserTimestamps.containsKey(userId)) {
-        final lastProcessTime = _processedUserTimestamps[userId]!;
+      // ✅ IMPROVED: Check cooldown first with composite key (User + Type)
+      final isCheckIn = _attendanceMode == 'check_in'; // Defined earlier, used here
+      final cooldownKey = '${userId}_${isCheckIn ? "in" : "out"}';
+
+      if (_processedUserTimestamps.containsKey(cooldownKey)) {
+        final lastProcessTime = _processedUserTimestamps[cooldownKey]!;
         final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
         
         if (timeSinceLastProcess < _userCooldown) {
           final remainingSeconds = (_userCooldown - timeSinceLastProcess).inSeconds;
-          debugPrint('⏰ USER $userName: Still in cooldown (${remainingSeconds}s remaining)');
+          debugPrint('⏰ USER $userName: Still in cooldown for ${isCheckIn ? "IN" : "OUT"} (${remainingSeconds}s remaining)');
+          
+          // ✅ FIX: Keep showing green box ("success") for user in cooldown so box stays stable
+          if (mounted) {
+            setState(() {
+              final faceData = _detectedFaces.firstWhere(
+                (f) => f['id'] == faceId,
+                orElse: () => {},
+              );
+              if (faceData.isNotEmpty) {
+                faceData['status'] = 'success'; // Show as success (green)
+                faceData['name'] = userName;    // Keep showing name
+                // Optionally add specific info like "Sudah Absen"
+              }
+            });
+          }
+          
           updateCounters(0, 1, 0);
           return;
         }
       }
 
       // ✅ NEW: Check if already recorded today BEFORE processing
-      final isCheckIn = _attendanceMode == 'check_in';
+      // final isCheckIn = _attendanceMode == 'check_in'; // Already defined
       final attendanceType = isCheckIn ? 'check_in' : 'check_out';
       final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
       
@@ -987,8 +1042,23 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
       
       if (alreadyRecordedOffline) {
         debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping');
+        
+        // ✅ FIX: Keep showing green box for offline recorded user
+        if (mounted) {
+          setState(() {
+            final faceData = _detectedFaces.firstWhere(
+              (f) => f['id'] == faceId,
+              orElse: () => {},
+            );
+            if (faceData.isNotEmpty) {
+              faceData['status'] = 'success';
+              faceData['name'] = userName;
+            }
+          });
+        }
+        
         // Update timestamp to prevent repeated checks
-        _processedUserTimestamps[userId] = DateTime.now();
+        _processedUserTimestamps[cooldownKey] = DateTime.now();
         updateCounters(0, 1, 0);
         return;
       }
@@ -997,7 +1067,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
       // if (_isOnline) { ... }
 
       // ✅ IMPROVED: Set timestamp BEFORE adding to list to prevent duplicate processing
-      _processedUserTimestamps[userId] = DateTime.now();
+      _processedUserTimestamps[cooldownKey] = DateTime.now();
 
       // Thread-safe add to list
       processedUsers.add({
@@ -1107,8 +1177,10 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
 
       // ✅ NOTE: Timestamp already set in _processFaceAsync before processing
       // This ensures user won't be processed again even if attendance fails
-      if (!_processedUserTimestamps.containsKey(memberId)) {
-        _processedUserTimestamps[memberId] = DateTime.now();
+      // Using composite key logic again (redundant but safe)
+      final cooldownKey = '${memberId}_${isCheckIn ? "in" : "out"}';
+      if (!_processedUserTimestamps.containsKey(cooldownKey)) {
+        _processedUserTimestamps[cooldownKey] = DateTime.now();
       }
 
       if (mounted) {
@@ -1134,7 +1206,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
         });
       }
 
-      successfulAttendances.add('$userName (${isCheckIn ? "Masuk" : "Keluar"})');
+      successfulAttendances.add('$userName (${isCheckIn ? "MASUK" : "KELUAR"})');
       // Treat everything as queued initially until background sync picks it up
       updateHasQueuedOffline(true);
 
@@ -1177,10 +1249,10 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
       await SoundHelper.playSuccessSound();
       
       var message = successfulAttendances.length == 1
-          ? '${hasQueuedOffline ? "Tersimpan offline" : "Berhasil"}: ${successfulAttendances.first}'
-          : '${hasQueuedOffline ? "Tersimpan offline" : "Berhasil"}: ${successfulAttendances.length} orang';
+          ? '${hasQueuedOffline ? "Offline" : "Sukses"}: ${successfulAttendances.first}'
+          : '${hasQueuedOffline ? "Offline" : "Sukses"}: ${successfulAttendances.length} orang';
       if (hasQueuedOffline) {
-        message = '$message (akan disinkronkan otomatis)';
+        message = '$message (Simpan)';
       }
       
       _showMessage(message, MessageType.success, seconds: 2);
@@ -1204,7 +1276,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
 
   void _cleanupOldTimestamps() {
     final now = DateTime.now();
-    _processedUserTimestamps.removeWhere((userId, timestamp) {
+    _processedUserTimestamps.removeWhere((key, timestamp) {
       return now.difference(timestamp) > _userCooldown;
     });
   }
@@ -1243,6 +1315,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
     }
   }
 
+  // Reverting to dynamic shift selector based on User Request
   Future<void> _loadAvailableModes() async {
     setState(() => _isLoadingModes = true);
     try {
@@ -1276,6 +1349,9 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
   Future<void> _openModePicker() async {
     await _loadAvailableModes();
     if (!mounted) return;
+
+    // ✅ MULTI-SHIFT: Auto-select based on current time
+    _autoSelectCurrentShift();
 
     final selected = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -1320,7 +1396,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                     const Expanded(
                       child: Center(
                         child: Text(
-                          'Belum ada mode shift tersedia',
+                          'Shift tidak tersedia',
                           style: TextStyle(
                             fontSize: 16,
                             color: Colors.grey,
@@ -1372,6 +1448,66 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
         _workTimeMode = selected['code'] as String? ?? selected['name'] as String?;
       });
       await _showInOutSelector();
+    }
+  }
+
+  void _autoSelectCurrentShift() {
+    if (_availableModes.isEmpty) return;
+
+    final now = TimeOfDay.fromDateTime(TimezoneHelper.getCurrentUtcTime().add(const Duration(hours: 7))); // Assuming WIB for simplicity, strict logic uses org timezone helper
+    // Better: use DateTime.now() since we are in local app context
+    // Actually orgTimezone is safer.
+    final nowDateTime = DateTime.now();
+    final currentTime = TimeOfDay.fromDateTime(nowDateTime);
+
+    Map<String, dynamic>? bestMatch;
+
+    for (final mode in _availableModes) {
+      final startStr = mode['start_time'] as String?;
+      final endStr = mode['end_time'] as String?;
+      
+      if (startStr != null && endStr != null) {
+        if (_isTimeInRange(currentTime, startStr, endStr)) {
+          bestMatch = mode;
+          // If we found a "Break" (Istirahat), prioritize it?
+          // Or usually shifts don't overlap much.
+          // Let's bias towards shorter durations (likely breaks)?
+          // For now, first match is good.
+          break;
+        }
+      }
+    }
+
+    if (bestMatch != null) {
+      setState(() {
+        _selectedMode = bestMatch;
+        // Optionally update _workTimeMode too so it shows selected immediately
+         _workTimeMode = bestMatch!['code'] as String? ?? bestMatch!['name'] as String?;
+      });
+    }
+  }
+
+  bool _isTimeInRange(TimeOfDay current, String startStr, String endStr) {
+    try {
+      final startParts = startStr.split(':');
+      final endParts = endStr.split(':');
+      
+      final start = TimeOfDay(hour: int.parse(startParts[0]), minute: int.parse(startParts[1]));
+      final end = TimeOfDay(hour: int.parse(endParts[0]), minute: int.parse(endParts[1]));
+      
+      final nowMinutes = current.hour * 60 + current.minute;
+      final startMinutes = start.hour * 60 + start.minute;
+      final endMinutes = end.hour * 60 + end.minute;
+
+      if (endMinutes < startMinutes) {
+        // Crosses midnight (e.g. 22:00 to 06:00)
+        return nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+      } else {
+        return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+      }
+    } catch (e) {
+      debugPrint('Error parsing time range: $startStr - $endStr');
+      return false;
     }
   }
 
@@ -1434,19 +1570,23 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
 
     if (pickedMode != null && mounted) {
       setState(() => _attendanceMode = pickedMode);
+      final modeName = _selectedMode != null ? _selectedMode!['name'] : 'Standar';
+      final typeName = pickedMode == 'check_in' ? 'MASUK' : 'KELUAR';
       _showMessage(
-        'Berhasil mengubah mode ke ${pickedMode == 'check_in' ? 'Masuk' : 'Keluar'}'
-        '${_selectedMode != null ? ' (${_selectedMode!['name']})' : ''}',
+        'Mode: $modeName - $typeName',
         MessageType.success,
         seconds: 2,
       );
     }
   }
 
+  // Helper moved from below
   String _getWorkTimeMode() {
     if (_workTimeMode != null) return _workTimeMode!;
     return 'work_time';
   }
+
+  // Old methods removed to resolve duplication with new Shift Mode implementation
 
   Future<void> _handleModeChange(String newMode) async {
     if (_attendanceMode == newMode) return;
@@ -1614,7 +1754,8 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                 final height = nHeight * scaledHeight;
                 
                 final status = face['status'] as String? ?? 'detecting';
-                final userName = face['userName'] as String?;
+                // ✅ FIXED: Support both key naming conventions
+                final userName = (face['userName'] as String?) ?? (face['name'] as String?);
                 final similarity = face['similarity'] as double?;
                 
                 // ✅ NEW: Different colors based on status
@@ -1637,11 +1778,13 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                     statusText = null; // ✅ HIDDEN
                     break;
                   case 'matched':
+                  case 'success': // ✅ ADDED: Validation success
+                  case 'cooldown': // ✅ ADDED: User in cooldown
                     borderColor = Colors.green;
-                    glowColor = Colors.green.withOpacity(0.4);
+                    glowColor = Colors.green.withOpacity(0.6); // Stronger glow
                     statusIcon = Icons.check_circle;
-                    // ✅ FIXED: Tampilkan nama user (offline/online sudah ada di userName)
-                    statusText = userName ?? 'Terkonfirmasi';
+                    // ✅ FIXED: Show name if available, otherwise generic success
+                    statusText = userName ?? 'Berhasil';
                     break;
                   case 'unmatched':
                     borderColor = Colors.red;
@@ -2105,8 +2248,8 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                                       );
                                     },
                                     child: Container(
-                                      margin: const EdgeInsets.only(bottom: 4),
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                      margin: const EdgeInsets.only(bottom: 2), // Reduced margin
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), // Reduced padding
                                       decoration: BoxDecoration(
                                         color: index % 2 == 0 ? Colors.grey.shade50 : Colors.white,
                                         borderRadius: BorderRadius.circular(6),
@@ -2115,10 +2258,10 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                                       child: Row(
                                         children: [
                                           CircleAvatar(
-                                            radius: 18,
+                                            radius: 14, // Reduced radius
                                             backgroundImage: avatar,
                                             child: avatar == null
-                                                ? const Icon(Icons.person, size: 18, color: Colors.white70)
+                                                ? const Icon(Icons.person, size: 14, color: Colors.white70) // Reduced icon
                                                 : null,
                                           ),
                                           const SizedBox(width: 8),
@@ -2131,7 +2274,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                                                 Text(
                                                   item['name'],
                                                   style: const TextStyle(
-                                                    fontSize: 13,
+                                                    fontSize: 11, // Reduced font
                                                     fontWeight: FontWeight.w600,
                                                     color: Colors.black87,
                                                   ),
@@ -2141,7 +2284,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                                                 Text(
                                                   item['department'] ?? '-',
                                                   style: TextStyle(
-                                                    fontSize: 11,
+                                                    fontSize: 10, // Reduced font
                                                     color: Colors.grey.shade600,
                                                     fontWeight: FontWeight.w500,
                                                   ),
@@ -2152,20 +2295,52 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
                                             ),
                                           ),
                                           // Time
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: Colors.grey.shade100,
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              item['time'],
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.grey.shade800,
+                                          Column(
+                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                            children: [
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2), // Compact padding
+                                                decoration: BoxDecoration(
+                                                  color: Colors.grey.shade100,
+                                                  borderRadius: BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  item['time'],
+                                                  style: TextStyle(
+                                                    fontSize: 10, // Reduced font
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.grey.shade800,
+                                                  ),
+                                                ),
                                               ),
-                                            ),
+                                              const SizedBox(height: 2), // Reduced gap
+                                              if (item['type'] != null)
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2), // Compact padding
+                                                  decoration: BoxDecoration(
+                                                    color: item['type'] == 'check_in' 
+                                                        ? Colors.green.withOpacity(0.1)
+                                                        : Colors.orange.withOpacity(0.1),
+                                                    borderRadius: BorderRadius.circular(4),
+                                                    border: Border.all(
+                                                      color: item['type'] == 'check_in'
+                                                          ? Colors.green.withOpacity(0.5)
+                                                          : Colors.orange.withOpacity(0.5),
+                                                      width: 0.5,
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    item['type'] == 'check_in' ? 'Masuk' : 'Pulang',
+                                                    style: TextStyle(
+                                                      fontSize: 9, // Reduced font
+                                                      fontWeight: FontWeight.w600,
+                                                      color: item['type'] == 'check_in'
+                                                          ? Colors.green.shade700
+                                                          : Colors.orange.shade800,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
                                           ),
                                         ],
                                       ),
@@ -2239,7 +2414,7 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
       onTap: () {
         setState(() => _workTimeMode = mode);
         _showMessage(
-          'Berhasil mengubah mode ke $label',
+          'Mode: $label',
           MessageType.success,
           seconds: 2,
         );
@@ -2291,31 +2466,12 @@ final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
   }
 
   void _showMenu(BuildContext context) {
-    showMenu<String>(
-      context: context,
-      position: const RelativeRect.fromLTRB(80, 50, 0, 0),
-      items: const [
-        PopupMenuItem<String>(
-          value: 'mode_picker',
-          child: Row(
-            children: [
-              Icon(Icons.tune, size: 18),
-              SizedBox(width: 8),
-              Text('Pilih mode'),
-            ],
-          ),
-        ),
-      ],
-    ).then((value) {
-      if (value != null) _handleMenuSelection(value);
-    });
+    // Direct link to the dynamic mode picker
+    _openModePicker();
   }
-
-  void _handleMenuSelection(String value) {
-    switch (value) {
-      case 'mode_picker':
-        _openModePicker();
-        break;
-    }
-  }
+  
+  // NOTE: The _openModePicker method is now defined earlier in the class (restored)
+  
+  // Helper methods for the hardcoded UI are no longer needed
+  // Removing buildModeOption to cleanup
 }

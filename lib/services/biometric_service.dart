@@ -37,6 +37,15 @@ class BiometricService {
       final version = faceTemplate['version'] ?? 3;
       debugPrint('Registering face template version: $version');
       
+      // \u2705 NEW: Log ISO compliance features for version 3.1
+      if (version == 3.1) {
+        debugPrint('\u2705 ISO/IEC Compliant Template:');
+        debugPrint('  - Biometric Metrics: ${faceTemplate['biometricMetrics'] != null}');
+        debugPrint('  - Quality Metrics: ${faceTemplate['qualityMetrics'] != null}');
+        debugPrint('  - Liveness Detection: ${faceTemplate['livenessDetection'] != null}');
+        debugPrint('  - Pose Information: ${faceTemplate['poseInformation'] != null}');
+      }
+      
       // Check if this is multi-template (version 4)
       final isMultiTemplate = version == 4;
       if (isMultiTemplate) {

@@ -36,10 +36,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   Color _overlayColor = Colors.white;
   Timer? _detectionTimer;
   
-  // ✅ NEW: Multi-template registration state
-  int _currentPoseIndex = 0; // 0: front, 1: left, 2: right
-  final List<Map<String, dynamic>> _capturedTemplates = [];
-  final List<String> _capturedImagePaths = [];
+  // ✅ SIMPLIFIED: Single-pose registration (front only)
   bool _isRegistrationComplete = false;
 
   @override
@@ -94,8 +91,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
-          _currentStep = '1/3 - DEPAN';
-          _guidanceMessage = 'Lihat Kamera';
+          _currentStep = 'Posisikan Wajah';
+          _guidanceMessage = 'Lihat Lurus ke Kamera';
         });
         _startFaceDetection();
       }
@@ -107,32 +104,22 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   void _startFaceDetection() {
-    // ✅ CHECK: Running automatically every 800ms (Auto-capture enabled)
+    // ✅ SIMPLIFIED: Auto-capture for single front pose
     _detectionTimer = Timer.periodic(const Duration(milliseconds: 800), (timer) {
       if (!_isProcessing && 
           _isCameraInitialized && 
           _isModelInitialized && 
-          !_isRegistrationComplete &&
-          _currentPoseIndex < 3) {
+          !_isRegistrationComplete) {
         _detectAndValidatePose();
       }
     });
   }
-  
-  String _getPoseName(int index) {
-    switch (index) {
-      case 0: return 'DEPAN';
-      case 1: return 'KIRI';
-      case 2: return 'KANAN';
-      default: return 'DEPAN';
-    }
-  }
+
 
   Future<void> _detectAndValidatePose() async {
     if (_cameraController == null || 
         !_cameraController!.value.isInitialized || 
-        _isProcessing ||
-        _currentPoseIndex >= 3) {
+        _isProcessing) {
       return;
     }
 
@@ -144,14 +131,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       final image = await _cameraController!.takePicture();
       
       try {
-        final validationResult = await _validatePoseWithFeedback(
-          image.path, 
-          _currentPoseIndex,
-        );
+        final validationResult = await _validatePoseWithFeedback(image.path);
         
         if (validationResult['isValid'] == true) {
-          // Capture this pose
-          await _capturePose(image.path);
+          // ✅ SIMPLIFIED: Capture front pose and register immediately
+          await _captureFrontPose(image.path);
         } else {
           setState(() {
             _guidanceMessage = validationResult['message'] ?? 'Sesuaikan posisi';
@@ -194,10 +178,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
   }
 
-  Future<Map<String, dynamic>> _validatePoseWithFeedback(
-    String imagePath, 
-    int poseIndex,
-  ) async {
+  Future<Map<String, dynamic>> _validatePoseWithFeedback(String imagePath) async {
     final faces = await _faceService.detectFaces(imagePath);
     
     if (faces.isEmpty) {
@@ -228,37 +209,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       };
     }
 
-    final headY = face.headEulerAngleY ?? 0.0; // Positive = right, Negative = left
-    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
-    
-    // Validate pose based on current pose index
-    if (poseIndex == 0) {
-      // Front face: relax tolerance to 20 degrees
-      if (headY.abs() > 20.0) {
-        return {
-          'isValid': false,
-          'message': 'Lihat Lurus ke Depan',
-        };
-      }
-    } else if (poseIndex == 1) {
-      // Left side: Inverted logic (User turns Left -> Camera sees Positive Angle)
-      if (headY < 10.0) {
-        return {
-          'isValid': false,
-          'message': 'Toleh KIRI',
-        };
-      }
-    } else if (poseIndex == 2) {
-      // Right side: Inverted logic (User turns Right -> Camera sees Negative Angle)
-      if (headY > -10.0) {
-        return {
-          'isValid': false,
-          'message': 'Toleh KANAN',
-        };
-      }
+    // ✅ SIMPLIFIED: Only validate front pose (no side pose validation)
+    final headY = face.headEulerAngleY ?? 0.0;
+    if (headY.abs() > 20.0) {
+      return {
+        'isValid': false,
+        'message': 'Lihat Lurus ke Depan',
+      };
     }
-    
-    if (headZ > 35.0) { // ✅ RELAXED: Increased from 20.0
+    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
+    if (headZ > 35.0) {
       return {
         'isValid': false,
         'message': 'Jangan miringkan kepala ke samping',
@@ -295,107 +255,79 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     };
   }
   
-  Future<void> _capturePose(String imagePath) async {
+  Future<void> _captureFrontPose(String imagePath) async {
     try {
       setState(() {
         _overlayColor = Colors.green;
-        _guidanceMessage = 'Foto ${_getPoseName(_currentPoseIndex)} berhasil!';
-        _currentStep = 'Memproses foto ${_getPoseName(_currentPoseIndex)}...';
+        _guidanceMessage = 'Foto berhasil!';
+        _currentStep = 'Memproses foto...';
       });
 
-      // Extract face features (allow side poses for multi-template registration)
-      // poseIndex 0 = front (no side pose), 1 = left, 2 = right (both are side poses)
-      final allowSidePose = _currentPoseIndex > 0;
+      // ✅ SIMPLIFIED: Extract front face features only (no side pose)
       final faceTemplate = await _faceService.extractFaceFeatures(
         imagePath,
-        allowSidePose: allowSidePose,
+        allowSidePose: false,
       );
       
-      // Store template and image path
-      _capturedTemplates.add(faceTemplate);
-      _capturedImagePaths.add(imagePath);
+      debugPrint('✅ Captured front face with ${faceTemplate['landmarkCount']} landmarks');
       
-      debugPrint('✅ Captured pose $_currentPoseIndex (${_getPoseName(_currentPoseIndex)})');
+      // ✅ SIMPLIFIED: Register immediately (no multi-template)
+      _detectionTimer?.cancel();
+      setState(() {
+        _guidanceMessage = 'Selesai! Menyimpan...';
+        _overlayColor = Colors.green;
+        _isRegistrationComplete = true;
+      });
       
-      // Move to next pose
-      _currentPoseIndex++;
+      await _registerSingleTemplate(faceTemplate, imagePath);
       
-      if (_currentPoseIndex < 3) {
-        // Continue to next pose - FAST TRANSITION
-        setState(() {
-          _overlayColor = Colors.green;
-          _guidanceMessage = 'OK! Lanjut ${_getPoseName(_currentPoseIndex)}...';
-        });
-        
-        await Future.delayed(const Duration(milliseconds: 500)); // ✅ REDUCED DELAY
-        
-        setState(() {
-          _overlayColor = Colors.blue;
-          _guidanceMessage = 'Toleh ${_getPoseName(_currentPoseIndex)} SEKARANG';
-          _currentStep = '${_currentPoseIndex + 1}/3 - ${_getPoseName(_currentPoseIndex)}';
-        });
-        
-      } else {
-        // All poses captured, register multi-template IMMEDIATELY
-        _detectionTimer?.cancel();
-        setState(() {
-           _guidanceMessage = 'Selesai! Menyimpan...';
-           _overlayColor = Colors.green;
-        });
-        await _registerMultiTemplate();
-      }
     } catch (e) {
       setState(() {
         _errorMessage = 'Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}';
         _overlayColor = Colors.red;
+        _isRegistrationComplete = false;
       });
       
-      // Retry this pose
+      // Retry
       await File(imagePath).delete();
-      _capturedTemplates.removeLast();
-      _capturedImagePaths.removeLast();
-      _currentPoseIndex--;
+      _startFaceDetection();
     }
   }
 
-  Future<void> _registerMultiTemplate() async {
+  Future<void> _registerSingleTemplate(
+    Map<String, dynamic> faceTemplate,
+    String imagePath,
+  ) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
-      _currentStep = 'Menyimpan 3 template...';
+      _currentStep = 'Menyimpan template...';
       _overlayColor = Colors.green;
-      _isRegistrationComplete = true;
     });
 
     try {
-      // Build multi-template from 3 captured templates
-      final multiTemplate = _faceService.buildMultiTemplate(_capturedTemplates);
-      
-      debugPrint('Multi-template created:');
-      debugPrint('- Version: ${multiTemplate['version']}');
-      debugPrint('- Template count: ${multiTemplate['templateCount']}');
-      debugPrint('- Embedding size: ${multiTemplate['embeddingSize']}');
+      debugPrint('Single template registration:');
+      debugPrint('- Version: ${faceTemplate['version']}');
+      debugPrint('- Embedding size: ${faceTemplate['embeddingSize']}');
+      debugPrint('- Landmarks: ${faceTemplate['landmarkCount']}');
 
       setState(() {
         _currentStep = 'Mengunggah foto...';
       });
 
-      // Upload first image (front) as profile photo
-      final frontImageFile = File(_capturedImagePaths[0]);
-      final processedFile = await _processImage(frontImageFile);
+      // Upload front image as profile photo
+      final imageFile = File(imagePath);
+      final processedFile = await _processImage(imageFile);
       await _storageService.uploadFaceTemplate(
         processedFile,
         widget.organizationMemberId,
       );
 
       // Clean up image files
-      for (var path in _capturedImagePaths) {
-        final file = File(path);
-        if (await file.exists()) {
-          await file.delete();
-        }
+      if (await imageFile.exists()) {
+        await imageFile.delete();
       }
-      if (processedFile.path != frontImageFile.path) {
+      if (processedFile.path != imageFile.path) {
         final processed = File(processedFile.path);
         if (await processed.exists()) {
           await processed.delete();
@@ -408,7 +340,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       await _biometricService.registerFaceTemplate(
         organizationMemberId: widget.organizationMemberId,
-        faceTemplate: multiTemplate,
+        faceTemplate: faceTemplate,
       );
 
       if (mounted) {
@@ -453,7 +385,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Pengenalan wajah dengan 3 template aktif',
+                    'Pengenalan wajah dengan facial landmarks aktif',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
@@ -482,9 +414,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _isLoading = false;
         _overlayColor = Colors.red;
         _isRegistrationComplete = false;
-        _currentPoseIndex = 0;
-        _capturedTemplates.clear();
-        _capturedImagePaths.clear();
       });
       
       _startFaceDetection();
@@ -577,33 +506,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Progress indicator
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: List.generate(3, (index) {
-                        return Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 4),
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: index < _currentPoseIndex
-                                ? Colors.green
-                                : index == _currentPoseIndex
-                                    ? Colors.blue
-                                    : Colors.grey,
-                          ),
-                        );
-                      }),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
+                  // ✅ SIMPLIFIED: No progress indicator needed for single pose
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     width: 280,

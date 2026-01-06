@@ -588,34 +588,28 @@ class OfflineDatabaseService {
     }
   }
 
-  // Check for duplicate attendance on the same day
+  // Check for duplicate attendance (debounced by 2 minutes to prevent double-taps)
   Future<bool> hasDuplicateAttendance({
     required int organizationMemberId,
     required String eventType,
-    required String attendanceDate, // Format: YYYY-MM-DD
+    required String attendanceDate, // Format: YYYY-MM-DD (Ignored for multi-shift)
   }) async {
     try {
       final db = await database;
       
+      // ✅ MULTI-SHIFT: Only check for duplicates within the last 2 minutes
+      // This allows multiple shifts but prevents accidental double-taps
+      final now = DateTime.now();
+      final twoMinutesAgo = now.subtract(const Duration(minutes: 2)).toIso8601String();
+      
       final result = await db.query(
         'offline_attendances',
-        where: 'organization_member_id = ? AND event_type = ? AND DATE(created_at) = ?',
-        whereArgs: [organizationMemberId, eventType, attendanceDate],
+        where: 'organization_member_id = ? AND event_type = ? AND created_at > ?',
+        whereArgs: [organizationMemberId, eventType, twoMinutesAgo],
         orderBy: 'created_at DESC',
       );
 
-      // Check if any record exists for the same date
-      for (final record in result) {
-        final timestamp = record['created_at'] as String;
-        final recordDate = DateTime.parse(timestamp).toUtc();
-        final recordDateStr = '${recordDate.year}-${recordDate.month.toString().padLeft(2, '0')}-${recordDate.day.toString().padLeft(2, '0')}';
-        
-        if (recordDateStr == attendanceDate) {
-          return true;
-        }
-      }
-
-      return false;
+      return result.isNotEmpty;
     } catch (e) {
       debugPrint('Error checking duplicate attendance: $e');
       return false;

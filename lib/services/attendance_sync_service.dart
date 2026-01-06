@@ -478,6 +478,33 @@ class AttendanceSyncService {
       };
     }
 
+    // Prepare raw data with parsing logic for multi-shift
+    Map<String, dynamic> rawData = {
+      'synced_from_offline': true,
+      'offline_timestamp': record.timestamp,
+      'work_time_mode': record.workTimeMode, // Default fallback
+    };
+
+    // Try to parse encoded shift details
+    if (record.workTimeMode != null && record.workTimeMode!.trim().startsWith('{')) {
+      try {
+        final parsed = jsonDecode(record.workTimeMode!) as Map<String, dynamic>;
+        rawData['shift_details'] = parsed;
+        if (parsed.containsKey('mode_code')) {
+           rawData['work_time_mode'] = parsed['mode_code'];
+        }
+      } catch (e) {
+        debugPrint('⚠️ Failed to parse workTimeMode JSON: $e');
+      }
+    }
+
+    if (record.method == 'rfid_card_mobile') {
+      rawData['card_number'] = record.cardNumber;
+    }
+    if (record.method == 'face_recognition_kiosk') {
+      rawData['face_recognition'] = true;
+    }
+
     // Sync to Supabase
     debugPrint('🔄 Syncing ${record.eventType} to Supabase for member $memberId...');
     try {
@@ -487,15 +514,7 @@ class AttendanceSyncService {
           photoUrl: photoUrl,
           method: record.method,
           location: locationData,
-          rawData: {
-            'synced_from_offline': true,
-            'offline_timestamp': record.timestamp,
-            'work_time_mode': record.workTimeMode,
-            if (record.method == 'rfid_card_mobile')
-              'card_number': record.cardNumber,
-            if (record.method == 'face_recognition_kiosk')
-              'face_recognition': true,
-          },
+          rawData: rawData,
         );
         debugPrint('✅ Successfully synced check_in for member $memberId');
       } else {
@@ -504,15 +523,7 @@ class AttendanceSyncService {
           photoUrl: photoUrl,
           method: record.method,
           location: locationData,
-          rawData: {
-            'synced_from_offline': true,
-            'offline_timestamp': record.timestamp,
-            'work_time_mode': record.workTimeMode,
-            if (record.method == 'rfid_card_mobile')
-              'card_number': record.cardNumber,
-            if (record.method == 'face_recognition_kiosk')
-              'face_recognition': true,
-          },
+          rawData: rawData,
         );
         debugPrint('✅ Successfully synced check_out for member $memberId');
       }

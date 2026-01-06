@@ -41,13 +41,28 @@ class AttendanceService {
       Map<String, dynamic> recordData;
 
       if (existingRecord != null) {
-        // ✅ Jika sudah check-in, jangan update lagi
-        if (existingRecord['actual_check_in'] != null) {
-          throw Exception(
-            'Already checked in today at ${existingRecord['actual_check_in']}',
-          );
-        }
-
+      // ✅ MULTI-SHIFT: Allow multiple check-ins per day
+      // If already checked in, just create a new log instead of updating record
+      if (existingRecord['actual_check_in'] != null) {
+        debugPrint('📋 Multiple check-in detected - creating log only (shift ${existingRecord['id']})');
+        
+        // Create attendance log for this additional check-in
+        await _createAttendanceLog(
+          organizationMemberId: organizationMemberId,
+          attendanceRecordId: existingRecord['id'],
+          eventType: 'check_in',
+          method: method,
+          location: locationWithPhoto,
+          deviceId: deviceId,
+          ipAddress: ipAddress,
+          userAgent: userAgent,
+          applicationId: applicationId,
+          rawData: rawData,
+        );
+        
+        // Return the existing record without modification
+        return AttendanceRecord.fromJson(existingRecord);
+      }
         // Update existing record (save as UTC)
         recordData = {
           'actual_check_in': nowUtc.toIso8601String(),
@@ -129,6 +144,8 @@ class AttendanceService {
       // Get current UTC time (universal, represents "now")
       final nowUtc = TimezoneHelper.getCurrentUtcTime();
 
+      final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
+
       // Cari record hari ini
       final existingRecord = await _supabase
           .from('attendance_records')
@@ -145,18 +162,31 @@ class AttendanceService {
         throw Exception('Please check in first');
       }
 
-      // ✅ Jika sudah check-out, jangan update lagi
-      if (existingRecord['actual_check_out'] != null) {
-        throw Exception(
-          'Already checked out today at ${existingRecord['actual_check_out']}',
-        );
-      }
+      // ✅ MULTI-SHIFT: Allow multiple check-outs per day
+    if (existingRecord['actual_check_out'] != null) {
+      debugPrint('📋 Multiple check-out detected - creating log only (shift ${existingRecord['id']})');
+      
+      // Create attendance log for this additional check-out
+      await _createAttendanceLog(
+        organizationMemberId: organizationMemberId,
+        attendanceRecordId: existingRecord['id'],
+        eventType: 'check_out',
+        method: method,
+        location: locationWithPhoto,
+        deviceId: deviceId,
+        ipAddress: ipAddress,
+        userAgent: userAgent,
+        applicationId: applicationId,
+        rawData: rawData,
+      );
+      
+      // Return the existing record without modification
+      return AttendanceRecord.fromJson(existingRecord);
+    }
 
       // Calculate work duration
       final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
       final workDuration = nowUtc.difference(checkInTime).inMinutes;
-
-      final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
 
       // Update record
       final recordData = {
@@ -277,11 +307,21 @@ class AttendanceService {
     Map<String, dynamic>? rawData,
   }) async {
     try {
+      // Use offline timestamp if available
+      DateTime eventTime = TimezoneHelper.getCurrentUtcTime();
+      if (rawData != null && rawData.containsKey('offline_timestamp')) {
+        try {
+          eventTime = DateTime.parse(rawData['offline_timestamp']).toUtc();
+        } catch (e) {
+          debugPrint('⚠️ Failed to parse offline timestamp for log: $e');
+        }
+      }
+
       final logData = {
         'organization_member_id': organizationMemberId,
         'attendance_record_id': attendanceRecordId,
         'event_type': eventType,
-        'event_time': TimezoneHelper.getCurrentUtcTime().toIso8601String(),
+        'event_time': eventTime.toIso8601String(),
         'method': method,
         'location': location,
         'device_id': deviceId,
