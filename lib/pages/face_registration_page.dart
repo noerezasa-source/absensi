@@ -29,6 +29,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   bool _isLoading = false;
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
+  bool _isTakingPicture = false; // ✅ NEW: Prevent concurrent camera captures
   bool _isModelInitialized = false;
   String? _errorMessage;
   String _currentStep = 'Loading model...';
@@ -104,8 +105,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   void _startFaceDetection() {
-    // ✅ SIMPLIFIED: Auto-capture for single front pose
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 800), (timer) {
+    // ✅ IMPROVED: 1000ms interval for better stability during registration
+    _detectionTimer = Timer.periodic(const Duration(milliseconds: 1000), (timer) {
       if (!_isProcessing && 
           _isCameraInitialized && 
           _isModelInitialized && 
@@ -117,18 +118,43 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
 
   Future<void> _detectAndValidatePose() async {
+    // ✅ IMPROVED: Comprehensive camera state validation
     if (_cameraController == null || 
         !_cameraController!.value.isInitialized || 
-        _isProcessing) {
+        _isProcessing ||
+        _isTakingPicture) {
       return;
     }
 
+    // ✅ IMPROVED: Prevent concurrent operations
     setState(() {
       _isProcessing = true;
+      _isTakingPicture = true;
     });
 
+    File? imageFile;
+
+    
     try {
-      final image = await _cameraController!.takePicture();
+      // ✅ IMPROVED: Validate camera state before capture
+      if (_cameraController == null || !_cameraController!.value.isInitialized) {
+        debugPrint('⚠️ Camera not ready, skipping detection');
+        return;
+      }
+
+      final image = await _cameraController!.takePicture().timeout(
+        const Duration(milliseconds: 1000),
+        onTimeout: () {
+          throw TimeoutException('Camera takePicture timeout');
+        },
+      );
+      imageFile = File(image.path);
+      
+      // ✅ IMPROVED: Validate file before processing
+      if (!await imageFile.exists()) {
+        debugPrint('⚠️ Captured image file does not exist');
+        return;
+      }
       
       try {
         final validationResult = await _validatePoseWithFeedback(image.path);
@@ -142,7 +168,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             _overlayColor = Colors.orange;
             _currentStep = validationResult['message'] ?? 'Sesuaikan posisi';
           });
-          await File(image.path).delete();
+          // ✅ IMPROVED: Safe file cleanup
+          try {
+            await imageFile.delete();
+          } catch (e) {
+            debugPrint('Failed to delete temp file: $e');
+          }
           
           Future.delayed(const Duration(milliseconds: 1500), () {
             if (mounted && !_isRegistrationComplete) {
@@ -153,11 +184,19 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           });
         }
       } catch (e) {
-        await File(image.path).delete();
-        setState(() {
-          _guidanceMessage = e.toString().replaceAll('Exception: ', '');
-          _overlayColor = Colors.red;
-        });
+        // ✅ IMPROVED: Safe file cleanup on error
+        try {
+          await imageFile.delete();
+        } catch (deleteError) {
+          debugPrint('Failed to delete temp file: $deleteError');
+        }
+        
+        if (mounted) {
+          setState(() {
+            _guidanceMessage = e.toString().replaceAll('Exception: ', '');
+            _overlayColor = Colors.red;
+          });
+        }
         
         Future.delayed(const Duration(milliseconds: 1500), () {
           if (mounted && !_isRegistrationComplete) {
@@ -168,13 +207,30 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         });
       }
     } catch (e) {
-      setState(() {
-        _currentStep = 'Sesuaikan posisi wajah';
-      });
+      debugPrint('ERROR in face detection: $e');
+      
+      // ✅ IMPROVED: Safe cleanup of temp file on error
+      if (imageFile != null) {
+        try {
+          await imageFile.delete();
+        } catch (deleteError) {
+          debugPrint('Failed to delete temp file on error: $deleteError');
+        }
+      }
+      
+      if (mounted) {
+        setState(() {
+          _currentStep = 'Sesuaikan posisi wajah';
+        });
+      }
     } finally {
-      setState(() {
-        _isProcessing = false;
-      });
+      // ✅ IMPROVED: Always reset flags to allow next detection
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+      _isTakingPicture = false;
     }
   }
 

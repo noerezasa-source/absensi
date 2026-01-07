@@ -55,6 +55,7 @@ class _FaceAttendanceMultiUserPageState
 
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
+  bool _isTakingPicture = false; // ✅ NEW: Prevent concurrent camera captures
   String? _currentMessage;
   MessageType _messageType = MessageType.idle;
   Position? _currentPosition;
@@ -533,12 +534,13 @@ class _FaceAttendanceMultiUserPageState
   }
 
   void _startContinuousScan() {
-    // ✅ BALANCED: 200ms provides good responsiveness while maintaining accuracy
+    // ✅ OPTIMIZED: 100ms for real-time face tracking (reduced from 300ms)
     // ✅ FIXED: Prevent camera restart by checking if camera is still initialized
     _continuousScanTimer = Timer.periodic(
-      const Duration(milliseconds: 200), // ✅ BALANCED: 200ms for accuracy + speed
+      const Duration(milliseconds: 100), // ✅ OPTIMIZED: 100ms for real-time tracking
       (timer) {
         if (!_isProcessing && 
+            !_isTakingPicture && // ✅ NEW: Prevent concurrent captures
             _isCameraInitialized && 
             _cameraController != null &&
             _cameraController!.value.isInitialized &&
@@ -566,30 +568,46 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<void> _scanForFaces() async {
-    // ✅ FIXED: Better camera state checking to prevent restarts
+    // ✅ IMPROVED: Comprehensive camera state validation
     if (_cameraController == null ||
         !_cameraController!.value.isInitialized ||
         _isProcessing ||
+        _isTakingPicture ||
         _isQueueProcessing) {
       return;
     }
 
-    // ✅ OPTIMIZED: Don't block UI with setState immediately
+    // ✅ IMPROVED: Prevent concurrent operations
     _isProcessing = true;
+    _isTakingPicture = true;
 
+    File? imageFile;
+    
     try {
-      // ✅ BALANCED: 800ms timeout ensures good image quality for accurate recognition
+      // ✅ IMPROVED: Validate camera state before capture
+      if (_cameraController == null || !_cameraController!.value.isInitialized) {
+        debugPrint('⚠️ Camera not ready, skipping scan');
+        return;
+      }
+
+      // ✅ IMPROVED: 800ms timeout with better error handling
       final image = await _cameraController!.takePicture().timeout(
-        const Duration(milliseconds: 800), // ✅ BALANCED: 800ms for quality
+        const Duration(milliseconds: 800),
         onTimeout: () {
           throw TimeoutException('Camera takePicture timeout');
         },
       );
-      final imageFile = File(image.path);
+      imageFile = File(image.path);
       
-      // ✅ BALANCED: Adequate timeout for accurate ML Kit face detection
+      // ✅ IMPROVED: Validate file before processing
+      if (!await imageFile.exists()) {
+        debugPrint('⚠️ Captured image file does not exist');
+        return;
+      }
+      
+      // ✅ IMPROVED: Face detection with better timeout handling
       final faces = await _faceService.detectFaces(image.path).timeout(
-        const Duration(milliseconds: 700), // ✅ BALANCED: 700ms for accurate detection
+        const Duration(milliseconds: 700),
         onTimeout: () {
           debugPrint('⚠️ Face detection timeout');
           return <Face>[];
@@ -599,18 +617,18 @@ class _FaceAttendanceMultiUserPageState
       debugPrint('🔍 DETECTED FACES: ${faces.length} total faces');
 
       if (faces.isEmpty) {
-        // ✅ OPTIMIZED: Delete file in background
-        imageFile.delete().catchError((e) => debugPrint('Failed to delete: $e'));
+        // ✅ IMPROVED: Safe cleanup with error handling
+        try {
+          await imageFile.delete();
+        } catch (e) {
+          debugPrint('Failed to delete temp file: $e');
+        }
         
-        // Don't clear immediately to prevent flickering if one frame misses
+        // ✅ IMPROVED: Clear persistent tracker when no faces detected
+        _persistentFaceTracker.clear();
+        
+        // ✅ IMPROVED: Safe setState with mounted check
         if (mounted && _detectedFaces.isNotEmpty) {
-           // Only clear if empty for a while? Or just let it update naturally 
-           // actually, if faces is empty, we SHOULD clear, but maybe the 800ms timer is too slow?
-           // The user says "stay adjusting until person goes out".
-           // If face goes out, faces.isEmpty is true. So clearing IS correct.
-           // The flickering "refresh" likely happens when face IS present but logic resets it.
-           // Since we fixed the 'reusing IDs' above, the face Present case is fixed.
-           // For face absent case:
            setState(() {
              _detectedFaces = [];
              _faceDataMap.clear();
@@ -618,9 +636,6 @@ class _FaceAttendanceMultiUserPageState
         }
         
         _hasFacesInView = false;
-        // _showMessage omitted to be less spammy
-        
-        _isProcessing = false;
         return;
       }
 
@@ -830,6 +845,15 @@ class _FaceAttendanceMultiUserPageState
         // _showMessage('Terjadi kesalahan', MessageType.error, 3);
       }
       
+      // ✅ IMPROVED: Safe cleanup of temp file on error
+      if (imageFile != null) {
+        try {
+          await imageFile.delete();
+        } catch (deleteError) {
+          debugPrint('Failed to delete temp file on error: $deleteError');
+        }
+      }
+      
       if (mounted) {
         setState(() {
           _detectedFaces = [];
@@ -837,8 +861,9 @@ class _FaceAttendanceMultiUserPageState
         });
       }
     } finally {
-      // ✅ OPTIMIZED: No cooldown delay for real-time performance
+      // ✅ IMPROVED: Always reset flags to allow next scan
       _isProcessing = false;
+      _isTakingPicture = false;
     }
   }
   
@@ -1818,30 +1843,12 @@ class _FaceAttendanceMultiUserPageState
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [
-                        // ✅ NEW: Glow effect (di belakang kotak)
-                        Positioned(
-                          left: -2,
-                          top: -2,
-                          child: Container(
-                            width: width + 4,
-                            height: height + 4,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(8),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: glowColor,
-                                  blurRadius: 12,
-                                  spreadRadius: 1,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        // ✅ IMPROVED: Main border - fully transparent with outline only
+                        // ✅ FIXED: Main border - completely transparent center with only colored borders
                         Container(
                           width: width,
                           height: height,
                           decoration: BoxDecoration(
+                            color: Colors.transparent, // ✅ TRANSPARENT CENTER - NO BACKGROUND
                             border: Border.all(
                               color: borderColor,
                               width: 3,

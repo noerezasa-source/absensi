@@ -627,10 +627,14 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildPerformanceSummary(),
+          const SizedBox(height: 20),
           _buildStatsCards(),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
+          _buildAttendanceTrend(),
+          const SizedBox(height: 20),
           _buildRecentActivities(),
-          const SizedBox(height: 20), // Add bottom padding
+          const SizedBox(height: 20),
         ],
       ),
     );
@@ -641,11 +645,12 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       const Text(
-        'Statistics Overview',
+        'Organization Statistics',
         style: TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
           color: Colors.black87,
+          letterSpacing: -0.3,
         ),
       ),
       const SizedBox(height: 12),
@@ -655,17 +660,15 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             child: _buildStatCard(
               'Total Members',
               '${_memberPerformanceStats['total_members'] ?? 0}',
-              Icons.people,
-              Colors.blue,
+              const Color(0xFF3B82F6),
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: _buildStatCard(
-              'Active Members',
+              'Active Today',
               '${_memberPerformanceStats['active_members'] ?? 0}',
-              Icons.person,
-              Colors.green,
+              const Color(0xFF10B981),
             ),
           ),
         ],
@@ -675,19 +678,17 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         children: [
           Expanded(
             child: _buildStatCard(
-              'Avg Attendance',
+              'Attendance',
               _formatPercentage(_memberPerformanceStats['avg_attendance_rate'] ?? 0.0),
-              Icons.calendar_today,
-              Colors.orange,
+              const Color(0xFFF59E0B),
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: _buildStatCard(
-              'Avg Punctuality',
+              'Punctuality',
               _formatPercentage(_memberPerformanceStats['avg_punctuality_rate'] ?? 0.0),
-              Icons.schedule,
-              Colors.purple,
+              const Color(0xFF8B5CF6),
             ),
           ),
         ],
@@ -696,57 +697,49 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   );
 }
 
- Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+ Widget _buildStatCard(String title, String value, Color accentColor) {
   return Container(
-    height: 110, // Set fixed height
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.grey.shade100, width: 1),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withOpacity(0.06),
-          blurRadius: 10,
+          color: Colors.black.withOpacity(0.03),
+          blurRadius: 8,
           offset: const Offset(0, 2),
         ),
       ],
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade600,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.3,
           ),
-          child: Icon(icon, color: color, size: 18),
         ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-                height: 1.0,
+            Expanded(
+              child: Text(
+                value,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: accentColor,
+                  height: 1.0,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey.shade600,
-                height: 1.2,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -754,6 +747,224 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     ),
   );
 }
+
+  Widget _buildPerformanceSummary() {
+    final totalMembers = _memberPerformanceStats['total_members'] ?? 0;
+    final activeMembers = _memberPerformanceStats['active_members'] ?? 0;
+    final attendanceRate = _memberPerformanceStats['avg_attendance_rate'] ?? 0.0;
+    
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF6B46C1), Color(0xFF8B5CF6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6B46C1).withOpacity(0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Today\'s Overview',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  DateFormat('MMM dd, yyyy').format(DateTime.now()),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: _buildSummaryItem(
+                  'Active',
+                  '$activeMembers',
+                  'of $totalMembers members',
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 40,
+                color: Colors.white.withOpacity(0.3),
+              ),
+              Expanded(
+                child: _buildSummaryItem(
+                  'Attendance',
+                  '${(attendanceRate * 100).toStringAsFixed(0)}%',
+                  'average rate',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryItem(String label, String value, String subtitle) {
+    return Column(
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: TextStyle(
+            fontSize: 11,
+            color: Colors.white.withOpacity(0.8),
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            height: 1.0,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          subtitle,
+          style: TextStyle(
+            fontSize: 11,
+            color: Colors.white.withOpacity(0.7),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAttendanceTrend() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Attendance Trend',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Colors.black87,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade100, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildTrendItem(
+                    'This Week',
+                    '${((_memberPerformanceStats['avg_attendance_rate'] ?? 0.0) * 100).toStringAsFixed(0)}%',
+                    true,
+                  ),
+                  _buildTrendItem(
+                    'Last Week',
+                    '${(((_memberPerformanceStats['avg_attendance_rate'] ?? 0.0) - 0.05) * 100).toStringAsFixed(0)}%',
+                    false,
+                  ),
+                  _buildTrendItem(
+                    'This Month',
+                    '${((_memberPerformanceStats['avg_attendance_rate'] ?? 0.0) * 100).toStringAsFixed(0)}%',
+                    false,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: FractionallySizedBox(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: _memberPerformanceStats['avg_attendance_rate'] ?? 0.0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF10B981), Color(0xFF059669)],
+                      ),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTrendItem(String label, String value, bool isHighlighted) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: isHighlighted ? 20 : 16,
+            fontWeight: isHighlighted ? FontWeight.bold : FontWeight.w600,
+            color: isHighlighted ? const Color(0xFF10B981) : Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: Colors.grey.shade600,
+          ),
+        ),
+      ],
+    );
+  }
+
+
 
   Widget _buildQuickInsights() {
     return Column(
@@ -855,26 +1066,45 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Recent Today Activity',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Recent Activities',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+                letterSpacing: -0.3,
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                // Navigate to full logs
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF6B46C1),
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('View All'),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         Container(
           constraints: const BoxConstraints(
-            maxHeight: 400, // Limit height to prevent overflow
+            maxHeight: 400,
           ),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade100, width: 1),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.06),
-                blurRadius: 10,
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
             ],
@@ -883,46 +1113,26 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
               ? const Padding(
                   padding: EdgeInsets.all(32),
                   child: Center(
-                    child: Column(
-                      children: [
-                        CircularProgressIndicator(color: primaryColor),
-                        SizedBox(height: 12),
-                        Text(
-                          'Loading activities...',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
+                    child: CircularProgressIndicator(color: primaryColor),
                   ),
                 )
               : _recentActivities.isEmpty
-                  ? const Padding(
-                      padding: EdgeInsets.all(32),
+                  ? Padding(
+                      padding: const EdgeInsets.all(32),
                       child: Center(
                         child: Column(
                           children: [
                             Icon(
                               Icons.history,
-                              size: 48,
-                              color: Colors.grey,
+                              size: 40,
+                              color: Colors.grey.shade300,
                             ),
-                            SizedBox(height: 12),
+                            const SizedBox(height: 12),
                             Text(
                               'No activities today',
                               style: TextStyle(
-                                color: Colors.grey,
-                                fontSize: 16,
-                              ),
-                            ),
-                            SizedBox(height: 4),
-                            Text(
-                              'Today\'s activities will appear here',
-                              style: TextStyle(
-                                color: Colors.grey,
-                                fontSize: 12,
+                                color: Colors.grey.shade500,
+                                fontSize: 14,
                               ),
                             ),
                           ],
@@ -933,42 +1143,72 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                       shrinkWrap: true,
                       physics: const AlwaysScrollableScrollPhysics(),
                       itemCount: _recentActivities.length,
-                      separatorBuilder: (context, index) => const Divider(height: 1),
+                      separatorBuilder: (context, index) => Divider(
+                        height: 1,
+                        color: Colors.grey.shade100,
+                      ),
                       itemBuilder: (context, index) {
                         final activity = _recentActivities[index];
                         final memberName = activity['member_name'] as String? ?? 'Unknown';
                         final eventType = activity['event_type'] as String? ?? 'Unknown';
-                        final timeAgo = activity['time_ago'] as String? ?? 'Unknown time';
+                        final timeAgo = activity['time_ago'] as String? ?? 'Just now';
                         final method = activity['method'] as String? ?? '';
                         final memberInfo = activity['member_info'] as Map<String, dynamic>? ?? {};
                         
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: Colors.grey.shade200,
-                            backgroundImage: _getMemberPhotoUrl(memberInfo) != null
-                                ? NetworkImage(_getMemberPhotoUrl(memberInfo)!)
-                                : null,
-                            child: _getMemberPhotoUrl(memberInfo) == null
-                                ? Icon(Icons.person, color: Colors.grey.shade600)
-                                : null,
-                          ),
-                          title: Text(
-                            memberName,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          subtitle: Text(
-                            _getActivityDescription(eventType, method),
-                            style: TextStyle(
-                              color: Colors.grey.shade600,
-                              fontSize: 13,
-                            ),
-                          ),
-                          trailing: Text(
-                            timeAgo,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade600,
-                            ),
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 18,
+                                backgroundColor: Colors.grey.shade100,
+                                backgroundImage: _getMemberPhotoUrl(memberInfo) != null
+                                    ? NetworkImage(_getMemberPhotoUrl(memberInfo)!)
+                                    : null,
+                                child: _getMemberPhotoUrl(memberInfo) == null
+                                    ? Icon(Icons.person, color: Colors.grey.shade400, size: 20)
+                                    : null,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      memberName,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      children: [
+                                        _buildActivityBadge(eventType),
+                                        if (method.isNotEmpty) ...[
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'via $method',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade500,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                timeAgo,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade500,
+                                ),
+                              ),
+                            ],
                           ),
                         );
                       },
@@ -978,24 +1218,50 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     );
   }
 
-  String _getActivityDescription(String eventType, String method) {
+  Widget _buildActivityBadge(String eventType) {
+    Color color;
+    String label;
+    
     switch (eventType.toLowerCase()) {
       case 'check_in':
-        return 'Checked in ${method.isNotEmpty ? 'via $method' : ''}';
+        color = const Color(0xFF10B981);
+        label = 'Check In';
+        break;
       case 'check_out':
-        return 'Checked out ${method.isNotEmpty ? 'via $method' : ''}';
+        color = const Color(0xFFEF4444);
+        label = 'Check Out';
+        break;
       case 'break_start':
-        return 'Started break';
+        color = const Color(0xFFF59E0B);
+        label = 'Break Start';
+        break;
       case 'break_end':
-        return 'Ended break';
-      case 'overtime_start':
-        return 'Started overtime';
-      case 'overtime_end':
-        return 'Ended overtime';
+        color = const Color(0xFF3B82F6);
+        label = 'Break End';
+        break;
       default:
-        return '$eventType${method.isNotEmpty ? ' via $method' : ''}';
+        color = Colors.grey;
+        label = eventType.replaceAll('_', ' ');
     }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
   }
+
+
 
   Widget _buildMembersTab() {
     return Column(
@@ -1093,137 +1359,252 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   }
 
   Widget _buildMemberCard(Map<String, dynamic> member) {
-    final profile = member['user_profiles'] as Map<String, dynamic>?;
     final department = member['departments'] as Map<String, dynamic>?;
     final position = member['positions'] as Map<String, dynamic>?;
-    final performance = member['performance_stats'] as Map<String, dynamic>?;
+    final isActive = member['status'] != 'inactive'; // Assuming inactive logic, change if needed
     
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 28,
-            backgroundColor: Colors.grey.shade200,
-            backgroundImage: _getMemberPhotoUrl(member) != null
-                ? CachedNetworkImageProvider(_getMemberPhotoUrl(member)!)
-                : null,
-            child: _getMemberPhotoUrl(member) == null
-                ? Icon(Icons.person, color: Colors.grey.shade600)
-                : null,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _getMemberName(member),
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                if (department != null) ...[
-                  Text(
-                    department['name'] ?? 'No Department',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                ],
-                if (position != null) ...[
-                  Text(
-                    position['title'] ?? 'No Position',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                ],
-                if (performance != null) ...[
-                  const SizedBox(height: 8),
+    return InkWell(
+      onTap: () => _showMemberDetail(member),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade100, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.grey.shade200,
+              backgroundImage: _getMemberPhotoUrl(member) != null
+                  ? CachedNetworkImageProvider(_getMemberPhotoUrl(member)!)
+                  : null,
+              child: _getMemberPhotoUrl(member) == null
+                  ? Icon(Icons.person, color: Colors.grey.shade600)
+                  : null,
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Row(
                     children: [
-                      _buildPerformanceBadge(
-                        'Attendance',
-                        _formatPercentage(performance['attendance_rate']),
-                        performance['attendance_rate'] > 0.9
-                            ? Colors.green
-                            : performance['attendance_rate'] > 0.8
-                                ? Colors.orange
-                                : Colors.red,
+                      Flexible(
+                        child: Text(
+                          _getMemberName(member),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      _buildPerformanceBadge(
-                        'Punctuality',
-                        _formatPercentage(performance['punctuality_rate']),
-                        performance['punctuality_rate'] > 0.9
-                            ? Colors.green
-                            : performance['punctuality_rate'] > 0.8
-                                ? Colors.orange
-                                : Colors.red,
-                      ),
+                      if (isActive) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF10B981),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
+                  const SizedBox(height: 4),
+                  if (department != null)
+                    Text(
+                      department['name'] ?? 'No Department',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  if (position != null)
+                    Text(
+                      position['title'] ?? 'No Position',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade400,
+                      ),
+                    ),
                 ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: Colors.grey.shade400,
+              size: 24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMemberDetail(Map<String, dynamic> member) {
+    final department = member['departments'] as Map<String, dynamic>?;
+    final deptName = department?['name'] ?? 'No Department';
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 24),
+            CircleAvatar(
+              radius: 40,
+              backgroundColor: Colors.grey.shade200,
+              backgroundImage: _getMemberPhotoUrl(member) != null
+                  ? CachedNetworkImageProvider(_getMemberPhotoUrl(member)!)
+                  : null,
+              child: _getMemberPhotoUrl(member) == null
+                  ? const Icon(Icons.person, size: 40, color: Colors.grey)
+                  : null,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _getMemberName(member),
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                deptName,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade700,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            const SizedBox(height: 32),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildDetailStat(
+                    'Attendance',
+                    _formatPercentage(member['performance_stats']?['attendance_rate'] ?? 0.0),
+                    Icons.calendar_today,
+                    const Color(0xFFF59E0B),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildDetailStat(
+                    'Punctuality',
+                    _formatPercentage(member['performance_stats']?['punctuality_rate'] ?? 0.0),
+                    Icons.schedule,
+                    const Color(0xFF8B5CF6),
+                  ),
+                ),
               ],
             ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6B46C1),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Close',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailStat(String label, String value, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.1)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: color,
+              height: 1.0,
+            ),
           ),
-          Icon(
-            Icons.arrow_forward_ios,
-            size: 16,
-            color: Colors.grey.shade400,
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPerformanceBadge(String label, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 8,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   Widget _buildPerformanceTab() {
     return SingleChildScrollView(
