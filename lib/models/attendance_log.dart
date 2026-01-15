@@ -1,4 +1,6 @@
 // lib/models/attendance_log.dart
+import '../helpers/timezone_helper.dart';
+
 class AttendanceLog {
   final int? id;
   final int organizationMemberId;
@@ -62,7 +64,7 @@ class AttendanceLog {
       'organization_member_id': organizationMemberId,
       'attendance_record_id': attendanceRecordId,
       'event_type': eventType,
-      'event_time': eventTime.toIso8601String(),
+      'event_time': TimezoneHelper.formatUtcForSupabase(eventTime),
       'device_id': deviceId,
       'method': method,
       'location': location,

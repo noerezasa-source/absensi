@@ -7,6 +7,9 @@ import 'package:absensimassal/services/role_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:absensimassal/services/attendance_sync_service.dart';
+import 'package:google_fonts/google_fonts.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -15,6 +18,10 @@ Future<void> main() async {
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94a3V4d2tlaGluaHl4ZnNhdXFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc5NDYxOTMsImV4cCI6MjA3MzUyMjE5M30.g3BjGtZCSFxnBDwMWkaM2mEcnCkoDL92fvTP_gUgR20',
   );
   await AppLanguage.init();
+  
+  // Start background sync service globally
+  AttendanceSyncService().startAutoSync();
+
   runApp(const MyApp());
 }
 
@@ -57,29 +64,24 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     // Initialize animations
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 2000),
     );
     
-    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
       CurvedAnimation(
         parent: _animationController,
-        curve: Curves.easeOutBack,
+        curve: Curves.easeOutCubic,
       ),
     );
     
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _animationController,
-        curve: Curves.easeIn,
+        curve: const Interval(0.0, 0.6, curve: Curves.easeIn),
       ),
     );
     
-    _rotateAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeInOut,
-      ),
-    );
+    // Hapus rotasi animasi yang berlebihan
     
     _animationController.forward();
     _navigateToNextScreen();
@@ -91,6 +93,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
+  // ... (keep _checkAuthAndNavigate and _navigateToNextScreen as is)
   Future<void> _checkAuthAndNavigate() async {
     if (!mounted) return;
 
@@ -120,13 +123,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         final roleName = _roleService.getRoleName(memberData);
         final roleCode = _roleService.getRoleCode(memberData);
         
-        debugPrint('✅ User has organization membership');
-        debugPrint('   Organization Member ID: $organizationMemberId');
-        debugPrint('   Role: $roleName ($roleCode)');
-
         // Navigate berdasarkan role
         if (_roleService.isPetugas(memberData)) {
-          debugPrint('✅ User is Admin - navigating to Petugas Dashboard');
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (context) => PetugasDashboardPage(
@@ -136,7 +134,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             ),
           );
         } else if (_roleService.isUser(memberData)) {
-          debugPrint('✅ User is Regular User - navigating to User Dashboard');
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (context) => UserDashboardPage(
@@ -146,8 +143,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             ),
           );
         } else {
-          // Default ke User Dashboard jika role tidak dikenali
-          debugPrint('⚠️ Unknown role ($roleCode) - navigating to User Dashboard');
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (context) => UserDashboardPage(
@@ -158,18 +153,13 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           );
         }
       } else {
-        // User belum join organization
-        debugPrint('⚠️ User has no organization - navigating to Join Organization');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const JoinOrganizationScreen()),
         );
       }
     } catch (e) {
       debugPrint('❌ Error checking organization membership: $e');
-      
       if (!mounted) return;
-      
-      // Jika error, arahkan ke Login untuk aman
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
       );
@@ -177,117 +167,101 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 
   Future<void> _navigateToNextScreen() async {
-    // Tampilkan splash selama 2 detik
-    await Future.delayed(const Duration(milliseconds: 2000));
-    
+    await Future.delayed(const Duration(milliseconds: 2500)); // Sedikit lebih lama untuk menikmati splash
     if (!mounted) return;
-    
-    // Check auth dan navigate
     await _checkAuthAndNavigate();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              Color(0xFF6366F1),
-              Color(0xFF8B5CF6),
+      backgroundColor: Colors.white, // Background putih bersih lebih professional
+      body: Center(
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ScaleTransition(
+                scale: _scaleAnimation,
+                child: Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6366F1), // Primary color box
+                    borderRadius: BorderRadius.circular(24), // Rounded corners yang modern
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6366F1).withOpacity(0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.how_to_reg_rounded, // Icon presensi/absensi (orang + centang)
+                      size: 64,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 32),
+              
+              Column(
+                children: [
+                  Text(
+                    'ABSENSI MASSAL',
+                    style: GoogleFonts.montserrat(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF1F2937), // Dark grey text
+                      letterSpacing: 4.0, // Wide spacing for luxury feel
+                      height: 1.2,
+                      shadows: [
+                         const BoxShadow(
+                          color: Colors.black12,
+                          offset: Offset(2, 2),
+                          blurRadius: 4,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6366F1).withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    child: Text(
+                      'Smart Attendance System',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF6366F1), // Brand color
+                        letterSpacing: 2.0,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              
+              const SizedBox(height: 80), // Space sebelum loading indicator
+              
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    const Color(0xFF6366F1).withOpacity(0.8),
+                  ),
+                ),
+              ),
             ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Center(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Animated Logo
-                ScaleTransition(
-                  scale: _scaleAnimation,
-                  child: RotationTransition(
-                    turns: _rotateAnimation,
-                    child: Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(30),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 30,
-                            offset: const Offset(0, 15),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.fingerprint,
-                        size: 70,
-                        color: Color(0xFF6366F1),
-                      ),
-                    ),
-                  ),
-                ),
-                
-                const SizedBox(height: 40),
-                
-                // App Name
-                const Text(
-                  'FACEGATE',
-                  style: TextStyle(
-                    fontSize: 36,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    letterSpacing: 8,
-                  ),
-                ),
-                
-                const SizedBox(height: 12),
-                
-                // Tagline
-                Text(
-                  'Sistem Absensi Modern',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white.withOpacity(0.9),
-                    letterSpacing: 2,
-                  ),
-                ),
-                
-                const SizedBox(height: 60),
-                
-                // Loading Indicator
-                SizedBox(
-                  width: 50,
-                  height: 50,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Colors.white.withOpacity(0.8),
-                    ),
-                  ),
-                ),
-                
-                const SizedBox(height: 20),
-                
-                // Loading Text
-                Text(
-                  'Memuat...',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white.withOpacity(0.8),
-                    letterSpacing: 1.5,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),

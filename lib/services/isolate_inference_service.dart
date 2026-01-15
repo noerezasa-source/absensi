@@ -11,16 +11,27 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 /// Request object to send to Isolate
 class InferenceRequest {
   final int requestId;
-  final String imagePath;
-  final Map<String, dynamic> faceData; // Bounding box, landmarks, etc.
+  final String? imagePath; // Optional now
+  final Uint8List? imageBytes; // NEW: For stream data
+  final int? imageWidth;
+  final int? imageHeight;
+  final int? rotation; // NEW: Rotation in degrees
+  final Map<String, dynamic> faceData; 
   final bool allowSidePose;
 
   InferenceRequest({
     required this.requestId,
-    required this.imagePath,
+    this.imagePath,
+    this.imageBytes,
+    this.imageWidth,
+    this.imageHeight,
+    this.rotation, // NEW
     required this.faceData,
     this.allowSidePose = false,
+    this.debugPath, // NEW: Path to save debug image
   });
+
+  final String? debugPath;
 }
 
 /// Response object from Isolate
@@ -67,8 +78,8 @@ class IsolateInferenceService {
       final receivePort = ReceivePort();
       final rootIsolateToken = RootIsolateToken.instance;
       
-      // Load model bytes in main isolate
-      final modelData = await rootBundle.load('assets/models/mobile_face_net.tflite');
+      // Load optimized W600K MBF model bytes in main isolate
+      final modelData = await rootBundle.load('assets/models/w600k_mbf_optimized.tflite');
       final modelBytes = modelData.buffer.asUint8List();
 
       _isolate = await Isolate.spawn(
@@ -126,6 +137,38 @@ class IsolateInferenceService {
     return completer.future;
   }
 
+  // ✅ NEW: method for stream bytes
+  Future<InferenceResponse> processFaceFromBytes({
+    required Uint8List imageBytes,
+    required int width,
+    required int height,
+    required int rotation, // NEW
+    required Map<String, dynamic> faceData,
+    bool allowSidePose = false,
+    String? debugPath, // NEW
+  }) async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    final requestId = _requestIdCounter++;
+    final completer = Completer<InferenceResponse>();
+    _activeRequests[requestId] = completer;
+
+    _sendPort!.send(InferenceRequest(
+      requestId: requestId,
+      imageBytes: imageBytes,
+      imageWidth: width,
+      imageHeight: height,
+      rotation: rotation, // NEW
+      faceData: faceData,
+      allowSidePose: allowSidePose,
+      debugPath: debugPath,
+    ));
+
+    return completer.future;
+  }
+
   void dispose() {
     _isolate?.kill();
     _isInitialized = false;
@@ -149,10 +192,10 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
   final receivePort = ReceivePort();
   initData.sendPort.send(receivePort.sendPort);
 
-  // Load Model from buffer
+  // Load W600K MBF optimized model from buffer
   Interpreter? interpreter;
   int inputSize = 112; 
-  int embeddingSize = 192;
+  int embeddingSize = 512; // W600K model output size
   
   try {
     // Determine the buffer length and address if necessary, or just copy it.
@@ -162,11 +205,22 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
       options: InterpreterOptions()..threads = 4,
     );
     
-     // Update shapes
-    final inputShape = interpreter.getInputTensor(0).shape;
-    final outputShape = interpreter.getOutputTensor(0).shape;
+    print('ISOLATE: Model loaded successfully');
+    
+    // Update shapes
+    final inputTensor = interpreter.getInputTensor(0);
+    final outputTensor = interpreter.getOutputTensor(0);
+    
+    final inputShape = inputTensor.shape;
+    final outputShape = outputTensor.shape;
+    
+    print('ISOLATE: Input Tensor: Shape=$inputShape, Type=${inputTensor.type}');
+    print('ISOLATE: Output Tensor: Shape=$outputShape, Type=${outputTensor.type}');
+
     if (inputShape.length >= 3) inputSize = inputShape[1];
     if (outputShape.length >= 2) embeddingSize = outputShape[1];
+    
+    print('ISOLATE: Configured inputSize=$inputSize, embeddingSize=$embeddingSize');
     
   } catch (e) {
     print('ISOLATE: Failed to load model: $e');
@@ -175,27 +229,51 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
   receivePort.listen((message) async {
     if (message is InferenceRequest) {
       try {
-        if (interpreter == null) {
-          throw Exception('Model not initialized');
-        }
+        img.Image? image;
 
-        final imageFile = File(message.imagePath);
-        if (!await imageFile.exists()) {
-           throw Exception('Image file not found: ${message.imagePath}');
+        if (message.imagePath != null) {
+          final imageFile = File(message.imagePath!);
+          if (!await imageFile.exists()) {
+             throw Exception('Image file not found: ${message.imagePath}');
+          }
+          final imageBytes = await imageFile.readAsBytes();
+          image = img.decodeImage(imageBytes);
+        } else if (message.imageBytes != null && message.imageWidth != null && message.imageHeight != null) {
+           // Provide raw YUV/NV21 handling if needed, or assume it's already converted to RGB?
+           // The concatenating planes in main thread creates a rough YUV buffer.
+           // However, converting YUV to RGB effectively in Dart is slow.
+           // BETTER: Since we used `takePicture` before, that was JPEG.
+           // Now we send raw bytes from `cameraImage`.
+           // Ideally, we should do YUV -> RGB here. 
+           image = _convertYUV420ToImage(message.imageBytes!, message.imageWidth!, message.imageHeight!);
+           
+           // Rotate if needed! (Crucial for correct coordinates)
+           if (message.rotation != null && message.rotation != 0) {
+             image = img.copyRotate(image!, angle: message.rotation!);
+           }
         }
-        
-        final imageBytes = await imageFile.readAsBytes();
-        final image = img.decodeImage(imageBytes);
 
         if (image == null) {
-          throw Exception('Failed to decode image');
+          throw Exception('Failed to decode or process image');
         }
 
         // Process
         final enhancedImage = _enhanceImage(image);
-        final alignedImage = _alignFace(enhancedImage, message.faceData);
-        final faceImage = _cropFace(alignedImage, message.faceData, inputSize);
-        final embedding = _runInference(interpreter, faceImage, inputSize, embeddingSize);
+        // Combined Crop & Align (Fixes rotation coordinate issues)
+        final faceImage = _cropAndAlignFace(enhancedImage, message.faceData, inputSize);
+        
+        // ✅ DEBUG: Save cropped face to check alignment/rotation
+        if (message.debugPath != null) {
+           try {
+             final debugFile = File('${message.debugPath}/debug_face_${DateTime.now().millisecondsSinceEpoch}.png');
+             debugFile.writeAsBytesSync(img.encodePng(faceImage));
+             print('DEBUG: Saved face crop to ${debugFile.path}');
+           } catch (e) {
+             print('DEBUG: Failed to save face crop: $e');
+           }
+        }
+
+        final embedding = _runInference(interpreter!, faceImage, inputSize, embeddingSize);
         
         initData.sendPort.send(InferenceResponse(
           requestId: message.requestId,
@@ -215,57 +293,64 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
 
 // --- Helper Functions in Isolate ---
 
+// Simple YUV420 to RGB conversion (Approximation for performance)
+img.Image _convertYUV420ToImage(Uint8List yuvBytes, int width, int height) {
+  final image = img.Image(width: width, height: height);
+  
+  int frameSize = width * height;
+  
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+       int yIndex = y * width + x;
+       if (yIndex >= yuvBytes.length) break;
+       
+       int yVal = yuvBytes[yIndex] & 0xFF;
+       
+       // NV21 Logic (Standard Android)
+       int uvIndex = frameSize + (y >> 1) * width + (x & ~1);
+       int uVal = 128;
+       int vVal = 128;
+       
+       if (uvIndex + 1 < yuvBytes.length) {
+         vVal = yuvBytes[uvIndex] & 0xFF;
+         uVal = yuvBytes[uvIndex + 1] & 0xFF;
+       }
+       
+       int r = (yVal + 1.370705 * (vVal - 128)).toInt();
+       int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128)).toInt();
+       int b = (yVal + 1.732446 * (uVal - 128)).toInt();
+       
+       image.setPixelRgb(x, y, 
+         r.clamp(0, 255), 
+         g.clamp(0, 255), 
+         b.clamp(0, 255)
+       );
+    }
+  }
+  return image;
+}
+
 img.Image _enhanceImage(img.Image image) {
+  // ✅ TUNED: Less aggressive enhancement to preserve natural features
   return img.adjustColor(
     image,
-    brightness: 1.1,
-    contrast: 1.15,
-    saturation: 1.05,
-    gamma: 1.1,
+    brightness: 1.0,  // Neutral
+    contrast: 1.0,    // Neutral
+    saturation: 1.0,  // Neutral
+    gamma: 1.0,       // Neutral
   );
 }
 
-img.Image _alignFace(img.Image image, Map<String, dynamic> faceData) {
-  try {
-    final landmarks = faceData['landmarks'] as Map<String, dynamic>?;
-    if (landmarks == null) return image;
-
-    // Expecting keys like 'leftEye' and 'rightEye' with 'x','y'
-    final leftEye = landmarks['leftEye'];
-    final rightEye = landmarks['rightEye'];
-
-    if (leftEye == null || rightEye == null) return image;
-    
-    // Explicitly cast to Map<String, dynamic> or access safely
-    // Assuming passed structure is {'x': double, 'y': double}
-    final lx = (leftEye['x'] as num).toDouble();
-    final ly = (leftEye['y'] as num).toDouble();
-    final rx = (rightEye['x'] as num).toDouble();
-    final ry = (rightEye['y'] as num).toDouble();
-
-    final dx = rx - lx;
-    final dy = ry - ly;
-
-    final angleRad = atan2(dy, dx);
-    final angleDeg = angleRad * 180 / pi;
-
-    if (angleDeg.abs() > 2.0) {
-      return img.copyRotate(image, angle: -angleDeg, interpolation: img.Interpolation.cubic);
-    }
-    return image;
-  } catch (e) {
-    return image;
-  }
-}
-
-img.Image _cropFace(img.Image image, Map<String, dynamic> faceData, int inputSize) {
+img.Image _cropAndAlignFace(img.Image image, Map<String, dynamic> faceData, int inputSize) {
+  // 1. Crop face with margin first
   final box = faceData['boundingBox'] as Map<String, dynamic>;
   final left = (box['left'] as num).toDouble();
   final top = (box['top'] as num).toDouble();
   final width = (box['width'] as num).toDouble();
   final height = (box['height'] as num).toDouble();
 
-  const margin = 0.35;
+  // Wide margin to allow for rotation without black corners
+  const margin = 0.35; 
   final marginW = width * margin;
   final marginH = height * margin;
 
@@ -274,8 +359,34 @@ img.Image _cropFace(img.Image image, Map<String, dynamic> faceData, int inputSiz
   final w = min(image.width - x, (width + 2 * marginW).toInt());
   final h = min(image.height - y, (height + 2 * marginH).toInt());
 
-  final croppedFace = img.copyCrop(image, x: x, y: y, width: w, height: h);
-  
+  var croppedFace = img.copyCrop(image, x: x, y: y, width: w, height: h);
+
+  // 2. Calculate rotation from landmarks (now in cropped space)
+  final landmarks = faceData['landmarks'] as Map<String, dynamic>?;
+  if (landmarks != null) {
+    final leftEye = landmarks['leftEye'] as Map<String, dynamic>?;
+    final rightEye = landmarks['rightEye'] as Map<String, dynamic>?;
+    
+    if (leftEye != null && rightEye != null) {
+      // Adjust landmark coordinates to cropped space
+      final leftX = (leftEye['x'] as num).toDouble() - x;
+      final leftY = (leftEye['y'] as num).toDouble() - y;
+      final rightX = (rightEye['x'] as num).toDouble() - x;
+      final rightY = (rightEye['y'] as num).toDouble() - y;
+
+      final dx = rightX - leftX;
+      final dy = rightY - leftY;
+      final angle = atan2(dy, dx) * (180.0 / pi);
+
+      // Only rotate if angle is significant
+      if (angle.abs() >= 5.0) {
+        // Rotate around center
+        croppedFace = img.copyRotate(croppedFace, angle: -angle);
+      }
+    }
+  }
+
+  // 3. Resize to model input
   return img.copyResize(
     croppedFace,
     width: inputSize,
@@ -285,16 +396,70 @@ img.Image _cropFace(img.Image image, Map<String, dynamic> faceData, int inputSiz
 }
 
 List<double> _runInference(Interpreter interpreter, img.Image faceImage, int inputSize, int embeddingSize) {
-  final input = _preprocessImage(faceImage, inputSize);
-  final output = List.generate(1, (_) => List<double>.filled(embeddingSize, 0.0));
+  final inputTensor = interpreter.getInputTensor(0);
+  final inputType = inputTensor.type;
+  
+  Object input;
+  
+  if (inputType == TensorType.uint8) {
+     input = _preprocessImageUint8(faceImage, inputSize);
+  } else if (inputType == TensorType.int8) {
+     input = _preprocessImageInt8(faceImage, inputSize);
+  } else {
+     input = _preprocessImageFloat(faceImage, inputSize);
+  }
+
+  // Handle output type
+  final outputTensor = interpreter.getOutputTensor(0);
+  final outputType = outputTensor.type;
+  
+  Object output;
+  if (outputType == TensorType.uint8 || outputType == TensorType.int8) {
+    // Both uint8 and int8 use integer lists for output buffer
+    output = List.generate(1, (_) => List<int>.filled(embeddingSize, 0));
+  } else {
+    output = List.generate(1, (_) => List<double>.filled(embeddingSize, 0.0));
+  }
 
   interpreter.run(input, output);
+  
+  List<double> embedding;
+  if (output is List<List<int>>) {
+    // Apply Dequantization: real_value = (quantized_value - zero_point) * scale
+    // If params are missing, assume symmetric (zp=0, scale=1 or arbitrary since we normalize)
+    // But checking params is safer.
+    
+    // params map might be empty or specific structure in newer tflite_flutter
+    // We try to access scale and zeroPoint directly if exposed, or through params
+    
+    double scale = 1.0;
+    int zeroPoint = 0;
+    
+    try {
+      // Accessing quantization params - API depends on version.
+      // Assuming Tensor.params is available and contains scale/zeroPoint
+      // If version 0.10+:
+      final params = outputTensor.params; 
+      scale = params.scale;
+      zeroPoint = params.zeroPoint;
+    } catch (e) {
+      // Fallback or old version
+      // If int8, usually symmetric around 0.
+      print('ISOLATE: Warning - could not read quantization params: $e');
+    }
 
-  final embedding = List<double>.from(output[0]);
+    final rawIntList = output[0];
+    embedding = rawIntList.map((q) => (q - zeroPoint) * scale).toList();
+    
+  } else {
+    embedding = List<double>.from((output as List)[0]);
+  }
+
   return _normalizeEmbedding(embedding);
 }
 
-List<List<List<List<double>>>> _preprocessImage(img.Image image, int inputSize) {
+// Standard Float32 Preprocessing (-1 to 1)
+List<List<List<List<double>>>> _preprocessImageFloat(img.Image image, int inputSize) {
   final input = <List<List<List<double>>>>[];
   final batch = <List<List<double>>>[];
   
@@ -306,6 +471,49 @@ List<List<List<List<double>>>> _preprocessImage(img.Image image, int inputSize) 
         (pixel.r / 127.5) - 1.0,
         (pixel.g / 127.5) - 1.0,
         (pixel.b / 127.5) - 1.0,
+      ]);
+    }
+    batch.add(row);
+  }
+  input.add(batch);
+  return input;
+}
+
+// Uint8 Preprocessing (0 to 255)
+List<List<List<List<int>>>> _preprocessImageUint8(img.Image image, int inputSize) {
+  final input = <List<List<List<int>>>>[];
+  final batch = <List<List<int>>>[];
+  
+  for (int y = 0; y < inputSize; y++) {
+    final row = <List<int>>[];
+    for (int x = 0; x < inputSize; x++) {
+      final pixel = image.getPixel(x, y);
+      row.add([
+        pixel.r.toInt(),
+        pixel.g.toInt(),
+        pixel.b.toInt(),
+      ]);
+    }
+    batch.add(row);
+  }
+  input.add(batch);
+  return input;
+}
+
+// Int8 Preprocessing (-128 to 127)
+List<List<List<List<int>>>> _preprocessImageInt8(img.Image image, int inputSize) {
+  final input = <List<List<List<int>>>>[];
+  final batch = <List<List<int>>>[];
+  
+  for (int y = 0; y < inputSize; y++) {
+    final row = <List<int>>[];
+    for (int x = 0; x < inputSize; x++) {
+      final pixel = image.getPixel(x, y);
+      // Shift 0..255 to -128..127
+      row.add([
+        pixel.r.toInt() - 128,
+        pixel.g.toInt() - 128,
+        pixel.b.toInt() - 128,
       ]);
     }
     batch.add(row);

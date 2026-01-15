@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.absensimassal"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -35,6 +35,17 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    applicationVariants.all {
+        if (buildType.name == "release") {
+            outputs.all {
+                val output = this as? com.android.build.gradle.api.ApkVariantOutput
+                if (output != null && output.outputFileName.endsWith(".apk")) {
+                    output.outputFileName = "AbsensiMassal.apk"
+                }
+            }
         }
     }
 }

@@ -6,20 +6,21 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img; // Keep for validatePhotoQuality
 import 'isolate_inference_service.dart';
+import '../helpers/timezone_helper.dart';
 
 class FaceRecognitionTFLiteService {
   late final FaceDetector _faceDetector;
   final IsolateInferenceService _inferenceService = IsolateInferenceService();
   bool _isInitialized = false;
 
-  // Model config
+  // W600K MBF optimized model config
   int inputSize = 112; 
-  int embeddingSize = 192; 
+  int embeddingSize = 512; // W600K model output size 
   
   // ✅ IMPROVED: Relaxed quality thresholds for distance/motion
-  static const double minFaceQualityScore = 0.25; // Drastically lowered from 0.5 to fix gender bias
+  static const double minFaceQualityScore = 0.12; // ✅ RELAXED: 0.12 for easier acceptance
   static const double minEyeOpenProbability = 0.1; // Lowered to 0.1 to allow makeup/lashes
-  static const double maxHeadRotation = 30.0; // Increased from 15.0
+  static const double maxHeadRotation = 50.0; // ✅ INCREASED: 50.0 for side profiles
   
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -29,7 +30,7 @@ class FaceRecognitionTFLiteService {
         enableClassification: true, // Needed for eye open prob
         enableTracking: true, // ✅ ENABLED: For persistent ID tracking
         performanceMode: FaceDetectorMode.accurate,
-        minFaceSize: 0.1, // ✅ LOWERED: Detect smaller faces (further away)
+        minFaceSize: 0.15, // ✅ INCREASED: Prevent false detections on walls/objects (was 0.1)
       ),
     );
   }
@@ -53,8 +54,11 @@ class FaceRecognitionTFLiteService {
 
   Future<List<Face>> detectFaces(String imagePath) async {
     final inputImage = InputImage.fromFilePath(imagePath);
-    final faces = await _faceDetector.processImage(inputImage);
-    return faces;
+    return await detectFacesFromInputImage(inputImage);
+  }
+
+  Future<List<Face>> detectFacesFromInputImage(InputImage inputImage) async {
+    return await _faceDetector.processImage(inputImage);
   }
 
   // ✅ NEW: Calculate face quality score
@@ -150,6 +154,73 @@ class FaceRecognitionTFLiteService {
     }
 
     return buildTemplateFromFace(face, imagePath, allowSidePose: allowSidePose);
+  }
+
+  Future<Map<String, dynamic>> buildTemplateFromBytes(
+    Uint8List imageBytes,
+    int width,
+    int height,
+    int rotation, // NEW
+    Face face, {
+    bool allowSidePose = false,
+    String? debugPath, // NEW
+  }) async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    final landmarks = <String, dynamic>{};
+    void addLandmark(FaceLandmarkType type, String key) {
+      final landmark = face.landmarks[type];
+      if (landmark != null) {
+        landmarks[key] = {
+          'x': landmark.position.x.toDouble(),
+          'y': landmark.position.y.toDouble(),
+        };
+      }
+    }
+    
+    addLandmark(FaceLandmarkType.leftEye, 'leftEye');
+    addLandmark(FaceLandmarkType.rightEye, 'rightEye');
+    addLandmark(FaceLandmarkType.noseBase, 'noseBase');
+    addLandmark(FaceLandmarkType.bottomMouth, 'bottomMouth');
+    addLandmark(FaceLandmarkType.leftMouth, 'leftMouth');
+    addLandmark(FaceLandmarkType.rightMouth, 'rightMouth');
+    addLandmark(FaceLandmarkType.leftCheek, 'leftCheek');
+    addLandmark(FaceLandmarkType.rightCheek, 'rightCheek');
+    addLandmark(FaceLandmarkType.leftEar, 'leftEar');
+    addLandmark(FaceLandmarkType.rightEar, 'rightEar');
+
+    final faceData = {
+      'boundingBox': {
+        'left': face.boundingBox.left,
+        'top': face.boundingBox.top,
+        'width': face.boundingBox.width,
+        'height': face.boundingBox.height,
+      },
+      'landmarks': landmarks,
+    };
+
+    final response = await _inferenceService.processFaceFromBytes(
+      imageBytes: imageBytes,
+      width: width,
+      height: height,
+      rotation: rotation,
+      faceData: faceData,
+      allowSidePose: allowSidePose,
+      debugPath: debugPath,
+    );
+
+    if (response.error != null) {
+      throw Exception(response.error);
+    }
+    
+    if (response.embedding == null) {
+      throw Exception('Failed to generate embedding');
+    }
+
+    // We pass "stream_capture" as pseudo-path
+    return _buildTemplate(face, response.embedding!, landmarks, "stream_capture");
   }
 
   Future<Map<String, dynamic>> buildTemplateFromFace(
@@ -322,7 +393,7 @@ class FaceRecognitionTFLiteService {
     
     // ✅ ISO/IEC 19794-5 Compliant Template Structure
     return {
-      'version': 3.1, // Updated version with ISO compliance
+      'version': 5.0, // Updated version for W600K model (incompatible with v3)
       'embedding': embedding,
       'embeddingSize': embedding.length,
       'qualityScore': qualityScore,
@@ -366,7 +437,7 @@ class FaceRecognitionTFLiteService {
       
       // ✅ NEW: Capture Metadata (ISO/IEC 19794-5)
       'captureMetadata': {
-        'captureDate': DateTime.now().toIso8601String(),
+        'captureDate': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
         'captureDevice': 'Mobile Camera',
         'imageFormat': 'JPEG',
       },
@@ -386,17 +457,30 @@ class FaceRecognitionTFLiteService {
       return 0.0;
     }
 
-    if (embedding1.length != embedding2.length) {
-      debugPrint('!!! Embedding size mismatch: ${embedding1.length} vs ${embedding2.length}');
-      return 0.0;
-    }
-
+    // ✅ CHECK: Normalize vectors if they aren't already (Important for W600K/ArcFace)
+    // Cosine Similarity = (A . B) / (||A|| * ||B||)
     double dotProduct = 0.0;
+    double norm1 = 0.0;
+    double norm2 = 0.0;
+
     for (int i = 0; i < embedding1.length; i++) {
       dotProduct += embedding1[i] * embedding2[i];
+      norm1 += embedding1[i] * embedding1[i];
+      norm2 += embedding2[i] * embedding2[i];
     }
+    
+    norm1 = sqrt(norm1);
+    norm2 = sqrt(norm2);
 
-    final cosineSimilarity = dotProduct.clamp(-1.0, 1.0);
+    if (norm1 == 0 || norm2 == 0) return 0.0;
+    
+    // Normalized Cosine Similarity
+    final cosineSimilarity = (dotProduct / (norm1 * norm2)).clamp(-1.0, 1.0);
+    
+    // Convert -1..1 to 0..1
+    // -1 (Opposite) -> 0.0
+    // 0 (Orthogonal) -> 0.5
+    // 1 (Identical) -> 1.0
     final similarity = (cosineSimilarity + 1.0) / 2.0;
     
     return similarity;

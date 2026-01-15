@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:flutter/foundation.dart';
 import '../models/offline_attendance.dart';
+import '../helpers/timezone_helper.dart';
 
 class OfflineDatabaseService {
   static final OfflineDatabaseService _instance = OfflineDatabaseService._internal();
@@ -187,8 +188,8 @@ class OfflineDatabaseService {
       // Include RFID and Face Recognition records
       final results = await db.query(
         'offline_attendances',
-        where: 'is_synced = ? AND method IN (?, ?)',
-        whereArgs: [0, 'rfid_card_mobile', 'face_recognition_kiosk'],
+        where: 'is_synced = ? AND method IN (?, ?, ?)',
+        whereArgs: [0, 'rfid_card_mobile', 'FACERECOGNITION', 'face_recognition'],
         orderBy: 'created_at ASC',
       );
       return results.map((map) => OfflineAttendance.fromMap(map)).toList();
@@ -297,8 +298,8 @@ class OfflineDatabaseService {
       final db = await database;
       // Count RFID and face recognition records
       final result = await db.rawQuery(
-        'SELECT COUNT(*) as count FROM offline_attendances WHERE is_synced = 0 AND method IN (?, ?)',
-        ['rfid_card_mobile', 'face_recognition_kiosk'],
+        'SELECT COUNT(*) as count FROM offline_attendances WHERE is_synced = 0 AND method IN (?, ?, ?)',
+        ['rfid_card_mobile', 'FACERECOGNITION', 'face_recognition'],
       );
       return Sqflite.firstIntValue(result) ?? 0;
     } catch (e) {
@@ -381,7 +382,7 @@ class OfflineDatabaseService {
         'organization_id': memberInfo['organization_id'],
         'user_id': memberInfo['user_id'],
         'is_active': 1,
-        'cached_at': DateTime.now().toIso8601String(),
+        'cached_at': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
       };
 
       await db.insert(
@@ -592,24 +593,40 @@ class OfflineDatabaseService {
   Future<bool> hasDuplicateAttendance({
     required int organizationMemberId,
     required String eventType,
-    required String attendanceDate, // Format: YYYY-MM-DD (Ignored for multi-shift)
+    required String attendanceDate,
+    String? workTimeMode, // ✅ NEW: Check shift-specific duplicates
   }) async {
     try {
       final db = await database;
       
-      // ✅ MULTI-SHIFT: Only check for duplicates within the last 2 minutes
-      // This allows multiple shifts but prevents accidental double-taps
-      final now = DateTime.now();
+      final now = DateTime.now().toUtc();
       final twoMinutesAgo = now.subtract(const Duration(minutes: 2)).toIso8601String();
+      
+      String whereClause = 'organization_member_id = ? AND event_type = ? AND created_at > ?';
+      List<dynamic> whereArgs = [organizationMemberId, eventType, twoMinutesAgo];
+      
+      // ✅ ENHANCED: For multi-shift, also check work_time_mode
+      if (workTimeMode != null && workTimeMode.isNotEmpty) {
+        whereClause += ' AND work_time_mode = ?';
+        whereArgs.add(workTimeMode);
+      }
       
       final result = await db.query(
         'offline_attendances',
-        where: 'organization_member_id = ? AND event_type = ? AND created_at > ?',
-        whereArgs: [organizationMemberId, eventType, twoMinutesAgo],
+        where: whereClause,
+        whereArgs: whereArgs,
         orderBy: 'created_at DESC',
+        limit: 1,
       );
 
-      return result.isNotEmpty;
+      if (result.isNotEmpty) {
+        final lastRecord = result.first;
+        final diff = now.difference(DateTime.parse(lastRecord['created_at'] as String));
+        debugPrint('⚠️ Duplicate check: Last $eventType was ${diff.inSeconds}s ago (Mode: ${lastRecord['work_time_mode']})');
+        return true;
+      }
+      
+      return false;
     } catch (e) {
       debugPrint('Error checking duplicate attendance: $e');
       return false;
@@ -625,7 +642,7 @@ class OfflineDatabaseService {
   }) async {
     try {
       final db = await database;
-      final now = DateTime.now().toIso8601String();
+      final now = TimezoneHelper.formatUtcForSupabase(DateTime.now());
       
       await db.insert(
         'biometric_data',
@@ -699,7 +716,7 @@ class OfflineDatabaseService {
   }) async {
     try {
       final db = await database;
-      final now = DateTime.now().toIso8601String();
+      final now = TimezoneHelper.formatUtcForSupabase(DateTime.now());
       
       await db.update(
         'biometric_data',

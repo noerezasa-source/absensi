@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../helpers/timezone_helper.dart';
 
 class ManualCheckPage extends StatefulWidget {
   final int organizationMemberId;
@@ -555,7 +556,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
       
       if (_eventType == 'check_in') {
         attendanceData = {
-          'actual_check_in': eventDateTime.toUtc().toIso8601String(),
+          'actual_check_in': TimezoneHelper.formatUtcForSupabase(eventDateTime),
           'check_in_method': 'manual',
           'check_in_location': _locationController.text.isNotEmpty
               ? {'address': _locationController.text, 'type': 'manual'}
@@ -563,7 +564,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
         };
       } else {
         attendanceData = {
-          'actual_check_out': eventDateTime.toUtc().toIso8601String(),
+          'actual_check_out': TimezoneHelper.formatUtcForSupabase(eventDateTime),
           'check_out_method': 'manual',
           'check_out_location': _locationController.text.isNotEmpty
               ? {'address': _locationController.text, 'type': 'manual'}
@@ -609,7 +610,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
         'organization_member_id': _selectedEmployeeId,
         'attendance_record_id': recordId, // ← PENTING: Tambahkan ini
         'event_type': _eventType,
-        'event_time': eventDateTime.toUtc().toIso8601String(),
+        'event_time': TimezoneHelper.formatUtcForSupabase(eventDateTime),
         'method': 'manual',
         'location': _locationController.text.isNotEmpty
             ? {'address': _locationController.text, 'type': 'manual'}

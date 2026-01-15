@@ -1,11 +1,180 @@
-// lib/services/attendance_service.dart
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/attendance_record.dart';
+import '../models/work_schedule_models.dart';
 import '../helpers/timezone_helper.dart';
 
 class AttendanceService {
   final SupabaseClient _supabase = Supabase.instance.client;
+
+  // -- Schedule Logic Start --
+
+  /// Determines the effective schedule for a member on a specific date (default: today)
+  Future<DailySchedule> getTodaySchedule(
+    int organizationMemberId, {
+    DateTime? date,
+    String? organizationTimezone,
+  }) async {
+    try {
+      final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+      final targetDate = date ?? TimezoneHelper.getCurrentUtcTime(); // Use UTC or handle offset?
+      // Better: Convert targetDate to Organization's "Date String" YYYY-MM-DD
+      // For simplicity, let's assume we need the YYYY-MM-DD in Org Timezone
+      final dateStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone); // This gets TODAY's date string
+      
+      // 1. Check Shift Assignments (Highest Priority)
+      // "Is there a specific override for today?"
+      final shiftAssignmentRes = await _supabase
+          .from('shift_assignments')
+          .select('*, shifts(*)')
+          .eq('organization_member_id', organizationMemberId)
+          .eq('assignment_date', dateStr)
+          .maybeSingle();
+
+      if (shiftAssignmentRes != null) {
+        final assignment = ShiftAssignment.fromJson(shiftAssignmentRes);
+        if (assignment.shift != null) {
+          return DailySchedule(
+            isWorkingDay: true,
+            startTime: assignment.shift!.startTime,
+            endTime: assignment.shift!.endTime,
+            source: 'shift_assignment',
+            scheduleName: assignment.shift!.name,
+            shiftId: assignment.shift!.id,
+            isOvernight: assignment.shift!.overnight,
+          );
+        }
+      }
+
+      // 2. Check Member Schedules (Long-term assignment)
+      // "What is their regular roster?"
+      final memberScheduleRes = await _supabase
+          .from('member_schedules')
+          .select('*, shifts(*), work_schedules(*)')
+          .eq('organization_member_id', organizationMemberId)
+          .lte('effective_date', dateStr)
+          .or('end_date.is.null,end_date.gte.$dateStr') // Open-ended or valid range
+          .order('effective_date', ascending: false) // Get most recent
+          .limit(1)
+          .maybeSingle();
+
+      if (memberScheduleRes != null) {
+        final memberSchedule = MemberSchedule.fromJson(memberScheduleRes);
+
+        // 2a. Assigned to a specific Shift (e.g. "Night Crew" - always same hours)
+        if (memberSchedule.shiftId != null && memberScheduleRes['shifts'] != null) {
+             final shift = Shift.fromJson(memberScheduleRes['shifts']);
+             return DailySchedule(
+                isWorkingDay: true,
+                startTime: shift.startTime,
+                endTime: shift.endTime,
+                source: 'member_shift',
+                scheduleName: shift.name,
+                shiftId: shift.id,
+                isOvernight: shift.overnight,
+             );
+        }
+
+        // 2b. Assigned to a Work Schedule (e.g. "Regular 9-5", "Roster A")
+        if (memberSchedule.workScheduleId != null) {
+          return await _getScheduleDetailForDate(
+            memberSchedule.workScheduleId!,
+            DateTime.parse(dateStr).weekday,
+            'member_schedule'
+          );
+        }
+      }
+
+      // 3. Check Default Schedule (Fallback)
+      // "What is the general office hour?"
+      // Need organization_id. Fetching via member lookup or passing it in would be better.
+      // For now, we query member -> org_id.
+      final memberData = await _supabase
+          .from('organization_members')
+          .select('organization_id')
+          .eq('id', organizationMemberId)
+          .single();
+      
+      final organizationId = memberData['organization_id'] as int;
+
+      final defaultScheduleRes = await _supabase
+          .from('work_schedules')
+          .select()
+          .eq('organization_id', organizationId)
+          .eq('is_default', true)
+          .maybeSingle();
+
+      if (defaultScheduleRes != null) {
+         final schedule = WorkSchedule.fromJson(defaultScheduleRes);
+         return await _getScheduleDetailForDate(
+            schedule.id,
+            DateTime.parse(dateStr).weekday,
+            'default_schedule'
+         );
+      }
+
+      // 4. No Schedule
+      return DailySchedule.unscheduled();
+
+    } catch (e) {
+      debugPrint('⚠️ Error determining schedule: $e');
+      // Fail safe: Allow attendance, but mark error
+      return DailySchedule.unscheduled();
+    }
+  }
+
+  /// Helper to get detail for a specific weekday from a schedule
+  Future<DailySchedule> _getScheduleDetailForDate(
+    int scheduleId,
+    int weekday, // Flutter DateTime: 1 (Mon) to 7 (Sun). SQL often 0-6.
+    String sourceName,
+  ) async {
+    // SQL: "day_of_week INT CHECK (between 0 and 6)"
+    // Typically 0=Sunday, 1=Monday... 6=Saturday.
+    // Flutter: 1=Monday... 7=Sunday.
+    // Mapping: Flutter % 7. (7%7=0 Sunday, 1%7=1 Monday). 
+    final dbDayOfWeek = weekday % 7;
+
+    final detailRes = await _supabase
+        .from('work_schedule_details')
+        .select('*, work_schedules(name)')
+        .eq('work_schedule_id', scheduleId)
+        .eq('day_of_week', dbDayOfWeek)
+        .maybeSingle();
+
+    if (detailRes != null) {
+      final detail = WorkScheduleDetail.fromJson(detailRes);
+      
+      if (!detail.isWorkingDay) {
+         return DailySchedule(
+           isWorkingDay: false,
+           source: sourceName,
+           scheduleName: detailRes['work_schedules']['name'],
+           workScheduleId: scheduleId
+         );
+      }
+
+      return DailySchedule(
+        isWorkingDay: true,
+        startTime: detail.startTime,
+        endTime: detail.endTime,
+        source: sourceName,
+        scheduleName: detailRes['work_schedules']['name'],
+        workScheduleId: scheduleId
+      );
+    }
+
+    // Detail missing for this day? Treat as Off? Or Default to 9-5?
+    // Usually implies "Off" or "Day not configured".
+    return DailySchedule(
+       isWorkingDay: false,
+       source: sourceName,
+       workScheduleId: scheduleId,
+       scheduleName: 'Day Not Configured'
+    );
+  }
+
+  // -- Schedule Logic End --
 
   // Check in attendance
   Future<AttendanceRecord> checkIn({
@@ -29,6 +198,50 @@ class AttendanceService {
       final nowUtc = TimezoneHelper.getCurrentUtcTime();
       
       final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
+
+      // --- [VALIDATION START] ---
+      // Get Schedule for today
+      final schedule = await getTodaySchedule(
+        organizationMemberId, 
+        organizationTimezone: orgTimezone
+      );
+
+      // (Optional) Calculate Late Minutes
+      int lateMinutes = 0;
+      if (schedule.isWorkingDay && schedule.startTime != null && schedule.startTime!.isNotEmpty) {
+          try {
+             // 1. Get Current Time in Org Timezone
+             // final nowUtc = TimezoneHelper.getCurrentUtcTime(); // Already defined above
+             final nowInOrg = TimezoneHelper.convertUtcToOrgTimezone(nowUtc, orgTimezone);
+             
+             // 2. Parse Schedule Start Time (HH:mm:ss)
+             final parts = schedule.startTime!.split(':');
+             final startHour = int.parse(parts[0]);
+             final startMinute = int.parse(parts[1]);
+             
+             // 3. Construct Schedule DateTime for "Today"
+             final scheduleTime = DateTime(
+                nowInOrg.year, 
+                nowInOrg.month, 
+                nowInOrg.day, 
+                startHour, 
+                startMinute
+             );
+             
+             // 4. Calculate Difference
+             final diff = nowInOrg.difference(scheduleTime).inMinutes;
+             if (diff > 0) {
+               lateMinutes = diff; 
+             }
+          } catch (e) {
+            debugPrint('⚠️ Late calculation error: $e');
+            // Ignore time calc errors strictly
+          }
+      }
+      
+      // We do NOT block Check-In even if isWorkingDay is false (as per user request "Budi tetap BISA Absen")
+      // We just log the context.
+      // --- [VALIDATION END] ---
 
       // Cek apakah sudah ada record hari ini
       final existingRecord = await _supabase
@@ -57,7 +270,13 @@ class AttendanceService {
           ipAddress: ipAddress,
           userAgent: userAgent,
           applicationId: applicationId,
-          rawData: rawData,
+          rawData: {
+            ...?rawData,
+            'schedule_source': schedule.source, // Log schedule context
+            'schedule_name': schedule.scheduleName,
+            'late_minutes': lateMinutes,
+            'is_working_day': schedule.isWorkingDay,
+          },
         );
         
         // Return the existing record without modification
@@ -65,12 +284,13 @@ class AttendanceService {
       }
         // Update existing record (save as UTC)
         recordData = {
-          'actual_check_in': nowUtc.toIso8601String(),
+          'actual_check_in': TimezoneHelper.formatUtcForSupabase(nowUtc),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
           'check_in_location': locationWithPhoto,
           'status': 'present',
-          'updated_at': nowUtc.toIso8601String(),
+          'late_minutes': lateMinutes,
+          'updated_at': TimezoneHelper.formatUtcForSupabase(nowUtc),
         };
 
         await _supabase
@@ -86,11 +306,12 @@ class AttendanceService {
         recordData = {
           'organization_member_id': organizationMemberId,
           'attendance_date': todayStr,
-          'actual_check_in': nowUtc.toIso8601String(),
+          'actual_check_in': TimezoneHelper.formatUtcForSupabase(nowUtc),
           'check_in_method': method,
           'check_in_photo_url': photoUrl,
           'check_in_location': locationWithPhoto,
-          'status': 'present',
+          'status': lateMinutes > 0 ? 'late' : 'present',
+          'late_minutes': lateMinutes,
           'validation_status': 'pending',
         };
 
@@ -114,7 +335,13 @@ class AttendanceService {
         ipAddress: ipAddress,
         userAgent: userAgent,
         applicationId: applicationId,
-        rawData: rawData,
+        rawData: {
+             ...?rawData,
+            'schedule_source': schedule.source,
+            'schedule_name': schedule.scheduleName,
+            'late_minutes': lateMinutes,
+            'is_working_day': schedule.isWorkingDay,
+        },
       );
 
       return AttendanceRecord.fromJson(recordData);
@@ -145,6 +372,14 @@ class AttendanceService {
       final nowUtc = TimezoneHelper.getCurrentUtcTime();
 
       final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
+
+      // --- [VALIDATION START] ---
+      // Get Schedule for context logging (e.g. Early Leave calc in future)
+      final schedule = await getTodaySchedule(
+        organizationMemberId, 
+        organizationTimezone: orgTimezone
+      );
+      // --- [VALIDATION END] ---
 
       // Cari record hari ini
       final existingRecord = await _supabase
@@ -177,7 +412,12 @@ class AttendanceService {
         ipAddress: ipAddress,
         userAgent: userAgent,
         applicationId: applicationId,
-        rawData: rawData,
+        rawData: {
+            ...?rawData,
+            'schedule_source': schedule.source,
+            'schedule_name': schedule.scheduleName,
+            'is_working_day': schedule.isWorkingDay,
+        },
       );
       
       // Return the existing record without modification
@@ -188,14 +428,56 @@ class AttendanceService {
       final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
       final workDuration = nowUtc.difference(checkInTime).inMinutes;
 
+      // --- [CALCULATION START] ---
+      int earlyLeaveMinutes = 0;
+      int overtimeMinutes = 0;
+
+      if (schedule.isWorkingDay && schedule.endTime != null && schedule.endTime!.isNotEmpty) {
+          try {
+             // 1. Get Current Time (Check Out Time) in Org Timezone
+             final nowInOrg = TimezoneHelper.convertUtcToOrgTimezone(nowUtc, orgTimezone);
+             
+             // 2. Parse Schedule End Time (HH:mm:ss)
+             final parts = schedule.endTime!.split(':');
+             final endHour = int.parse(parts[0]);
+             final endMinute = int.parse(parts[1]);
+             
+             // 3. Construct Schedule End DateTime for "Today"
+             // Careful: If schedule is overnight, logic might need adjustment (assuming same day for now)
+             final scheduleEndTime = DateTime(
+                nowInOrg.year, 
+                nowInOrg.month, 
+                nowInOrg.day, 
+                endHour, 
+                endMinute
+             );
+
+             // 4. Calculate Difference
+             final diff = nowInOrg.difference(scheduleEndTime).inMinutes;
+             
+             if (diff < 0) {
+               // Negative difference means Checked Out BEFORE Schedule End -> Early Leave
+               earlyLeaveMinutes = diff.abs(); 
+             } else if (diff > 0) {
+               // Positive difference means Checked Out AFTER Schedule End -> Overtime
+               overtimeMinutes = diff;
+             }
+          } catch (e) {
+            debugPrint('⚠️ Time calc error: $e');
+          }
+      }
+      // --- [CALCULATION END] ---
+
       // Update record
       final recordData = {
-        'actual_check_out': nowUtc.toIso8601String(),
+        'actual_check_out': TimezoneHelper.formatUtcForSupabase(nowUtc),
         'check_out_method': method,
         'check_out_photo_url': photoUrl,
         'check_out_location': locationWithPhoto,
         'work_duration_minutes': workDuration,
-        'updated_at': nowUtc.toIso8601String(),
+        'early_leave_minutes': earlyLeaveMinutes,
+        'overtime_minutes': overtimeMinutes,
+        'updated_at': TimezoneHelper.formatUtcForSupabase(nowUtc),
       };
 
       await _supabase
@@ -214,7 +496,14 @@ class AttendanceService {
         ipAddress: ipAddress,
         userAgent: userAgent,
         applicationId: applicationId,
-        rawData: rawData,
+        rawData: {
+            ...?rawData,
+            'schedule_source': schedule.source,
+            'schedule_name': schedule.scheduleName,
+            'is_working_day': schedule.isWorkingDay,
+            'early_leave_minutes': earlyLeaveMinutes,
+            'overtime_minutes': overtimeMinutes,
+        },
       );
 
       final updatedRecord = await _supabase
@@ -321,7 +610,7 @@ class AttendanceService {
         'organization_member_id': organizationMemberId,
         'attendance_record_id': attendanceRecordId,
         'event_type': eventType,
-        'event_time': eventTime.toIso8601String(),
+        'event_time': TimezoneHelper.formatUtcForSupabase(eventTime),
         'method': method,
         'location': location,
         'device_id': deviceId,
@@ -436,6 +725,7 @@ Future<List<Map<String, dynamic>>> getOrganizationRecentActivities({
         .eq('organization_members.organization_id', organizationId)
         .inFilter('method', [
           'face_recognition',
+          'FACERECOGNITION', // Backward compatibility for old data
           'face_recognition_kiosk',
           'rfid_card',
           'rfid_card_mobile',

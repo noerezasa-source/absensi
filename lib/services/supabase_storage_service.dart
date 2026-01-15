@@ -50,8 +50,9 @@ class SupabaseStorageService {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final fileName = '${organizationMemberId}_template_$timestamp.jpg';
       
-      // Path dengan user ID di depan untuk RLS policy
-      final filePath = '${user.id}/$fileName';
+      // FIX: Use organizationMemberId folder so photos are grouped by member, not by the petugas who registered them.
+      // This assumes RLS allows writing to folders based on member_id (or is public/service role).
+      final filePath = '$organizationMemberId/$fileName';
 
       await _supabase.storage
           .from('face-templates')

@@ -1,6 +1,7 @@
 // lib/pages/face_attendance_multi_user_page.dart
 import 'dart:async';
 import 'dart:io';
+import 'dart:math'; // ✅ Valid element for sqrt
 import 'dart:ui' as ui;
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -12,7 +13,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/biometric_service.dart';
 import '../services/face_recognition_tflite_service.dart';
+import 'package:flutter/foundation.dart'; // For compute
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:intl/intl.dart'; 
+import 'package:path_provider/path_provider.dart'; // ✅ Added for debug path
 import '../services/attendance_service.dart';
 import '../helpers/sound_helper.dart';
 import '../helpers/timezone_helper.dart';
@@ -22,6 +26,7 @@ import '../services/offline_database_service.dart';
 import '../services/attendance_sync_service.dart';
 import '../models/offline_attendance.dart';
 import 'manual_check_page.dart';
+import '../models/face_tracking_state.dart'; // ✅ NEW: State Machine Enum
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
@@ -96,7 +101,29 @@ class _FaceAttendanceMultiUserPageState
   final Map<int, Map<String, dynamic>> _persistentFaceTracker = {};
 
 
+  // ✅ NEW: Face Tracking State Machine
+  final Map<int, FaceTrackingState> _faceStates = {};
+  final Map<int, int> _stabilityCounters = {};
+  final Map<int, Rect> _lastFaceRects = {};
+  final Map<int, DateTime> _cooldowns = {};
+  
+  // Configuration
+  static const int _requiredStableFrames = 0; // Optimized for Instant Recognition
+  static const double _stabilityThreshold = 120.0; // High tolerance for movement
+  static const Duration _recognitionCooldown = Duration(seconds: 3);
+  
+  // ✅ Multi-Frame Averaging Configuration (Optimized)
+  static const int _multiFrameCount = 2; // Reduced from 3 to 2 for speed
+  static const Duration _multiFrameInterval = Duration(milliseconds: 100); // Reduced from 150ms
+  static const double _maxMovementThreshold = 50.0; // Max pixel movement between frames
+  
+  // ✅ Same-Mode Attendance Cooldown (5 minutes)
+  static const Duration _sameModeCooldown = Duration(minutes: 5);
+  final Map<String, DateTime> _lastAttendanceTime = {}; // Key: "memberId_mode"
+
   bool _isOnline = true;
+  String? _debugExternalDir; // Cache for debug path
+  DateTime _lastDebugSave = DateTime.fromMillisecondsSinceEpoch(0); // For throttling debug saves
 
   @override
   void initState() {
@@ -122,7 +149,6 @@ class _FaceAttendanceMultiUserPageState
     _faceDataMap.clear();
     _detectedFaces.clear();
     _cameraController?.dispose();
-    _attendanceSyncService.stopAutoSync();
     _faceService.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
@@ -234,8 +260,8 @@ class _FaceAttendanceMultiUserPageState
         cardNumber: 'FACE_$memberId',
         faceEmbedding: jsonEncode(template),
         eventType: attendanceType,
-        method: 'face_recognition_kiosk',
-        timestamp: DateTime.now().toUtc().toIso8601String(),
+        method: 'face_recognition',
+        timestamp: TimezoneHelper.formatUtcForSupabase(DateTime.now()),
         photoPath: localPhotoPath,
         capturedPhotoBase64: capturedBase64,
         profilePhotoBase64: profilePhotoBase64,
@@ -402,6 +428,14 @@ class _FaceAttendanceMultiUserPageState
           .eq('id', widget.organizationId)
           .maybeSingle();
 
+      // Get debug path once
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        _debugExternalDir = dir.path;
+      } catch (e) {
+        debugPrint('Failed to get debug dir: $e');
+      }
+
       if (org != null && mounted) {
         setState(() {
           _organizationTimezone = org['timezone'] as String? ?? 'Asia/Jakarta';
@@ -479,9 +513,11 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.high, // ✅ UPDATED: High resolution for HD preview asked by user
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        ResolutionPreset.high, // ✅ UPGRADED: High resolution for better accuracy
+        // ✅ FIXED: Stream requires YUV420 on Android, BGRA8888 on iOS
+      imageFormatGroup: Platform.isAndroid 
+          ? ImageFormatGroup.yuv420 
+          : ImageFormatGroup.bgra8888,
       );
 
       await _cameraController!.initialize().timeout(
@@ -533,23 +569,200 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
+  bool _isStreaming = false;
+
   void _startContinuousScan() {
-    // ✅ OPTIMIZED: 100ms for real-time face tracking (reduced from 300ms)
-    // ✅ FIXED: Prevent camera restart by checking if camera is still initialized
-    _continuousScanTimer = Timer.periodic(
-      const Duration(milliseconds: 100), // ✅ OPTIMIZED: 100ms for real-time tracking
-      (timer) {
-        if (!_isProcessing && 
-            !_isTakingPicture && // ✅ NEW: Prevent concurrent captures
-            _isCameraInitialized && 
-            _cameraController != null &&
-            _cameraController!.value.isInitialized &&
-            !_isQueueProcessing) {
-          _scanForFaces();
-        }
-      },
-    );
+    if (_cameraController == null || !_cameraController!.value.isInitialized || _isStreaming) {
+      return;
+    }
+
+    try {
+      _isStreaming = true;
+      _cameraController!.startImageStream(_processCameraImage);
+    } catch (e) {
+      debugPrint('Error starting image stream: $e');
+      _isStreaming = false;
+    }
   }
+
+  Future<void> _stopStream() async {
+    if (_cameraController != null && _cameraController!.value.isStreamingImages) { // Check value.isStreamingImages if available or just try catch
+        try {
+          await _cameraController!.stopImageStream();
+        } catch (e) {
+           debugPrint('Error stopping stream: $e');
+        }
+    }
+    _isStreaming = false;
+  }
+
+  int _lastProcessingTime = 0;
+  bool _isIdleMode = true; // Start in idle
+  int _consecutiveNoFaceFrames = 0;
+
+  Future<void> _processCameraImage(CameraImage image) async {
+    if (_isProcessing || _isTakingPicture || _isQueueProcessing) return;
+
+    final currentTime = DateTime.now().millisecondsSinceEpoch;
+    
+    // ✅ DYNAMIC THROTTLING
+    int throttleDuration;
+    if (_cooldowns.isNotEmpty) {
+      throttleDuration = 200; // Slower cooldown check
+    } else if (_isIdleMode) {
+      throttleDuration = 500; // Idle check
+    } else {
+      throttleDuration = 80; // ✅ FAST POLLING: 80ms for instant feel
+    }
+    
+    if (currentTime - _lastProcessingTime < throttleDuration) return;
+    _lastProcessingTime = currentTime;
+
+    _isProcessing = true;
+
+    try {
+      final inputImage = await _inputImageFromCameraImage(image);
+      if (inputImage == null) {
+        _isProcessing = false;
+        return;
+      }
+      
+      if (inputImage.bytes != null) {
+        _lastStreamBytes = inputImage.bytes;
+        _lastStreamWidth = image.width;
+        _lastStreamHeight = image.height;
+        if (inputImage.metadata?.rotation != null) {
+           _lastStreamRotation = _rotationEnumValueToInt(inputImage.metadata!.rotation);
+        }
+      }
+
+      final faces = await _faceService.detectFacesFromInputImage(inputImage);
+      
+      // ✅ Mode Switching Logic (Hysteresis)
+      if (faces.isEmpty) {
+        _consecutiveNoFaceFrames++;
+        if (_consecutiveNoFaceFrames >= 10 && !_isIdleMode) {
+          if (mounted) setState(() => _isIdleMode = true);
+          debugPrint('📴 Entering idle mode (no faces)');
+        }
+      } else {
+        _consecutiveNoFaceFrames = 0;
+        if (_isIdleMode) {
+          if (mounted) setState(() => _isIdleMode = false);
+          debugPrint('📡 Entering active mode (${faces.length} faces)');
+        }
+      }
+      
+      _handleStreamFaces(faces, Size(image.height.toDouble(), image.width.toDouble()));
+
+    } catch (e) {
+      debugPrint('Error processing stream: $e');
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  Future<InputImage?> _inputImageFromCameraImage(CameraImage image) async {
+    if (_cameraController == null) return null;
+
+    final camera = _cameraController!.description;
+    final sensorOrientation = camera.sensorOrientation;
+    
+    // Determine rotation
+    InputImageRotation? rotation;
+    if (Platform.isIOS) {
+      rotation = InputImageRotation.rotation0deg;
+    } else if (Platform.isAndroid) {
+      var rotationCompensation = _orientations[_cameraController!.value.deviceOrientation];
+      if (rotationCompensation == null) return null;
+      if (camera.lensDirection == CameraLensDirection.front) {
+        // Front camera
+        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
+      } else {
+        // Back camera
+        rotationCompensation = (sensorOrientation - rotationCompensation + 360) % 360;
+      }
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
+    }
+    if (rotation == null) return null;
+
+    // Format
+    InputImageFormat? format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    // Bytes
+  // Bytes
+  final Uint8List bytes;
+  int bytesPerRow;
+
+  if (Platform.isAndroid && image.format.group == ImageFormatGroup.yuv420) {
+     // ✅ OPTIMIZATION: Run heavy conversion in background isolate
+     try {
+       final planesData = image.planes.map((p) => _PlaneData(
+         bytes: p.bytes,
+         bytesPerRow: p.bytesPerRow,
+         bytesPerPixel: p.bytesPerPixel,
+       )).toList();
+
+       bytes = await compute(_yuv420ToNv21Compute, _NV21ConvertParams(
+         width: image.width,
+         height: image.height,
+         planes: planesData,
+       ));
+       
+       format = InputImageFormat.nv21;
+       bytesPerRow = image.width;
+     } catch (e) {
+       debugPrint('Error in NV21 conversion: $e');
+       return null;
+     }
+  } else {
+     bytes = _concatenatePlanes(image.planes);
+     bytesPerRow = image.planes.first.bytesPerRow;
+  }
+
+  return InputImage.fromBytes(
+    bytes: bytes,
+    metadata: InputImageMetadata(
+      size: Size(image.width.toDouble(), image.height.toDouble()),
+      rotation: rotation,
+      format: format,
+      bytesPerRow: bytesPerRow, // ✅ Use correct stride
+    ),
+  );
+}
+
+
+  // Hook to capture bytes from processCameraImage
+  Uint8List? _lastStreamBytes;
+  int _lastStreamWidth = 0;
+  int _lastStreamHeight = 0;
+  int _lastStreamRotation = 0; // NEW: Rotation in degrees
+
+  int _rotationEnumValueToInt(InputImageRotation rotation) {
+    switch (rotation) {
+      case InputImageRotation.rotation0deg: return 0;
+      case InputImageRotation.rotation90deg: return 90;
+      case InputImageRotation.rotation180deg: return 180;
+      case InputImageRotation.rotation270deg: return 270;
+    }
+  }
+
+  Uint8List _concatenatePlanes(List<Plane> planes) {
+    final WriteBuffer allBytes = WriteBuffer();
+    for (Plane plane in planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    return allBytes.done().buffer.asUint8List();
+  }
+
+  static final Map<DeviceOrientation, int> _orientations = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
+
 
   // ✅ OPTIMIZED: Get image size without full decode (much faster)
   Future<Size?> _getImageSize(File imageFile) async {
@@ -567,305 +780,360 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  Future<void> _scanForFaces() async {
-    // ✅ IMPROVED: Comprehensive camera state validation
-    if (_cameraController == null ||
-        !_cameraController!.value.isInitialized ||
-        _isProcessing ||
-        _isTakingPicture ||
-        _isQueueProcessing) {
+  // ✅ REFACTORED: State Machine Core Logic
+  Future<void> _handleStreamFaces(List<Face> faces, Size imageSize) async {
+    final now = DateTime.now();
+    
+    // 1. Clean up stale states (faces that left the frame)
+    final currentTrackingIds = faces.map((f) => f.trackingId ?? -1).toSet();
+    _faceStates.removeWhere((id, _) => !currentTrackingIds.contains(id) && id != -1);
+    _stabilityCounters.removeWhere((id, _) => !currentTrackingIds.contains(id) && id != -1);
+    _lastFaceRects.removeWhere((id, _) => !currentTrackingIds.contains(id) && id != -1);
+    
+    // Check global cooldowns
+    final activeCooldowns = Map<int, DateTime>.from(_cooldowns);
+    activeCooldowns.forEach((id, time) {
+      if (now.isAfter(time)) {
+        _cooldowns.remove(id);
+        _faceStates[id] = FaceTrackingState.idle;
+      }
+    });
+
+    if (faces.isEmpty) {
+      _hasFacesInView = false;
+      if (mounted) setState(() => _detectedFaces = []);
       return;
     }
 
-    // ✅ IMPROVED: Prevent concurrent operations
-    _isProcessing = true;
-    _isTakingPicture = true;
+    _hasFacesInView = true;
+    final displayFaces = <Map<String, dynamic>>[];
 
-    File? imageFile;
-    
-    try {
-      // ✅ IMPROVED: Validate camera state before capture
-      if (_cameraController == null || !_cameraController!.value.isInitialized) {
-        debugPrint('⚠️ Camera not ready, skipping scan');
-        return;
-      }
+    for (final face in faces) {
+      final id = face.trackingId ?? -1;
+      if (id == -1) continue; // Skip untracked faces
 
-      // ✅ IMPROVED: 800ms timeout with better error handling
-      final image = await _cameraController!.takePicture().timeout(
-        const Duration(milliseconds: 800),
-        onTimeout: () {
-          throw TimeoutException('Camera takePicture timeout');
-        },
-      );
-      imageFile = File(image.path);
+      // Initialize state if new
+      _faceStates.putIfAbsent(id, () => FaceTrackingState.idle);
+      final currentState = _faceStates[id]!;
       
-      // ✅ IMPROVED: Validate file before processing
-      if (!await imageFile.exists()) {
-        debugPrint('⚠️ Captured image file does not exist');
-        return;
-      }
-      
-      // ✅ IMPROVED: Face detection with better timeout handling
-      final faces = await _faceService.detectFaces(image.path).timeout(
-        const Duration(milliseconds: 700),
-        onTimeout: () {
-          debugPrint('⚠️ Face detection timeout');
-          return <Face>[];
-        },
-      );
-      
-      debugPrint('🔍 DETECTED FACES: ${faces.length} total faces');
-
-      if (faces.isEmpty) {
-        // ✅ IMPROVED: Safe cleanup with error handling
-        try {
-          await imageFile.delete();
-        } catch (e) {
-          debugPrint('Failed to delete temp file: $e');
-        }
-        
-        // ✅ IMPROVED: Clear persistent tracker when no faces detected
-        _persistentFaceTracker.clear();
-        
-        // ✅ IMPROVED: Safe setState with mounted check
-        if (mounted && _detectedFaces.isNotEmpty) {
-           setState(() {
-             _detectedFaces = [];
-             _faceDataMap.clear();
-           });
-        }
-        
-        _hasFacesInView = false;
-        return;
-      }
-
-      if (!_hasFacesInView) {
-        _hasFacesInView = true;
-        // _showMessage('${faces.length} wajah terdeteksi - Memproses...', MessageType.processing);
-      }
-
-      debugPrint('📊 PROCESSING: Starting to process ${faces.length} faces');
-      int validUsers = 0;
-      int cooldownUsers = 0;
-      int unmatchedUsers = 0;
-
-      // ✅ OPTIMIZED: Get image size without blocking
-      final imageSize = _getImageSize(imageFile);
-      final imageWidth = (await imageSize)?.width ??
-          _cameraController?.value.previewSize?.height ?? 1080.0;
-      final imageHeight = (await imageSize)?.height ??
-          _cameraController?.value.previewSize?.width ?? 1920.0;
-
-      // ✅ NEW: Create face data map with IDs for better tracking
-      final detectedFacesMap = <Map<String, dynamic>>[];
-      final newFaceDataMap = <int, Map<String, dynamic>>{};
-      
-      for (int i = 0; i < faces.length; i++) {
-        final face = faces[i];
-        final boundingBox = face.boundingBox;
-        
-        // ✅ DYNAMIC EXPANSION: Adjust box size based on face distance
-        // Calculate face size ratio to determine distance
-        final faceArea = boundingBox.width * boundingBox.height;
-        final imageArea = imageWidth * imageHeight;
-        final faceRatio = faceArea / imageArea;
-        
-        // Dynamic expansion factor based on face size:
-        // Dynamic scaling based on face distance (face-to-image ratio)
-      // Large ratio (> 0.25) means face is close -> Use TIGHT box for accuracy (User request: "jangan terlalu besar")
-      // Small ratio (< 0.12) means face is far -> Use slight expansion to catch movements
-      double expansionFactor = 0.05; // Default small
-      
-      if (faceRatio > 0.25) {
-        expansionFactor = 0.0; // ✅ TIGHT FIT (No expansion) when face is close
-      } else if (faceRatio > 0.12) {
-        expansionFactor = 0.05; // ✅ Minimal expansion for medium distance
-      } else {
-        expansionFactor = 0.10; // ✅ Moderate expansion only for very far faces
-      }
-      
-      final double expansionX = boundingBox.width * expansionFactor;
-      final double expansionY = boundingBox.height * expansionFactor;
-      
-      final expandedLeft = (boundingBox.left - expansionX).clamp(0.0, imageWidth - 1);
-      final expandedTop = (boundingBox.top - expansionY * 1.5).clamp(0.0, imageHeight - 1); // Less top expansion
-      final expandedRight = (boundingBox.right + expansionX).clamp(0.0, imageWidth - 1);
-      final expandedBottom = (boundingBox.bottom + expansionY).clamp(0.0, imageHeight - 1); 
-
-        final left = (expandedLeft / imageWidth).clamp(0.0, 1.0);
-        final top = (expandedTop / imageHeight).clamp(0.0, 1.0);
-        final width = ((expandedRight - expandedLeft) / imageWidth).clamp(0.0, 1.0);
-        final height = ((expandedBottom - expandedTop) / imageHeight).clamp(0.0, 1.0);
-
-        final trackingId = face.trackingId;
-        Map<String, dynamic>? knownFace;
-
-        // Check persistent tracker for match info
-        if (trackingId != null && _persistentFaceTracker.containsKey(trackingId)) {
-          knownFace = _persistentFaceTracker[trackingId];
-          knownFace!['lastSeen'] = DateTime.now();
-        }
-
-        // Check if we already have this face in the UI list to preserve animation state
-        int existingFaceIndex = -1;
-        if (trackingId != null) {
-          existingFaceIndex = _detectedFaces.indexWhere((f) => f['trackingId'] == trackingId);
-        }
-
-        int faceId;
-        if (existingFaceIndex != -1) {
-           faceId = _detectedFaces[existingFaceIndex]['id']; // Reuse ID
-        } else {
-           faceId = _faceIdCounter++;
-        }
-
-        final newFaceData = {
-          'id': faceId,
-          'trackingId': trackingId, 
-          'left': left,
-          'top': top,
-          'width': width,
-          'height': height,
-          // matched > processing > detecting > unmatched
-          'status': knownFace != null ? 'matched' : (existingFaceIndex != -1 ? _detectedFaces[existingFaceIndex]['status'] : 'detecting'),
-          'userName': knownFace != null ? knownFace['name'] : (existingFaceIndex != -1 ? _detectedFaces[existingFaceIndex]['userName'] : null),
-          'similarity': knownFace != null ? knownFace['similarity'] : null,
-        };
-
-        detectedFacesMap.add(newFaceData);
-        
-        newFaceDataMap[faceId] = {
-          'face': face,
-          'imagePath': image.path,
-          'imageFile': imageFile,
-          'faceIndex': i,
-        };
-      }
-
-      // ✅ OPTIMIZED: Update UI carefully to prevent flickering
-      if (mounted) {
-        setState(() {
-           // Instead of hard replacing, we might want to animate transition, 
-           // but since we reused IDs where possible, flutter should handle it.
-           // However, let's keep the list stable.
-           _detectedFaces = detectedFacesMap;
-        });
-      }
-
-      final processedUsers = <Map<String, dynamic>>[];
-      final facesToProcess = faces.toList();
-
-      // ✅ OPTIMIZED: Process faces in parallel to reduce lag
-      final futures = <Future<void>>[];
-      
-      for (int i = 0; i < facesToProcess.length; i++) {
-        final faceId = detectedFacesMap[i]['id'] as int;
-        final trackingId = facesToProcess[i].trackingId;
-        
-        // ✅ OPTIMIZATION: Skip processing if we already know who this is (via trackingId)
-        // This keeps the green box stable without re-running heavy recognition
-        final existingFace = detectedFacesMap[i];
-        if ((existingFace['status'] == 'success' || existingFace['status'] == 'cooldown') && 
-             existingFace['name'] != null) {
-           debugPrint('⏭️ Skipped recognition for trackingId $trackingId (${existingFace['name']})');
-           // Face is already recognized and displayed green, no need to re-process
+      // Early exit if in cooldown
+      if (_cooldowns.containsKey(id)) {
+        if (now.isBefore(_cooldowns[id]!)) {
+           // Still in cooldown, just show box (gray)
+           displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.cooldown));
            continue; 
+        } else {
+           _cooldowns.remove(id);
+           _faceStates[id] = FaceTrackingState.idle;
         }
-        if (trackingId != null && _persistentFaceTracker.containsKey(trackingId)) {
-           // We already have this face in our tracker, UI is already updated above.
-           // We just need to ensure we don't re-process duplicate attendance if not needed.
-           // For UX, just keeping the box green is enough.
-           debugPrint('⏭️ Skipped recognition for trackingId $trackingId (${_persistentFaceTracker[trackingId]?['name']})');
-           continue;
-        }
-
-        futures.add(_processFaceAsync(
-          facesToProcess[i],
-          image.path,
-          imageFile,
-          i,
-          faceId,
-          processedUsers,
-          (valid, cooldown, unmatched) {
-            validUsers = valid;
-            cooldownUsers = cooldown;
-            unmatchedUsers = unmatched;
-          },
-        ));
       }
-      
-      // ✅ OPTIMIZED: Wait for all faces with timeout to prevent hanging
-      await Future.wait(futures).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          debugPrint('⚠️ Face processing timeout');
-          return <void>[];
-        },
-      );
 
-      debugPrint('📈 SUMMARY: Total faces: ${faces.length}, Valid users: $validUsers, Cooldown users: $cooldownUsers, Unmatched users: $unmatchedUsers');
-      debugPrint('🎯 PROCESSED USERS COUNT: ${processedUsers.length}');
+      // STATE MACHINE LOGIC
+      switch (currentState) {
+        case FaceTrackingState.idle:
+          // ✅ INSTANT RECOGNITION: Bypass Tracking, go straight to LOCKED/INFERENCE
+          _faceStates[id] = FaceTrackingState.locked;
+          _stabilityCounters[id] = 0;
+          _lastFaceRects[id] = face.boundingBox;
+           // Trigger Inference Immediately
+          _triggerRecognition(face, imageSize);
+          displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.locked));
+          break;
 
-      if (processedUsers.isNotEmpty) {
-        // ✅ OPTIMIZED: Process attendance in queue to prevent lag
-        _addToProcessingQueue(() => _processMultipleAttendances(processedUsers));
-        
-        // ✅ NEW: Don't clear face boxes! Keep them tracking.
-        // The user requested: "tetap ada menyesuaikan orangnya sampai orangnya keluar kamera"
-        // So we keep _detectedFaces as is. It will be updated by the next scan cycle.
-      } else {
-        if (faces.isNotEmpty) {
-          // Update face status to unmatched
-          if (mounted) {
-            setState(() {
-              for (var face in _detectedFaces) {
-                if (face['status'] == 'detecting' || face['status'] == 'processing') {
-                  face['status'] = 'unmatched';
-                }
-              }
-            });
+        case FaceTrackingState.tracking:
+          // Check Stability
+          final lastRect = _lastFaceRects[id] ?? face.boundingBox;
+          final movement = (face.boundingBox.center - lastRect.center).distance;
+          
+          if (movement < _stabilityThreshold) {
+            _stabilityCounters[id] = (_stabilityCounters[id] ?? 0) + 1;
+          } else {
+            _stabilityCounters[id] = 0; // Reset if moved too much
+          }
+          _lastFaceRects[id] = face.boundingBox;
+
+          // Check if stable enough to LOCK
+          if ((_stabilityCounters[id] ?? 0) >= _requiredStableFrames) {
+             _faceStates[id] = FaceTrackingState.locked;
+             // Trigger Inference
+             _triggerRecognition(face, imageSize);
           }
           
-          // ✅ NEW: Don't clear unmatched faces. Keep them tracking (red box).
-          // Future.delayed... removed.
-        }
-        
-        // ✅ OPTIMIZED: Play sound in background
-        SystemSound.play(SystemSoundType.alert).catchError((e) {});
-      }
+          displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.tracking));
+          break;
 
-      // ✅ OPTIMIZED: Delete file in background without blocking
-      imageFile.delete().catchError((e) => debugPrint('Failed to delete temp file: $e'));
+        case FaceTrackingState.locked:
+          // Waiting for inference to complete
+          // Don't process anymore, just show LOCKED UI
+          displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.locked));
+          break;
 
-    } catch (e) {
-      debugPrint('ERROR in multi-face scan: $e');
-      if (e is TimeoutException) {
-        debugPrint('⚠️ Camera timeout - skipping this frame');
-      } else {
-        // _showMessage('Terjadi kesalahan', MessageType.error, 3);
+        case FaceTrackingState.cooldown:
+          displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.cooldown));
+          break;
       }
-      
-      // ✅ IMPROVED: Safe cleanup of temp file on error
-      if (imageFile != null) {
-        try {
-          await imageFile.delete();
-        } catch (deleteError) {
-          debugPrint('Failed to delete temp file on error: $deleteError');
-        }
-      }
-      
-      if (mounted) {
-        setState(() {
-          _detectedFaces = [];
-          _faceDataMap.clear();
-        });
-      }
-    } finally {
-      // ✅ IMPROVED: Always reset flags to allow next scan
-      _isProcessing = false;
-      _isTakingPicture = false;
+    }
+
+    if (mounted) {
+      setState(() {
+        _detectedFaces = displayFaces;
+      });
     }
   }
+
+  Map<String, dynamic> _buildFaceDisplayData(Face face, FaceTrackingState state) {
+     // Determine color/status based on state
+     Color boxColor;
+     String? statusText;
+     
+     switch (state) {
+       case FaceTrackingState.idle:
+       case FaceTrackingState.tracking:
+         boxColor = Colors.yellow;
+         statusText = null; // Clean UI
+         break;
+       case FaceTrackingState.locked:
+         boxColor = Colors.blue; 
+         statusText = null; // Clean UI
+         break;
+       case FaceTrackingState.cooldown:
+         // Look up result from persistent tracker
+         final trackedData = _persistentFaceTracker[face.trackingId];
+         if (trackedData != null) {
+            final name = trackedData['name'] as String;
+            if (name == 'Unknown') {
+               boxColor = Colors.red;
+               statusText = null; // Clean UI
+            } else {
+               boxColor = Colors.green;
+               statusText = name;
+            }
+         } else {
+            boxColor = Colors.grey;
+            statusText = 'Done';
+         }
+         break;
+     }
+
+     return {
+       'rect': face.boundingBox,
+       'color': boxColor,
+       'name': statusText,
+       'trackingId': face.trackingId,
+     };
+  }
+
+  /// ✅ Multi-Frame Averaging: Capture embeddings from multiple frames and average them
+  Future<Map<String, dynamic>?> _captureMultiFrameEmbedding(Face face, int id) async {
+    debugPrint('🎬 Starting multi-frame capture for face $id (${_multiFrameCount} frames)');
+    
+    final embeddings = <List<double>>[];
+    Map<String, dynamic>? lastTemplate;
+    Rect? previousFaceRect;
+    
+    try {
+      // Capture multiple frames
+      for (int i = 0; i < _multiFrameCount; i++) {
+        // Wait for next frame (except first)
+        if (i > 0) {
+          await Future.delayed(_multiFrameInterval);
+        }
+        
+        // Check if stream bytes are still available
+        if (_lastStreamBytes == null) {
+          debugPrint('⚠️ Stream bytes unavailable at frame $i');
+          break; // Exit early instead of continue
+        }
+        
+        // ✅ Movement Detection: Check if face moved too much
+        if (previousFaceRect != null) {
+          final currentRect = face.boundingBox;
+          final movement = _calculateRectMovement(previousFaceRect, currentRect);
+          
+          if (movement > _maxMovementThreshold) {
+            debugPrint('⚠️ Face moved too much (${movement.toStringAsFixed(1)}px), canceling multi-frame');
+            break; // Cancel and use what we have
+          }
+        }
+        previousFaceRect = face.boundingBox;
+        
+        // Deep copy bytes to avoid race conditions
+        final bytes = Uint8List.fromList(_lastStreamBytes!);
+        final width = _lastStreamWidth;
+        final height = _lastStreamHeight;
+        final rotation = _lastStreamRotation;
+        
+        // Extract embedding from this frame
+        try {
+          final template = await _faceService.buildTemplateFromBytes(
+            bytes, width, height, rotation, face,
+            allowSidePose: false,
+            debugPath: _debugExternalDir,
+          );
+          
+          // Extract embedding array
+          final embedding = template['embedding'] as List<dynamic>?;
+          if (embedding != null) {
+            embeddings.add(embedding.map((e) => (e as num).toDouble()).toList());
+            lastTemplate = template; // Keep last template for metadata
+            debugPrint('✅ Frame ${i + 1}/${_multiFrameCount} captured');
+          }
+        } catch (e) {
+          debugPrint('⚠️ Failed to extract embedding from frame $i: $e');
+          break; // Exit on error
+        }
+      }
+      
+      // Check if we have enough frames
+      if (embeddings.isEmpty) {
+        debugPrint('❌ No embeddings captured, aborting');
+        return null;
+      }
+      
+      if (embeddings.length < 2) {
+        debugPrint('⚠️ Only 1 frame captured, using single-frame embedding');
+        return lastTemplate;
+      }
+      
+      // Average embeddings
+      final avgEmbedding = _averageEmbeddings(embeddings);
+      debugPrint('✅ Averaged ${embeddings.length} embeddings');
+      
+      // Return template with averaged embedding
+      return {
+        ...?lastTemplate,
+        'embedding': avgEmbedding,
+        'frame_count': embeddings.length,
+        'multi_frame': true,
+      };
+      
+    } catch (e) {
+      debugPrint('❌ Multi-frame capture error: $e');
+      return null;
+    }
+  }
+
+  /// ✅ Average multiple embeddings (element-wise mean)
+  List<double> _averageEmbeddings(List<List<double>> embeddings) {
+    if (embeddings.isEmpty) return [];
+    
+    final embeddingSize = embeddings.first.length;
+    final averaged = List<double>.filled(embeddingSize, 0.0);
+    
+    // Sum all embeddings
+    for (final embedding in embeddings) {
+      for (int i = 0; i < embeddingSize; i++) {
+        averaged[i] += embedding[i];
+      }
+    }
+    
+    // Divide by count to get mean
+    final count = embeddings.length.toDouble();
+    for (int i = 0; i < embeddingSize; i++) {
+      averaged[i] /= count;
+    }
+    
+    return averaged;
+  }
+
+  /// ✅ Calculate movement distance between two face rectangles
+  double _calculateRectMovement(Rect prev, Rect current) {
+    final dx = (prev.center.dx - current.center.dx).abs();
+    final dy = (prev.center.dy - current.center.dy).abs();
+    return sqrt(dx * dx + dy * dy); // Euclidean distance
+  }
+
+  Future<void> _triggerRecognition(Face face, Size imageSize) async {
+    final id = face.trackingId ?? -1;
+    if (id == -1) return;
+
+    try {
+        // ✅ Multi-Frame Averaging: Capture and average embeddings from 3 frames
+        debugPrint('🎯 Starting multi-frame recognition for face $id');
+        
+        if (_lastStreamBytes == null) {
+           debugPrint('⚠️ No stream bytes available for recognition');
+           _faceStates[id] = FaceTrackingState.idle; // Reset
+           return;
+        }
+
+        // Capture multi-frame averaged embedding
+        final template = await _captureMultiFrameEmbedding(face, id);
+        
+        if (template == null) {
+           debugPrint('❌ Multi-frame capture failed, aborting recognition');
+           _faceStates[id] = FaceTrackingState.idle;
+           return;
+        }
+        
+        final frameCount = template['frame_count'] ?? 1;
+        debugPrint('✅ Using ${frameCount}-frame averaged embedding for matching');
+
+        // Capture current bytes for attendance photo
+        final bytes = Uint8List.fromList(_lastStreamBytes!);
+
+        final result = await _biometricService.identifyBestMatchWithUserInfo(
+           capturedTemplate: template,
+           organizationId: widget.organizationId,
+           strict: true, // Enforce strict matching
+           threshold: 0.75, // ✅ STRONGER: Increased from 0.65 for better accuracy
+        );
+
+        if (result != null) {
+           final name = result['user_name'];
+           final memberId = result['organization_member_id'];
+           final similarity = (result['similarity'] as double) * 100;
+           
+           // Update Persistent Tracker for UI
+           _persistentFaceTracker[id] = {
+             'name': name,
+             'member_id': memberId,
+             'similarity': similarity,
+             'timestamp': DateTime.now(),
+           };
+           
+           // Process Attendance Logic (Throttle/Queue)
+           // ✅ FIXED: Pass context data to handler
+           _handleAttendance(result, bytes, template);
+           
+           if (mounted) {
+              SoundHelper.playSuccessSound(); 
+           }
+           // ✅ SUCCESS: Long Cooldown to prevent spam
+           _cooldowns[id] = DateTime.now().add(_recognitionCooldown);
+
+        } else {
+           _persistentFaceTracker[id] = {
+             'name': 'Unknown',
+             'member_id': null,
+             'similarity': 0.0,
+             'timestamp': DateTime.now(),
+           };
+           if (mounted) {
+              // Silenced error sound per user request
+           }
+           // ✅ UNKNOWN: Short Cooldown to RETRY quickly (Machine Gun Mode)
+           // This allows moving subjects to be re-evaluated effectively
+           _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 200));
+        }
+
+    } catch (e) {
+       debugPrint('Recognition error: $e');
+       _persistentFaceTracker[id] = {
+          'name': 'Error',
+          'member_id': null
+       };
+       // Error Cooldown
+       _cooldowns[id] = DateTime.now().add(const Duration(seconds: 1));
+    } finally {
+       // Transition to COOLDOWN state (duration determined above)
+       _faceStates[id] = FaceTrackingState.cooldown;
+    }
+  }
+
+
+  // Reuse logic but modify to update persistent tracker
+
   
   // ✅ NEW: Processing queue to prevent lag
   void _addToProcessingQueue(Future<void> Function() task) {
@@ -891,412 +1159,144 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  // ✅ NEW: Process face asynchronously to prevent blocking
-  Future<void> _processFaceAsync(
-    Face face,
-    String imagePath,
-    File imageFile,
-    int faceIndex,
-    int faceId,
-    List<Map<String, dynamic>> processedUsers,
-    Function(int, int, int) updateCounters,
+  // ✅ NEW: Centralized Attendance Handling with State Machine Validation
+  Future<void> _handleAttendance(
+    Map<String, dynamic> result,
+    Uint8List imageBytes,
+    Map<String, dynamic> template,
   ) async {
-    // ✅ NEW: Update face status to processing
-    if (mounted) {
-      setState(() {
-        final faceData = _detectedFaces.firstWhere(
-          (f) => f['id'] == faceId,
-          orElse: () => {},
-        );
-        if (faceData.isNotEmpty) {
-          faceData['status'] = 'processing';
-        }
-      });
-    }
-    try {
-      final capturedTemplate = await _faceService.buildTemplateFromFace(
-        face,
-        imagePath,
-      );
-      
-      final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
-        capturedTemplate: capturedTemplate,
-        organizationId: widget.organizationId,
-
-        threshold: 0.73, // ✅ BALANCED: 0.73 for good recognition rate with accuracy
-        strict: false, // Always non-strict for better UX in motion
-      );
-
-      debugPrint('👤 FACE $faceIndex: Best match result: ${bestMatch != null ? "FOUND" : "NOT FOUND"}');
-      
-      if (bestMatch != null) {
-        final similarity = (bestMatch['similarity'] as num?)?.toDouble() ?? 0.0;
-        debugPrint('👤 FACE $faceIndex: Match similarity: ${(similarity * 100).toStringAsFixed(2)}%');
-      }
-
-      if (bestMatch == null) {
-        // ✅ NEW: Update face status to unmatched
-        if (mounted) {
-          setState(() {
-            final faceData = _detectedFaces.firstWhere(
-              (f) => f['id'] == faceId,
-              orElse: () => {},
+    _addToProcessingQueue(() async {
+        try {
+            final user = result; // result IS the user map from biometric service
+            final memberId = user['organization_member_id'] as int;
+            final userName = user['user_name'] ?? 'Unknown';
+            final biometricId = user['biometric_id'] as int;
+            final profilePhotoUrl = user['profile_photo_url'] as String?;
+             
+            final isCheckIn = _attendanceMode == 'check_in';
+            final attendanceType = isCheckIn ? 'check_in' : 'check_out'; // Fixed logic
+            
+            // Check duplicates (offline DB)
+            final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+            
+            final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
+                organizationMemberId: memberId,
+                eventType: attendanceType,
+                attendanceDate: todayStr,
             );
-            if (faceData.isNotEmpty) {
-              faceData['status'] = 'unmatched';
+            
+            if (alreadyRecorded) {
+                debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping');
+                return;
             }
-          });
-        }
-        updateCounters(0, 0, 1);
-        return;
-      }
+            
+            // ✅ Check Same-Mode Cooldown (5 minutes)
+            final cooldownKey = '${memberId}_$attendanceType';
+            final lastTime = _lastAttendanceTime[cooldownKey];
+            
+            if (lastTime != null) {
+                final timeSinceLastAttendance = DateTime.now().difference(lastTime);
+                final remainingCooldown = _sameModeCooldown - timeSinceLastAttendance;
+                
+                if (remainingCooldown.isNegative == false) {
+                    // Still in cooldown
+                    final remainingMinutes = remainingCooldown.inMinutes;
+                    final remainingSeconds = remainingCooldown.inSeconds % 60;
+                    
+                    debugPrint('⏳ USER $userName: Same-mode cooldown active. Wait ${remainingMinutes}m ${remainingSeconds}s');
+                    
+                    if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                                content: Text(
+                                    '$userName sudah ${attendanceType == 'check_in' ? 'Check-In' : 'Check-Out'}. '
+                                    'Ganti mode atau tunggu ${remainingMinutes}m ${remainingSeconds}s',
+                                ),
+                                backgroundColor: Colors.orange,
+                                duration: const Duration(seconds: 3),
+                            ),
+                        );
+                    }
+                    return;
+                }
+            }
+            
+            // Get Profile Photo Base64
+            final profilePhotoBase64 = await _getProfilePhotoBase64(
+                memberId,
+                profilePhotoUrl,
+            ).timeout(const Duration(milliseconds: 300), onTimeout: () => null);
 
-      final userId = bestMatch['organization_member_id'] as int;
-      final userName = bestMatch['user_name'] ?? 'Unknown';
-      final similarity = (bestMatch['similarity'] as num?)?.toDouble() ?? 0.0;
-      
-      // ✅ BALANCED: Require minimum similarity of 73% for good recognition
-      if (similarity < 0.73) {
-        debugPrint('❌ FACE $faceIndex: Match rejected - similarity ${(similarity * 100).toStringAsFixed(2)}% below 73% threshold');
-        // ✅ NEW: Update face status to unmatched
-        if (mounted) {
-          setState(() {
-            final faceData = _detectedFaces.firstWhere(
-              (f) => f['id'] == faceId,
-              orElse: () => {},
+            // Save Offline (Save bytes to file for proof?)
+            // For Kiosk mode, maybe we don't save every file to disk to save space?
+            // Or only on success. 
+            // We use imageBytes directly to encode for DB if needed, but offline DB expects file path.
+            // Let's Skip file saving for speed unless required. 
+            // Saving Base64 directly to DB is supported by _saveOfflineAttendance logic if we modify it, 
+            // but currently it takes localPhotoPath.
+            
+            // Workaround: Use bytes to creating a temp file is expensive.
+            // Just pass null for localPhotoPath and rely on template embedding?
+            // Or base64 encode bytes.
+            
+            String? capturedBase64;
+            // capturedBase64 = base64Encode(imageBytes); // Can be large
+            
+            final offlineId = await _saveOfflineAttendance(
+                memberId: memberId,
+                userName: userName,
+                attendanceType: attendanceType,
+                template: template,
+                localPhotoPath: null, // Skipping file save for speed
+                profilePhotoBase64: profilePhotoBase64,
             );
-            if (faceData.isNotEmpty) {
-              faceData['status'] = 'unmatched';
+            
+            // ✅ Update Last Attendance Time for Cooldown Tracking
+            if (offlineId != null && offlineId != -1) {
+                _lastAttendanceTime[cooldownKey] = DateTime.now();
+                debugPrint('✅ Updated cooldown tracker for $userName ($attendanceType)');
             }
-          });
-        }
-        updateCounters(0, 0, 1);
-        return;
-      }
-      
-      // ✅ NEW: Update face status to matched with user info
-      if (mounted) {
-        setState(() {
-          final faceData = _detectedFaces.firstWhere(
-            (f) => f['id'] == faceId,
-            orElse: () => {},
-          );
-          if (faceData.isNotEmpty) {
-            faceData['status'] = 'matched';
-            faceData['userName'] = userName;
-            faceData['similarity'] = similarity;
-          }
-        });
-      }
-
-      // ✅ TRACKING: Save to persistent tracker
-      if (face.trackingId != null) {
-        _persistentFaceTracker[face.trackingId!] = {
-          'name': userName,
-          'similarity': similarity,
-          'memberId': userId,
-          'lastSeen': DateTime.now(),
-        };
-      }
-      
-      // ✅ NEW: Check if this face already matched with a different user in this scan
-      // Prevent 1 face from matching multiple people
-      final existingMatch = processedUsers.firstWhere(
-        (u) => u['faceIndex'] == faceIndex,
-        orElse: () => {},
-      );
-      
-      if (existingMatch.isNotEmpty) {
-        final existingUserId = existingMatch['user']?['organization_member_id'] as int?;
-        if (existingUserId != null && existingUserId != userId) {
-          debugPrint('⚠️ FACE $faceIndex: Already matched with user $existingUserId, rejecting new match with $userId');
-          updateCounters(0, 0, 1);
-          return;
-        }
-        // Same user, skip duplicate
-        if (existingUserId == userId) {
-          debugPrint('⏭️ FACE $faceIndex: Already processing user $userName, skipping duplicate');
-          updateCounters(0, 1, 0);
-          return;
-        }
-      }
-      
-      // ✅ IMPROVED: Check cooldown first with composite key (User + Type)
-      final isCheckIn = _attendanceMode == 'check_in'; // Defined earlier, used here
-      final cooldownKey = '${userId}_${isCheckIn ? "in" : "out"}';
-
-      if (_processedUserTimestamps.containsKey(cooldownKey)) {
-        final lastProcessTime = _processedUserTimestamps[cooldownKey]!;
-        final timeSinceLastProcess = DateTime.now().difference(lastProcessTime);
-        
-        if (timeSinceLastProcess < _userCooldown) {
-          final remainingSeconds = (_userCooldown - timeSinceLastProcess).inSeconds;
-          debugPrint('⏰ USER $userName: Still in cooldown for ${isCheckIn ? "IN" : "OUT"} (${remainingSeconds}s remaining)');
-          
-          // ✅ FIX: Keep showing green box ("success") for user in cooldown so box stays stable
-          if (mounted) {
-            setState(() {
-              final faceData = _detectedFaces.firstWhere(
-                (f) => f['id'] == faceId,
-                orElse: () => {},
-              );
-              if (faceData.isNotEmpty) {
-                faceData['status'] = 'success'; // Show as success (green)
-                faceData['name'] = userName;    // Keep showing name
-                // Optionally add specific info like "Sudah Absen"
-              }
-            });
-          }
-          
-          updateCounters(0, 1, 0);
-          return;
-        }
-      }
-
-      // ✅ NEW: Check if already recorded today BEFORE processing
-      // final isCheckIn = _attendanceMode == 'check_in'; // Already defined
-      final attendanceType = isCheckIn ? 'check_in' : 'check_out';
-      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
-      
-      // Check offline database first (faster)
-      final alreadyRecordedOffline = await _offlineDb.hasDuplicateAttendance(
-        organizationMemberId: userId,
-        eventType: attendanceType,
-        attendanceDate: todayStr,
-      ).timeout(const Duration(seconds: 1), onTimeout: () => false);
-      
-      if (alreadyRecordedOffline) {
-        debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping');
-        
-        // ✅ FIX: Keep showing green box for offline recorded user
-        if (mounted) {
-          setState(() {
-            final faceData = _detectedFaces.firstWhere(
-              (f) => f['id'] == faceId,
-              orElse: () => {},
+            
+            // Trigger Sync
+             if (_isOnline && offlineId != null && offlineId != -1) {
+                // Delayed sync
+                Timer(const Duration(seconds: 5), () {
+                     AttendanceSyncService().syncPendingAttendances();
+                });
+            }
+            
+            // Update Biometric Usage
+            await _biometricService.updateLastUsed(biometricId);
+            
+            // Update UI list
+            if (mounted) {
+                setState(() {
+                  _totalProcessedToday++;
+                  final now = DateTime.now();
+                  final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+                  
+                  _recentAttendanceList.insert(0, {
+                    'name': userName,
+                    'department': user['department_name'] ?? '-',
+                    'photo_base64': profilePhotoBase64,
+                    'time': timeStr,
+                    'type': attendanceType,
+                    'timestamp': now,
+                  });
+                   if (_recentAttendanceList.length > 10) _recentAttendanceList.removeLast();
+                });
+            }
+            
+            _showMessage(
+                'Sukses: $userName (${isCheckIn ? "MASUK" : "KELUAR"})',
+                MessageType.success,
+                seconds: 2,
             );
-            if (faceData.isNotEmpty) {
-              faceData['status'] = 'success';
-              faceData['name'] = userName;
-            }
-          });
+
+        } catch(e) {
+           debugPrint('Error in handleAttendance: $e');
         }
-        
-        // Update timestamp to prevent repeated checks
-        _processedUserTimestamps[cooldownKey] = DateTime.now();
-        updateCounters(0, 1, 0);
-        return;
-      }
-      
-      // ❌ REMOVED ONLINE CHECK to ensure speed
-      // if (_isOnline) { ... }
-
-      // ✅ IMPROVED: Set timestamp BEFORE adding to list to prevent duplicate processing
-      _processedUserTimestamps[cooldownKey] = DateTime.now();
-
-      // Thread-safe add to list
-      processedUsers.add({
-        'user': bestMatch,
-        'imageFile': imageFile,
-        'faceIndex': faceIndex,
-        'template': capturedTemplate,
-      });
-      updateCounters(1, 0, 0);
-      debugPrint('✅ USER $userName: Added to processing list');
-      
-    } catch (e) {
-      debugPrint('❌ ERROR processing face $faceIndex: $e');
-      updateCounters(0, 0, 1);
-    }
-  }
-
-  // ✅ NEW: Process single attendance asynchronously
-  Future<void> _processSingleAttendance(
-    Map<String, dynamic> userData,
-    List<String> successfulAttendances,
-    List<String> failedAttendances,
-    Function(bool) updateHasQueuedOffline,
-  ) async {
-    try {
-      final user = userData['user'];
-      final imageFile = userData['imageFile'] as File;
-      final template = userData['template'] as Map<String, dynamic>;
-      final memberId = user['organization_member_id'] as int;
-      final userName = user['user_name'] ?? 'Unknown';
-      
-      final isCheckIn = _attendanceMode == 'check_in';
-      final attendanceType = isCheckIn ? 'check_in' : 'check_out';
-      final workTimeMode = _getWorkTimeMode();
-      
-      // ✅ OPTIMIZED: Defer heavy operations with timeout (300ms)
-      // If network is slow, we skip the photo to keep UI fast
-      final profilePhotoBase64 = await _getProfilePhotoBase64(
-        memberId,
-        user['profile_photo_url'] as String?,
-      ).timeout(const Duration(milliseconds: 300), onTimeout: () => null);
-      final departmentName = user['department_name'] as String?;
-
-      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
-      bool alreadyRecorded = false;
-      
-      // ✅ OPTIMIZED: Check duplicate faster (offline ONLY)
-      // We explicitly skip online check here to ensure instant feedback.
-      // The background sync service will handle true duplicates later.
-      alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
-        organizationMemberId: memberId,
-        eventType: attendanceType,
-        attendanceDate: todayStr,
-      ).timeout(const Duration(seconds: 1), onTimeout: () => false);
-      
-      // ❌ REMOVED ONLINE CHECK to ensure speed regardless of signal
-      // if (!alreadyRecorded && _isOnline) { ... }
-      
-      if (alreadyRecorded) {
-        return; // Skip without message to reduce UI updates
-      }
-      
-      if (alreadyRecorded) {
-        return; // Skip without message to reduce UI updates
-      }
-      
-      // Save photo locally for offline support
-      String? localPhotoPath;
-      try {
-        final tempDir = Directory.systemTemp;
-        final fileName = 'face_${memberId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        final localFile = File('${tempDir.path}/$fileName');
-        await imageFile.copy(localFile.path);
-        localPhotoPath = localFile.path;
-      } catch (e) {
-        debugPrint('Failed to save photo locally: $e');
-      }
-
-      // Always persist to offline database for parity with RFID
-      final offlineId = await _saveOfflineAttendance(
-        memberId: memberId,
-        userName: userName,
-        attendanceType: attendanceType,
-        template: template,
-        localPhotoPath: localPhotoPath,
-        profilePhotoBase64: profilePhotoBase64,
-      );
-
-      final isDuplicateSkip = offlineId != null && offlineId == -1;
-      if (isDuplicateSkip) {
-        return;
-      }
-
-      // ✅ FAST: Schedule background sync after 30 seconds (as requested)
-      // This ensures UI is updated immediately without waiting for server
-      if (_isOnline) {
-        Timer(const Duration(seconds: 30), () {
-          debugPrint('⏰ Triggering delayed sync for member $memberId');
-          AttendanceSyncService().syncPendingAttendances();
-        });
-      }
-      
-      // Update biometric timestamp regardless of sync status (since it was used)
-      try {
-         await _biometricService.updateLastUsed(user['biometric_id']).timeout(const Duration(seconds: 1), onTimeout: () => 0);
-      } catch (_) {}
-
-      // ✅ NOTE: Timestamp already set in _processFaceAsync before processing
-      // This ensures user won't be processed again even if attendance fails
-      // Using composite key logic again (redundant but safe)
-      final cooldownKey = '${memberId}_${isCheckIn ? "in" : "out"}';
-      if (!_processedUserTimestamps.containsKey(cooldownKey)) {
-        _processedUserTimestamps[cooldownKey] = DateTime.now();
-      }
-
-      if (mounted) {
-        setState(() {
-          _totalProcessedToday++;
-          
-          final now = DateTime.now();
-          final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-          
-          _recentAttendanceList.insert(0, {
-            'name': userName,
-            'department': departmentName ?? '-',
-            'photo_base64': profilePhotoBase64,
-            'photo_url': user['profile_photo_url'],
-            'time': timeStr,
-            'type': attendanceType,
-            'timestamp': now,
-          });
-
-          if (_recentAttendanceList.length > 10) {
-            _recentAttendanceList.removeLast();
-          }
-        });
-      }
-
-      successfulAttendances.add('$userName (${isCheckIn ? "MASUK" : "KELUAR"})');
-      // Treat everything as queued initially until background sync picks it up
-      updateHasQueuedOffline(true);
-
-    } catch (e) {
-      final userName = userData['user']['user_name'] ?? 'Unknown';
-      debugPrint('ERROR processing $userName: $e');
-      failedAttendances.add(userName);
-    }
-  }
-
-  Future<void> _processMultipleAttendances(
-    List<Map<String, dynamic>> usersData,
-  ) async {
-    // ✅ OPTIMIZED: Show immediate feedback
-    if (usersData.isNotEmpty) {
-      final firstUser = usersData.first['user'];
-      final firstName = firstUser['user_name'] ?? 'Unknown';
-      // _showMessage('Memproses absen untuk $firstName...', MessageType.processing);
-    }
-
-    final successfulAttendances = <String>[];
-    final failedAttendances = <String>[];
-    bool hasQueuedOffline = false;
-
-    // ✅ OPTIMIZED: Process users in parallel batches (max 2 at a time to prevent overload)
-    const batchSize = 5;
-    for (int i = 0; i < usersData.length; i += batchSize) {
-      final batch = usersData.skip(i).take(batchSize).toList();
-      await Future.wait(
-        batch.map((userData) => _processSingleAttendance(
-          userData,
-          successfulAttendances,
-          failedAttendances,
-          (hasOffline) => hasQueuedOffline = hasOffline,
-        )),
-      );
-    }
-
-    if (successfulAttendances.isNotEmpty) {
-      await SoundHelper.playSuccessSound();
-      
-      var message = successfulAttendances.length == 1
-          ? '${hasQueuedOffline ? "Offline" : "Sukses"}: ${successfulAttendances.first}'
-          : '${hasQueuedOffline ? "Offline" : "Sukses"}: ${successfulAttendances.length} orang';
-      if (hasQueuedOffline) {
-        message = '$message (Simpan)';
-      }
-      
-      _showMessage(message, MessageType.success, seconds: 2);
-    }
-
-    if (failedAttendances.isNotEmpty) {
-      _showMessage(
-        'Gagal: ${failedAttendances.join(", ")}',
-        MessageType.error,
-        seconds: 4,
-      );
-    }
-
-    setState(() {
-      _detectedFaces = [];
-      _faceDataMap.clear();
     });
-
-    _cleanupOldTimestamps();
   }
 
   void _cleanupOldTimestamps() {
@@ -1305,6 +1305,8 @@ class _FaceAttendanceMultiUserPageState
       return now.difference(timestamp) > _userCooldown;
     });
   }
+
+
 
   void _startScheduleCheck() {
     _scheduleCheckTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
@@ -1748,28 +1750,49 @@ class _FaceAttendanceMultiUserPageState
                 
                 double scale;
                 if (screenRatio > videoRatio) {
-                  // Screen is wider than video -> Match width
                   scale = screenWidth / videoWidth;
                 } else {
-                  // Screen is taller than video -> Match height
                   scale = screenHeight / videoHeight;
                 }
                 
                 final scaledWidth = videoWidth * scale;
                 final scaledHeight = videoHeight * scale;
                 
-                // Center the video in the screen
                 final offsetX = (screenWidth - scaledWidth) / 2;
                 final offsetY = (screenHeight - scaledHeight) / 2;
                 
-                // Get normalized coordinates from detection
-                double nLeft = (face['left'] as num).toDouble();
-                double nTop = (face['top'] as num).toDouble();
-                double nWidth = (face['width'] as num).toDouble();
-                double nHeight = (face['height'] as num).toDouble();
+                // ✅ UPDATED: Use Rect from State Machine
+                final rect = face['rect'] as Rect;
+                final boxColor = face['color'] as Color;
+                final name = face['name'] as String?; // Status text or User Name
+
+                // Get normalized coordinates (assuming rect is already normalized?? NO, rect is usually raw or normalized?)
+                // Wait, ML Kit returns absolute coordinates based on image size?
+                // In _handleStreamFaces, 'rect' is face.boundingBox.
+                // face.boundingBox is in IMAGE COORDINATES (e.g. 0..720, 0..1280).
                 
-                // ✅ MIRRORING: Flip X for front camera
-                // Since we use a file (non-mirrored) but preview is mirrored
+                // We need to normalize them first IF they are absolute.
+                // params.width/height in detection were image dimensions.
+                // Let's assume we need to normalize relative to Image Size.
+                
+                // ACTUALLY: The previous code expected 'left', 'top' as normalized (0..1)?
+                // Let's check previous code.
+                // "double nLeft = (face['left'] as num).toDouble();"
+                // If it was normalized, fine.
+                
+                // But `InputImage` from `CameraImage`... ML Kit returns pixel coordinates.
+                // So we must normalize them by `videoWidth` and `videoHeight` (sensor size).
+                
+                // However, `videoWidth` here is `previewSize.height` (720).
+                // `videoHeight` is `previewSize.width` (1280).
+                // The image source was also NV21 with these dims.
+                
+                double nLeft = rect.left / videoWidth; 
+                double nTop = rect.top / videoHeight;
+                double nWidth = rect.width / videoWidth;
+                double nHeight = rect.height / videoHeight;
+
+                // ✅ MIRRORING FIX: Flip X for front camera
                 nLeft = 1.0 - (nLeft + nWidth);
                 
                 // Map to screen coordinates
@@ -1778,52 +1801,6 @@ class _FaceAttendanceMultiUserPageState
                 final width = nWidth * scaledWidth;
                 final height = nHeight * scaledHeight;
                 
-                final status = face['status'] as String? ?? 'detecting';
-                // ✅ FIXED: Support both key naming conventions
-                final userName = (face['userName'] as String?) ?? (face['name'] as String?);
-                final similarity = face['similarity'] as double?;
-                
-                // ✅ NEW: Different colors based on status
-                Color borderColor;
-                Color glowColor;
-                IconData? statusIcon;
-                String? statusText;
-                
-                switch (status) {
-                  case 'detecting':
-                    borderColor = Colors.blue;
-                    glowColor = Colors.blue.withOpacity(0.4);
-                    statusIcon = Icons.search;
-                    statusText = null; // ✅ HIDDEN
-                    break;
-                  case 'processing':
-                    borderColor = Colors.orange;
-                    glowColor = Colors.orange.withOpacity(0.4);
-                    statusIcon = Icons.hourglass_empty;
-                    statusText = null; // ✅ HIDDEN
-                    break;
-                  case 'matched':
-                  case 'success': // ✅ ADDED: Validation success
-                  case 'cooldown': // ✅ ADDED: User in cooldown
-                    borderColor = Colors.green;
-                    glowColor = Colors.green.withOpacity(0.6); // Stronger glow
-                    statusIcon = Icons.check_circle;
-                    // ✅ FIXED: Show name if available, otherwise generic success
-                    statusText = userName ?? 'Berhasil';
-                    break;
-                  case 'unmatched':
-                    borderColor = Colors.red;
-                    glowColor = Colors.red.withOpacity(0.3);
-                    statusIcon = Icons.person_off;
-                    statusText = 'Tidak dikenali';
-                    break;
-                  default:
-                    borderColor = Colors.grey;
-                    glowColor = Colors.grey.withOpacity(0.3);
-                    statusIcon = null;
-                    statusText = null;
-                }
-
                 return Positioned(
                   left: left,
                   top: top,
@@ -1843,21 +1820,21 @@ class _FaceAttendanceMultiUserPageState
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [
-                        // ✅ FIXED: Main border - completely transparent center with only colored borders
+                        // Border Box
                         Container(
                           width: width,
                           height: height,
                           decoration: BoxDecoration(
-                            color: Colors.transparent, // ✅ TRANSPARENT CENTER - NO BACKGROUND
+                            color: Colors.transparent,
                             border: Border.all(
-                              color: borderColor,
+                              color: boxColor,
                               width: 3,
                             ),
                             borderRadius: BorderRadius.circular(8),
                           ),
                         ),
-                        // ✅ IMPROVED: Status label dengan nama user di bawah wajah
-                        if (statusText != null)
+                        // Status/Name Label
+                        if (name != null)
                           Positioned(
                             top: height + 8,
                             left: -20,
@@ -1872,7 +1849,7 @@ class _FaceAttendanceMultiUserPageState
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: borderColor.withOpacity(0.95),
+                                color: boxColor.withOpacity(0.95),
                                 borderRadius: BorderRadius.circular(10),
                                 boxShadow: [
                                   BoxShadow(
@@ -1881,59 +1858,17 @@ class _FaceAttendanceMultiUserPageState
                                     offset: const Offset(0, 3),
                                   ),
                                 ],
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.3),
-                                  width: 1,
-                                ),
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  if (statusIcon != null) ...[
-                                    Icon(
-                                      statusIcon,
-                                      color: Colors.white,
-                                      size: 16,
-                                    ),
-                                    const SizedBox(width: 6),
-                                  ],
-                                  Flexible(
-                                    child: Text(
-                                      statusText,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: 0.3,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                    ),
-                                  ),
-                                  if (similarity != null && status == 'matched') ...[
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.25),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        '${(similarity * 100).toStringAsFixed(0)}%',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ],
+                              child: Text(
+                                name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ),
@@ -2480,5 +2415,68 @@ class _FaceAttendanceMultiUserPageState
   // NOTE: The _openModePicker method is now defined earlier in the class (restored)
   
   // Helper methods for the hardcoded UI are no longer needed
+
   // Removing buildModeOption to cleanup
+}
+
+
+// ✅ ISOLATE WRAPPERS (Top-Level)
+class _PlaneData {
+  final Uint8List bytes;
+  final int bytesPerRow;
+  final int? bytesPerPixel;
+  _PlaneData({required this.bytes, required this.bytesPerRow, this.bytesPerPixel});
+}
+
+class _NV21ConvertParams {
+  final int width;
+  final int height;
+  final List<_PlaneData> planes;
+  _NV21ConvertParams({required this.width, required this.height, required this.planes});
+}
+
+Uint8List _yuv420ToNv21Compute(_NV21ConvertParams params) {
+  final int width = params.width;
+  final int height = params.height;
+  final List<_PlaneData> planes = params.planes;
+  
+  final int ySize = width * height;
+  final int uvSize = width * height ~/ 2;
+  final Uint8List nv21 = Uint8List(ySize + uvSize);
+
+  // Y Plane
+  final _PlaneData yData = planes[0];
+  final Uint8List yBytes = yData.bytes;
+  final int yStride = yData.bytesPerRow;
+
+  for (int y = 0; y < height; y++) {
+    final int srcPos = y * yStride;
+    final int dstPos = y * width;
+    for (int x = 0; x < width; x++) {
+       nv21[dstPos + x] = yBytes[srcPos + x];
+    }
+  }
+
+  // UV Planes
+  final _PlaneData uData = planes[1];
+  final _PlaneData vData = planes[2];
+  final Uint8List uBytes = uData.bytes;
+  final Uint8List vBytes = vData.bytes;
+  final int uStride = uData.bytesPerRow;
+  final int vStride = vData.bytesPerRow;
+  final int pixelStride = uData.bytesPerPixel ?? 1;
+
+  int uvIndex = ySize;
+  for (int y = 0; y < height ~/ 2; y++) {
+    for (int x = 0; x < width ~/ 2; x++) {
+      final int uIndex = y * uStride + x * pixelStride;
+      final int vIndex = y * vStride + x * pixelStride;
+      
+      if (vIndex < vBytes.length && uIndex < uBytes.length) {
+         nv21[uvIndex++] = vBytes[vIndex];
+         nv21[uvIndex++] = uBytes[uIndex];
+      }
+    }
+  }
+  return nv21;
 }

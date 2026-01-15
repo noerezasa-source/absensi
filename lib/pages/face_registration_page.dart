@@ -4,9 +4,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import '../services/face_recognition_tflite_service.dart';
 import '../services/biometric_service.dart';
 import '../services/supabase_storage_service.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
 class FaceRegistrationPage extends StatefulWidget {
   final int organizationMemberId;
@@ -20,6 +23,8 @@ class FaceRegistrationPage extends StatefulWidget {
   State<FaceRegistrationPage> createState() => _FaceRegistrationPageState();
 }
 
+enum CaptureAngle { front, left, right, complete }
+
 class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
   final FaceRecognitionTFLiteService _faceService = FaceRecognitionTFLiteService();
@@ -29,21 +34,36 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   bool _isLoading = false;
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
-  bool _isTakingPicture = false; // ✅ NEW: Prevent concurrent camera captures
+  bool _isTakingPicture = false; 
   bool _isModelInitialized = false;
   String? _errorMessage;
   String _currentStep = 'Loading model...';
   String _guidanceMessage = '';
   Color _overlayColor = Colors.white;
-  Timer? _detectionTimer;
   
-  // ✅ SIMPLIFIED: Single-pose registration (front only)
+  // State variables for ImageStream
+  bool _isStreaming = false;
+  int _consecutiveValidFrames = 0;
+  final int _requiredValidFrames = 3;
   bool _isRegistrationComplete = false;
+
+  // Multi-Angle Registration Logic
+  CaptureAngle _currentAngle = CaptureAngle.front;
+  final Map<CaptureAngle, Map<String, dynamic>> _capturedTemplates = {};
+  String? _frontImagePath;
 
   @override
   void initState() {
     super.initState();
     _initializeModel();
+  }
+  
+  @override
+  void dispose() {
+    _stopStream();
+    _cameraController?.dispose();
+    _faceService.dispose();
+    super.dispose();
   }
 
   Future<void> _initializeModel() async {
@@ -61,10 +81,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       await _initializeCamera();
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to load model: $e';
-        _currentStep = 'Model initialization failed';
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to load model: $e';
+          _currentStep = 'Model initialization failed';
+        });
+      }
     }
   }
 
@@ -84,239 +106,344 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         frontCamera,
         ResolutionPreset.high,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: Platform.isAndroid 
+            ? ImageFormatGroup.yuv420 
+            : ImageFormatGroup.bgra8888,
       );
 
       await _cameraController!.initialize();
-
+      
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
           _currentStep = 'Posisikan Wajah';
           _guidanceMessage = 'Lihat Lurus ke Kamera';
         });
-        _startFaceDetection();
+        // Start silent stream instead of polling timer
+        _startImageStream();
       }
     } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to initialize camera: $e';
+        });
+      }
+    }
+  }
+
+  void _startImageStream() {
+    if (_cameraController == null || _isStreaming) return;
+
+    try {
+      _isStreaming = true;
+      _cameraController!.startImageStream((CameraImage image) {
+        _processCameraFrame(image);
+      });
+    } catch (e) {
+      debugPrint('Error starting stream: $e');
+      _isStreaming = false;
+    }
+  }
+
+  Future<void> _stopStream() async {
+    if (_cameraController != null && _isStreaming) {
+      try {
+        await _cameraController!.stopImageStream();
+      } catch (e) {
+        debugPrint('Error stopping stream: $e');
+      }
+      _isStreaming = false;
+    }
+  }
+
+  Future<void> _processCameraFrame(CameraImage image) async {
+    if (_isProcessing || _isTakingPicture || _isRegistrationComplete) return;
+    _isProcessing = true;
+
+    try {
+      // 1. Convert to InputImage
+      final inputImage = await _inputImageFromCameraImage(image);
+      if (inputImage == null) return;
+
+      // 2. Detect Faces
+      final faces = await _faceService.detectFacesFromInputImage(inputImage);
+      
+      if (!mounted) return;
+
+      if (faces.isEmpty) {
+        _consecutiveValidFrames = 0;
+        setState(() {
+          _overlayColor = Colors.transparent;
+          _guidanceMessage = 'Arahkan wajah ke kamera';
+        });
+      } else {
+        final face = faces.first;
+        final validation = _validateFace(face, Size(image.width.toDouble(), image.height.toDouble()));
+        
+        if (validation['isValid'] == true) {
+          _consecutiveValidFrames++;
+          setState(() {
+             _overlayColor = Colors.green.withOpacity(0.3);
+             _guidanceMessage = 'Tahan posisi...';
+          });
+
+          // Check stability before capturing
+          if (_consecutiveValidFrames >= _requiredValidFrames && !_isTakingPicture) {
+            _isTakingPicture = true; // Lock
+            _stopStream(); // Async stop stream
+            
+            // Trigger capture
+            setState(() {
+              _guidanceMessage = 'Mengambil foto...';
+              _currentStep = 'Capturing...';
+            });
+
+            final XFile file = await _cameraController!.takePicture();
+            await _processCapturedAngle(file.path);
+          }
+        } else {
+          _consecutiveValidFrames = 0;
+          setState(() {
+            _overlayColor = Colors.orange.withOpacity(0.3);
+            _guidanceMessage = validation['message'] ?? 'Sesuaikan posisi';
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Stream process error: $e');
+      _isTakingPicture = false;
+      _startImageStream();
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  // Reuse the validation logic but adapted for Face object
+  Map<String, dynamic> _validateFace(dynamic face, Size imageSize) {
+    // Basic validation logic
+    final double leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
+    final double rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
+
+    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4) return {'isValid': false, 'message': 'Buka mata Anda'};
+
+    final double headY = face.headEulerAngleY ?? 0.0;
+    final double headZ = (face.headEulerAngleZ ?? 0.0).abs();
+    if (headZ > 35.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'};
+
+    // Angle specific validation
+    switch (_currentAngle) {
+      case CaptureAngle.front:
+        if (headY.abs() > 10.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'};
+        break;
+      case CaptureAngle.left:
+        if (headY < 20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri'};
+        break;
+      case CaptureAngle.right:
+        if (headY > -20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kanan'};
+        break;
+      default:
+        break;
+    }
+    
+    return {'isValid': true, 'message': 'Sempurna, Tahan!'};
+  }
+
+  Future<void> _processCapturedAngle(String imagePath) async {
+    try {
       setState(() {
-        _errorMessage = 'Failed to initialize camera: $e';
+        _overlayColor = Colors.green;
+        _guidanceMessage = 'Sudut ${_currentAngle.name.toUpperCase()} Berhasil!';
+        _currentStep = 'Memproses...';
+      });
+
+      // Extract features for this angle
+      final faceTemplate = await _faceService.extractFaceFeatures(
+        imagePath,
+        allowSidePose: _currentAngle != CaptureAngle.front,
+      );
+
+      // Quality check
+      double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+      if (qualityScore < 0.60) {
+        setState(() {
+          _guidanceMessage = 'Cahaya kurang terang. Coba lagi.';
+          _overlayColor = Colors.orange;
+        });
+        await Future.delayed(const Duration(seconds: 2));
+        await File(imagePath).delete();
+        _isTakingPicture = false;
+        _startImageStream();
+        return;
+      }
+
+      // Store template
+      _capturedTemplates[_currentAngle] = faceTemplate;
+      
+      if (_currentAngle == CaptureAngle.front) {
+        _frontImagePath = imagePath; // Keep front image for profile photo
+      } else {
+        await File(imagePath).delete(); // Delete others
+      }
+
+      // Progress to next angle
+      if (_currentAngle == CaptureAngle.front) {
+        _currentAngle = CaptureAngle.left;
+        _consecutiveValidFrames = 0;
+        _isTakingPicture = false;
+        _startImageStream();
+        setState(() {
+          _guidanceMessage = 'Miringkan Wajah ke KIRI';
+          _currentStep = 'Tahap 2: Samping Kiri';
+          _overlayColor = Colors.blue;
+        });
+      } else if (_currentAngle == CaptureAngle.left) {
+        _currentAngle = CaptureAngle.right;
+        _consecutiveValidFrames = 0;
+        _isTakingPicture = false;
+        _startImageStream();
+        setState(() {
+          _guidanceMessage = 'Miringkan Wajah ke KANAN';
+          _currentStep = 'Tahap 3: Samping Kanan';
+          _overlayColor = Colors.blue;
+        });
+      } else {
+        _currentAngle = CaptureAngle.complete;
+        setState(() {
+          _guidanceMessage = 'Semua sudut selesai!';
+          _isRegistrationComplete = true;
+          _currentStep = 'Menyimpan Semua Data...';
+        });
+        await _finalizeMultiAngleRegistration();
+      }
+
+    } catch (e) {
+      debugPrint('Error processing angle: $e');
+      _isTakingPicture = false;
+      _startImageStream();
+      setState(() {
+        _errorMessage = 'Gagal memproses sudut ini. Coba lagi.';
       });
     }
   }
 
-  void _startFaceDetection() {
-    // ✅ IMPROVED: 1000ms interval for better stability during registration
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 1000), (timer) {
-      if (!_isProcessing && 
-          _isCameraInitialized && 
-          _isModelInitialized && 
-          !_isRegistrationComplete) {
-        _detectAndValidatePose();
-      }
-    });
-  }
-
-
-  Future<void> _detectAndValidatePose() async {
-    // ✅ IMPROVED: Comprehensive camera state validation
-    if (_cameraController == null || 
-        !_cameraController!.value.isInitialized || 
-        _isProcessing ||
-        _isTakingPicture) {
-      return;
-    }
-
-    // ✅ IMPROVED: Prevent concurrent operations
+  Future<void> _finalizeMultiAngleRegistration() async {
     setState(() {
-      _isProcessing = true;
-      _isTakingPicture = true;
+      _isLoading = true;
+      _currentStep = 'Menyimpan ke Database...';
     });
 
-    File? imageFile;
-
-    
     try {
-      // ✅ IMPROVED: Validate camera state before capture
-      if (_cameraController == null || !_cameraController!.value.isInitialized) {
-        debugPrint('⚠️ Camera not ready, skipping detection');
-        return;
+      // 1. Combine templates into version 4 (Multi-Template)
+      final List<Map<String, dynamic>> combinedList = [
+        _capturedTemplates[CaptureAngle.front]!,
+        _capturedTemplates[CaptureAngle.left]!,
+        _capturedTemplates[CaptureAngle.right]!,
+      ];
+
+      final multiTemplate = {
+        'version': 4,
+        'templates': combinedList,
+        'totalAngles': 3,
+        'enrollmentDate': DateTime.now().toIso8601String(),
+      };
+
+      // 2. Upload Front Photo
+      if (_frontImagePath != null) {
+        final imageFile = File(_frontImagePath!);
+        final processedFile = await _processImage(imageFile);
+        await _storageService.uploadFaceTemplate(
+          processedFile,
+          widget.organizationMemberId,
+        );
+        
+        // Clean up
+        if (await imageFile.exists()) await imageFile.delete();
+        if (processedFile.path != imageFile.path) {
+          final pf = File(processedFile.path);
+          if (await pf.exists()) await pf.delete();
+        }
       }
 
-      final image = await _cameraController!.takePicture().timeout(
-        const Duration(milliseconds: 1000),
-        onTimeout: () {
-          throw TimeoutException('Camera takePicture timeout');
-        },
+      // 3. Register to Database
+      await _biometricService.registerFaceTemplate(
+        organizationMemberId: widget.organizationMemberId,
+        faceTemplate: multiTemplate,
       );
-      imageFile = File(image.path);
-      
-      // ✅ IMPROVED: Validate file before processing
-      if (!await imageFile.exists()) {
-        debugPrint('⚠️ Captured image file does not exist');
-        return;
-      }
-      
-      try {
-        final validationResult = await _validatePoseWithFeedback(image.path);
-        
-        if (validationResult['isValid'] == true) {
-          // ✅ SIMPLIFIED: Capture front pose and register immediately
-          await _captureFrontPose(image.path);
-        } else {
-          setState(() {
-            _guidanceMessage = validationResult['message'] ?? 'Sesuaikan posisi';
-            _overlayColor = Colors.orange;
-            _currentStep = validationResult['message'] ?? 'Sesuaikan posisi';
-          });
-          // ✅ IMPROVED: Safe file cleanup
-          try {
-            await imageFile.delete();
-          } catch (e) {
-            debugPrint('Failed to delete temp file: $e');
-          }
-          
-          Future.delayed(const Duration(milliseconds: 1500), () {
-            if (mounted && !_isRegistrationComplete) {
-              setState(() {
-                _overlayColor = Colors.white;
-              });
-            }
-          });
-        }
-      } catch (e) {
-        // ✅ IMPROVED: Safe file cleanup on error
-        try {
-          await imageFile.delete();
-        } catch (deleteError) {
-          debugPrint('Failed to delete temp file: $deleteError');
-        }
-        
-        if (mounted) {
-          setState(() {
-            _guidanceMessage = e.toString().replaceAll('Exception: ', '');
-            _overlayColor = Colors.red;
-          });
-        }
-        
-        Future.delayed(const Duration(milliseconds: 1500), () {
-          if (mounted && !_isRegistrationComplete) {
-            setState(() {
-              _overlayColor = Colors.white;
-            });
-          }
-        });
+
+      if (mounted) {
+        _showSuccessDialog();
       }
     } catch (e) {
-      debugPrint('ERROR in face detection: $e');
-      
-      // ✅ IMPROVED: Safe cleanup of temp file on error
-      if (imageFile != null) {
-        try {
-          await imageFile.delete();
-        } catch (deleteError) {
-          debugPrint('Failed to delete temp file on error: $deleteError');
-        }
-      }
-      
-      if (mounted) {
-        setState(() {
-          _currentStep = 'Sesuaikan posisi wajah';
-        });
-      }
-    } finally {
-      // ✅ IMPROVED: Always reset flags to allow next detection
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-        });
-      }
-      _isTakingPicture = false;
+      setState(() {
+        _errorMessage = 'Gagal registrasi: $e';
+        _isLoading = false;
+        _isRegistrationComplete = false;
+      });
+      _currentAngle = CaptureAngle.front; // Reset
+      _startImageStream();
     }
   }
 
-  Future<Map<String, dynamic>> _validatePoseWithFeedback(String imagePath) async {
-    final faces = await _faceService.detectFaces(imagePath);
-    
-    if (faces.isEmpty) {
-      return {
-        'isValid': false,
-        'message': 'Wajah tidak terdeteksi - mendekatlah',
-      };
-    }
+  void _showSuccessDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withOpacity(0.7),
+      builder: (context) => Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 48),
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: const BoxDecoration(
+                  color: Colors.green,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.check, color: Colors.white, size: 44),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Registrasi Selesai!',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  decoration: TextDecoration.none,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Akurasi pengenalan wajah kini lebih tinggi dengan multi-angle.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
 
-    if (faces.length > 1) {
-      return {
-        'isValid': false,
-        'message': 'Beberapa wajah terdeteksi - hanya Anda',
-      };
-    }
-
-    final face = faces.first;
-
-    final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
-    final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
-    
-    
-    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4) {
-      // ✅ STRICT: Require both eyes to be at least 40% open for good quality
-      String eyeMessage = 'Buka mata Anda';
-      if (leftEyeOpen < 0.4 && rightEyeOpen >= 0.4) {
-        eyeMessage = 'Buka mata kiri Anda';
-      } else if (rightEyeOpen < 0.4 && leftEyeOpen >= 0.4) {
-        eyeMessage = 'Buka mata kanan Anda';
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (mounted) {
+        Navigator.of(context).pop();
+        Navigator.of(context).pop(true);
       }
-      return {
-        'isValid': false,
-        'message': eyeMessage,
-      };
-    }
-
-    // ✅ SIMPLIFIED: Only validate front pose (no side pose validation)
-    final headY = face.headEulerAngleY ?? 0.0;
-    if (headY.abs() > 20.0) {
-      return {
-        'isValid': false,
-        'message': 'Lihat Lurus ke Depan',
-      };
-    }
-    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
-    if (headZ > 35.0) {
-      return {
-        'isValid': false,
-        'message': 'Jangan miringkan kepala ke samping',
-      };
-    }
-
-    final imageFile = File(imagePath);
-    final imageBytes = await imageFile.readAsBytes();
-    final image = img.decodeImage(imageBytes);
-    
-    if (image != null) {
-      final imageArea = image.width * image.height;
-      final faceArea = face.boundingBox.width * face.boundingBox.height;
-      final faceRatio = faceArea / imageArea;
-      
-      if (faceRatio < 0.10) { // ✅ RELAXED: Lowered from 0.12
-        return {
-          'isValid': false,
-          'message': 'Mendekatlah ke kamera',
-        };
-      }
-
-      if (faceRatio > 0.85) {
-        return {
-          'isValid': false,
-          'message': 'Terlalu dekat - mundur sedikit',
-        };
-      }
-    }
-
-    return {
-      'isValid': true,
-      'message': 'Sempurna! Memproses...',
-    };
+    });
   }
-  
+
+  // Obsolete - kept for reference if needed during migration but removed from flow
   Future<void> _captureFrontPose(String imagePath) async {
     try {
       setState(() {
@@ -333,10 +460,62 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       
       debugPrint('✅ Captured front face with ${faceTemplate['landmarkCount']} landmarks');
       
-      // ✅ SIMPLIFIED: Register immediately (no multi-template)
-      _detectionTimer?.cancel();
+      // ✅ STRICT QUALITY CHECK (Added): Require 90% quality score
+      double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+      
+      // ✅ IMPROVED: Multi-tier quality check
+      String qualityLevel;
+      double minRequired;
+      
+      if (qualityScore >= 0.85) {
+        qualityLevel = 'Excellent';
+        minRequired = 0.85;
+      } else if (qualityScore >= 0.75) {
+        qualityLevel = 'Good';
+        minRequired = 0.75;
+      } else if (qualityScore >= 0.65) {
+        qualityLevel = 'Acceptable'; // Allow lower quality but might be strict during recog
+        minRequired = 0.65;
+      } else {
+        qualityLevel = 'Poor';
+        minRequired = 0.65;
+      }
+      
+      debugPrint('🔍 Face Quality: ${(qualityScore * 100).toStringAsFixed(1)}% ($qualityLevel)');
+      
+      if (qualityScore < minRequired) {
+        setState(() {
+          _guidanceMessage = 'Kualitas $qualityLevel (${(qualityScore * 100).toInt()}%). Butuh cahaya lebih terang!';
+          _overlayColor = Colors.orange;
+          _currentStep = 'Cahaya kurang - coba lagi';
+        });
+        await Future.delayed(const Duration(seconds: 2));
+        await File(imagePath).delete();
+        _isTakingPicture = false;
+        _startImageStream();
+        return;
+      }
+
+      // ✅ ENHANCED: Check liveness score if available
+      final livenessData = faceTemplate['livenessDetection'] as Map<String, dynamic>?;
+      if (livenessData != null) {
+        final livenessScore = (livenessData['livenessScore'] as num?)?.toDouble() ?? 0.0;
+        if (livenessScore < 0.5) {
+          debugPrint('⚠️ Low liveness score: ${livenessScore.toStringAsFixed(2)}');
+          setState(() {
+            _guidanceMessage = 'Foto tidak natural. Pastikan wajah asli!';
+            _overlayColor = Colors.red;
+          });
+          await Future.delayed(const Duration(seconds: 2));
+          await File(imagePath).delete();
+          _isTakingPicture = false;
+          _startImageStream();
+          return;
+        }
+      }
+
       setState(() {
-        _guidanceMessage = 'Selesai! Menyimpan...';
+        _guidanceMessage = '$qualityLevel Quality! (${(qualityScore * 100).toInt()}%)';
         _overlayColor = Colors.green;
         _isRegistrationComplete = true;
       });
@@ -344,15 +523,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       await _registerSingleTemplate(faceTemplate, imagePath);
       
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}';
-        _overlayColor = Colors.red;
-        _isRegistrationComplete = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}';
+          _overlayColor = Colors.red;
+          _isRegistrationComplete = false;
+        });
+      }
       
       // Retry
       await File(imagePath).delete();
-      _startFaceDetection();
+      _startImageStream();
     }
   }
 
@@ -478,7 +659,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _isRegistrationComplete = false;
       });
       
-      _startFaceDetection();
+      _startImageStream();
     }
   }
 
@@ -517,13 +698,89 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
   }
 
-  @override
-  void dispose() {
-    _detectionTimer?.cancel();
-    _cameraController?.dispose();
-    _faceService.dispose();
-    super.dispose();
+  
+  // Helper for CameraImage -> InputImage
+  Future<InputImage?> _inputImageFromCameraImage(CameraImage image) async {
+    if (_cameraController == null) return null;
+
+    final camera = _cameraController!.description;
+    final sensorOrientation = camera.sensorOrientation;
+    
+    // Determine rotation
+    InputImageRotation? rotation;
+    if (Platform.isIOS) {
+      rotation = InputImageRotation.rotation0deg;
+    } else if (Platform.isAndroid) {
+      var rotationCompensation = _orientations[_cameraController!.value.deviceOrientation];
+      if (rotationCompensation == null) return null;
+      if (camera.lensDirection == CameraLensDirection.front) {
+        // Front camera
+        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
+      } else {
+        // Back camera
+        rotationCompensation = (sensorOrientation - rotationCompensation + 360) % 360;
+      }
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
+    }
+    if (rotation == null) return null;
+
+    // Format
+    InputImageFormat? format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    // Bytes
+    final Uint8List bytes;
+    int bytesPerRow;
+
+    if (Platform.isAndroid && image.format.group == ImageFormatGroup.yuv420) {
+       // ✅ OPTIMIZATION: Run heavy conversion in background isolate
+       try {
+         final planesData = image.planes.map((p) => _PlaneData(
+           bytes: p.bytes,
+           bytesPerRow: p.bytesPerRow,
+           bytesPerPixel: p.bytesPerPixel,
+         )).toList();
+
+         bytes = await compute(_yuv420ToNv21Compute, _NV21ConvertParams(
+           width: image.width,
+           height: image.height,
+           planes: planesData,
+         ));
+         
+         format = InputImageFormat.nv21;
+         bytesPerRow = image.width;
+       } catch (e) {
+         debugPrint('Error in NV21 conversion: $e');
+         return null;
+       }
+    } else {
+       // Regular concatenation for other formats
+       final WriteBuffer allBytes = WriteBuffer();
+       for (final Plane plane in image.planes) {
+         allBytes.putUint8List(plane.bytes);
+       }
+       bytes = allBytes.done().buffer.asUint8List();
+       bytesPerRow = image.planes.first.bytesPerRow;
+    }
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: bytesPerRow,
+      ),
+    );
   }
+
+  static final Map<DeviceOrientation, int> _orientations = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
+
 
   @override
   Widget build(BuildContext context) {
@@ -750,4 +1007,65 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       ),
     );
   }
+}
+
+// ✅ ISOLATE WRAPPERS (Top-Level)
+class _PlaneData {
+  final Uint8List bytes;
+  final int bytesPerRow;
+  final int? bytesPerPixel;
+  _PlaneData({required this.bytes, required this.bytesPerRow, this.bytesPerPixel});
+}
+
+class _NV21ConvertParams {
+  final int width;
+  final int height;
+  final List<_PlaneData> planes;
+  _NV21ConvertParams({required this.width, required this.height, required this.planes});
+}
+
+Uint8List _yuv420ToNv21Compute(_NV21ConvertParams params) {
+  final int width = params.width;
+  final int height = params.height;
+  final List<_PlaneData> planes = params.planes;
+  
+  final int ySize = width * height;
+  final int uvSize = width * height ~/ 2;
+  final Uint8List nv21 = Uint8List(ySize + uvSize);
+
+  // Y Plane
+  final _PlaneData yData = planes[0];
+  final Uint8List yBytes = yData.bytes;
+  final int yStride = yData.bytesPerRow;
+
+  for (int y = 0; y < height; y++) {
+    final int srcPos = y * yStride;
+    final int dstPos = y * width;
+    for (int x = 0; x < width; x++) {
+       nv21[dstPos + x] = yBytes[srcPos + x];
+    }
+  }
+
+  // UV Planes
+  final _PlaneData uData = planes[1];
+  final _PlaneData vData = planes[2];
+  final Uint8List uBytes = uData.bytes;
+  final Uint8List vBytes = vData.bytes;
+  final int uStride = uData.bytesPerRow;
+  final int vStride = vData.bytesPerRow;
+  final int pixelStride = uData.bytesPerPixel ?? 1;
+
+  int uvIndex = ySize;
+  for (int y = 0; y < height ~/ 2; y++) {
+    for (int x = 0; x < width ~/ 2; x++) {
+      final int uIndex = y * uStride + x * pixelStride;
+      final int vIndex = y * vStride + x * pixelStride;
+      
+      if (vIndex < vBytes.length && uIndex < uBytes.length) {
+         nv21[uvIndex++] = vBytes[vIndex];
+         nv21[uvIndex++] = uBytes[uIndex];
+      }
+    }
+  }
+  return nv21;
 }

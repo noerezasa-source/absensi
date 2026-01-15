@@ -618,116 +618,90 @@ void _handleNavigation(int index) {
         return false;
       },
       child: Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
-      body: _isLoadingProfile
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              child: Column(
-                children: [
-                  // ---------- HEADER ----------
-                  Container(
-                    width: double.infinity,
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF6B46C1), Color(0xFF9333EA)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+        backgroundColor: const Color(0xFFF5F5F5),
+        body: _isLoadingProfile
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+                child: Column(
+                  children: [
+                    // ---------- HEADER ----------
+                    Container(
+                      width: double.infinity,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF6B46C1), Color(0xFF9333EA)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(30),
+                          bottomRight: Radius.circular(30),
+                        ),
                       ),
-                      borderRadius: BorderRadius.only(
-                        bottomLeft: Radius.circular(30),
-                        bottomRight: Radius.circular(30),
-                      ),
-                    ),
-                    padding: const EdgeInsets.fromLTRB(0, 60, 0, 30),
-                    child: Column(
-                      children: [
-                        // Profile Photo with Badge
-                        Stack(
-                          children: [
-                            Container(
-                              width: 120,
-                              height: 120,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 4,
-                                ),
-                                color: Colors.grey.shade100,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    blurRadius: 15,
-                                    offset: const Offset(0, 5),
-                                  ),
-                                ],
-                              ),
-                              child: ClipOval(
-                                child: _isUploadingPhoto
-                                    ? const Center(
-                                        child: CircularProgressIndicator(
-                                          color: Colors.white,
-                                          strokeWidth: 3,
-                                        ),
-                                      )
-                                    : _getProfilePhotoUrl() != null
-                                        ? Image.network(
-                                            _getProfilePhotoUrl()!,
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (context, error, stackTrace) {
-                                              return Icon(
-                                                Icons.person,
-                                                size: 60,
-                                                color: Colors.grey.shade400,
-                                              );
-                                            },
-                                          )
-                                        : Icon(
-                                            Icons.person,
-                                            size: 60,
-                                            color: Colors.grey.shade400,
-                                          ),
-                              ),
-                            ),
-                            // Petugas Badge
-                            Positioned(
-                              top: 0,
-                              right: 0,
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.fromLTRB(0, 50, 0, 20),
+                      child: Column(
+                        children: [
+                          // Profile Photo with Badge
+                          Stack(
+                            children: [
+                              Container(
+                                width: 100,
+                                height: 100,
                                 decoration: BoxDecoration(
-                                  color: primaryColor,
                                   shape: BoxShape.circle,
                                   border: Border.all(
                                     color: Colors.white,
-                                    width: 3,
+                                    width: 4,
                                   ),
+                                  color: Colors.grey.shade100,
                                   boxShadow: [
                                     BoxShadow(
                                       color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
+                                      blurRadius: 15,
+                                      offset: const Offset(0, 5),
                                     ),
                                   ],
                                 ),
-                                child: const Icon(
-                                  Icons.badge,
-                                  color: Colors.white,
-                                  size: 20,
+                                child: ClipOval(
+                                  child: _isUploadingPhoto
+                                      ? const Center(
+                                          child: CircularProgressIndicator(
+                                            color: Colors.white,
+                                            strokeWidth: 3,
+                                          ),
+                                        )
+                                      : _getProfilePhotoUrl() != null
+                                          ? Image.network(
+                                              _getProfilePhotoUrl()!,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (context, error, stackTrace) {
+                                                return Icon(
+                                                  Icons.person,
+                                                  size: 60,
+                                                  color: Colors.grey.shade400,
+                                                );
+                                              },
+                                            )
+                                          : Icon(
+                                              Icons.person,
+                                              size: 60,
+                                              color: Colors.grey.shade400,
+                                            ),
                                 ),
                               ),
-                            ),
-                            // Camera Button
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: GestureDetector(
-                                onTap: _isUploadingPhoto ? null : _pickAndUploadPhoto,
+                              // Petugas Badge
+                              Positioned(
+                                top: 0,
+                                right: 0,
                                 child: Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: Colors.white,
+                                    color: primaryColor,
                                     shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 3,
+                                    ),
                                     boxShadow: [
                                       BoxShadow(
                                         color: Colors.black.withOpacity(0.2),
@@ -737,116 +711,142 @@ void _handleNavigation(int index) {
                                     ],
                                   ),
                                   child: const Icon(
-                                    Icons.camera_alt,
-                                    color: primaryColor,
+                                    Icons.badge,
+                                    color: Colors.white,
                                     size: 20,
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _getFullName(),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        // Petugas Badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.25),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.4),
-                              width: 1.5,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.badge,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                _roleService.getRoleName(widget.memberData),
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
+                              // Camera Button
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: GestureDetector(
+                                  onTap: _isUploadingPhoto ? null : _pickAndUploadPhoto,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.2),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: const Icon(
+                                      Icons.camera_alt,
+                                      color: primaryColor,
+                                      size: 20,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _supabase.auth.currentUser?.email ?? 'No email',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                          ),
-                        ),
-                        if (_organization != null) ...[
                           const SizedBox(height: 12),
+                          Text(
+                            _getFullName(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          // Petugas Badge
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
-                              vertical: 8,
+                              vertical: 6,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.15),
+                              color: Colors.white.withOpacity(0.25),
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(
-                                color: Colors.white.withOpacity(0.3),
+                                color: Colors.white.withOpacity(0.4),
+                                width: 1.5,
                               ),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const Icon(
-                                  Icons.business,
+                                  Icons.badge,
                                   color: Colors.white,
                                   size: 16,
                                 ),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text(
-                                    _organization!['name'] ?? 'Unknown Organization',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                const SizedBox(width: 6),
+                                Text(
+                                  _roleService.getRoleName(widget.memberData),
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.5,
                                   ),
                                 ),
                               ],
                             ),
                           ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _supabase.auth.currentUser?.email ?? 'No email',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                            ),
+                          ),
+                          if (_organization != null) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.business,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      _organization!['name'] ?? 'Unknown Organization',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
 
-                  const SizedBox(height: 24),
+                    const SizedBox(height: 16),
 
-                  // ---------- CONTENT ----------
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    // ---------- CONTENT ----------
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Column(
                       children: [
                         _buildSectionCard(
@@ -953,14 +953,14 @@ void _handleNavigation(int index) {
                                   : 'Not set'),
                               _buildInfoRow('Date of Birth', _formatDate(_userProfile?['date_of_birth'])),
                             ],
-                            const Divider(height: 24),
+                            const Divider(height: 16),
                             _buildInfoRow('Employee Code', _userProfile?['employee_code'] ?? 'Not set'),
                             _buildInfoRow('Position', widget.memberData['position']?['title'] ?? 'Not specified'),
                             _buildInfoRow('Department', widget.memberData['department']?['name'] ?? 'Not specified'),
                           ],
                         ),
 
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
 
                         // Face Registration Card
                         _buildSectionCard(
@@ -1046,7 +1046,7 @@ void _handleNavigation(int index) {
                           ],
                         ),
 
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
 
                         // Attendance Mode Selection
                         _buildSectionCard(
@@ -1152,7 +1152,7 @@ void _handleNavigation(int index) {
                           ],
                         ),
 
-                        const SizedBox(height: 80),
+                        const SizedBox(height: 40),
                       ],
                     ),
                   ),
@@ -1192,13 +1192,13 @@ void _handleNavigation(int index) {
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         ...children,
       ],
     );
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
@@ -1223,7 +1223,7 @@ void _handleNavigation(int index) {
     String? Function(String?)? validator,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1259,7 +1259,7 @@ void _handleNavigation(int index) {
 
   Widget _buildGenderField() {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1307,7 +1307,7 @@ void _handleNavigation(int index) {
         : 'Select date';
     
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1357,7 +1357,7 @@ void _handleNavigation(int index) {
 
   Widget _buildInfoRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

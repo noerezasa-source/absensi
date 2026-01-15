@@ -1146,7 +1146,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         cardNumber: cardNumber,
         eventType: action,
         method: 'rfid_card_mobile',
-        timestamp: DateTime.now().toUtc().toIso8601String(),
+        timestamp: TimezoneHelper.formatUtcForSupabase(DateTime.now()),
         workTimeMode: workTimeMode,
         organizationMemberId: memberId,
         userName: userName,

@@ -1,4 +1,6 @@
 // lib/models/offline_attendance.dart
+import '../helpers/timezone_helper.dart';
+
 class OfflineAttendance {
   final int? id;
   final String cardNumber; // For RFID
@@ -36,7 +38,7 @@ class OfflineAttendance {
     this.isSynced = false,
     this.syncError,
     DateTime? createdAt,
-  }) : createdAt = createdAt ?? DateTime.now();
+  }) : createdAt = createdAt ?? DateTime.now().toUtc();
 
   Map<String, dynamic> toMap() {
     return {
@@ -56,7 +58,7 @@ class OfflineAttendance {
       'user_name': userName,
       'is_synced': isSynced ? 1 : 0,
       'sync_error': syncError,
-      'created_at': createdAt.toIso8601String(),
+      'created_at': TimezoneHelper.formatUtcForSupabase(createdAt),
     };
   }
 

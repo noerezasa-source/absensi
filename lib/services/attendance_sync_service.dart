@@ -354,7 +354,7 @@ class AttendanceSyncService {
       }
     } 
     // For Face Recognition: Use stored member ID (or derive from FACE_{id}) and update member data
-    else if (record.method == 'face_recognition_kiosk') {
+    else if (record.method == 'FACERECOGNITION' || record.method == 'face_recognition') {
       if (record.organizationMemberId != null) {
         memberId = record.organizationMemberId!;
       } else {
@@ -501,7 +501,7 @@ class AttendanceSyncService {
     if (record.method == 'rfid_card_mobile') {
       rawData['card_number'] = record.cardNumber;
     }
-    if (record.method == 'face_recognition_kiosk') {
+    if (record.method == 'FACERECOGNITION' || record.method == 'face_recognition') {
       rawData['face_recognition'] = true;
     }
 

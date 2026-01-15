@@ -1,4 +1,6 @@
 // lib/models/attendance_record.dart
+import '../helpers/timezone_helper.dart';
+
 class AttendanceRecord {
   final int id;
   final int organizationMemberId;
@@ -113,8 +115,8 @@ class AttendanceRecord {
       'scheduled_shift_id': scheduledShiftId,
       'scheduled_start': scheduledStart,
       'scheduled_end': scheduledEnd,
-      'actual_check_in': actualCheckIn?.toIso8601String(),
-      'actual_check_out': actualCheckOut?.toIso8601String(),
+      'actual_check_in': actualCheckIn != null ? TimezoneHelper.formatUtcForSupabase(actualCheckIn!) : null,
+      'actual_check_out': actualCheckOut != null ? TimezoneHelper.formatUtcForSupabase(actualCheckOut!) : null,
       'check_in_device_id': checkInDeviceId,
       'check_out_device_id': checkOutDeviceId,
       'check_in_method': checkInMethod,
@@ -131,12 +133,12 @@ class AttendanceRecord {
       'status': status,
       'validation_status': validationStatus,
       'validated_by': validatedBy,
-      'validated_at': validatedAt?.toIso8601String(),
+      'validated_at': validatedAt != null ? TimezoneHelper.formatUtcForSupabase(validatedAt!) : null,
       'validation_note': validationNote,
       'application_id': applicationId,
       'raw_data': rawData,
-      'created_at': createdAt.toIso8601String(),
-      'updated_at': updatedAt.toIso8601String(),
+      'created_at': TimezoneHelper.formatUtcForSupabase(createdAt),
+      'updated_at': TimezoneHelper.formatUtcForSupabase(updatedAt),
     };
   }
 

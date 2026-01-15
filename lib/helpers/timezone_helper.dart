@@ -79,6 +79,13 @@ class TimezoneHelper {
     return DateTime.now().toUtc();
   }
 
+  /// Format DateTime as UTC string without milliseconds/microseconds for Supabase
+  /// Example: 2026-01-13 05:58:26+00
+  static String formatUtcForSupabase(DateTime dateTime) {
+    final utc = dateTime.toUtc();
+    return DateFormat('yyyy-MM-dd HH:mm:ss').format(utc) + '+00';
+  }
+
   /// Get current date in organization timezone (YYYY-MM-DD)
   /// This determines what "today" means for the organization
   static String getCurrentDateInOrgTimezone(String organizationTimezone) {
