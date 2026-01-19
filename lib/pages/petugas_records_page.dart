@@ -1100,7 +1100,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), // Reduced padding
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), // Reduced vertical padding (12->8)
             decoration: BoxDecoration(
               color: primaryColor.withOpacity(0.05),
               borderRadius: const BorderRadius.only(
@@ -1111,7 +1111,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(6), // Reduced padding (8->6)
                   decoration: BoxDecoration(
                     color: primaryColor,
                     borderRadius: BorderRadius.circular(8),
@@ -1119,10 +1119,10 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
                   child: const Icon(
                     Icons.event_note,
                     color: Colors.white,
-                    size: 18,
+                    size: 16, // Reduced size (18->16)
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1130,7 +1130,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
                       const Text(
                         'Daily Events',
                         style: TextStyle(
-                          fontSize: 15,
+                          fontSize: 14, // Reduced size (15->14)
                           fontWeight: FontWeight.bold,
                           color: Colors.black87,
                         ),
@@ -1138,7 +1138,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
                       Text(
                         DateFormat('EEE, dd MMM yyyy').format(_selectedDay),
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11, // Reduced size (12->11)
                           color: Colors.grey.shade600,
                         ),
                       ),
@@ -1147,9 +1147,9 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
+                    horizontal: 8,
+                    vertical: 4,
+                  ), // Reduced padding
                   decoration: BoxDecoration(
                     color: primaryColor,
                     borderRadius: BorderRadius.circular(12),
@@ -1159,7 +1159,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: 12, // Reduced size (13->12)
                     ),
                   ),
                 ),
@@ -1167,14 +1167,14 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), // Removed top padding (2->0)
             child: ListView.separated(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: events.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
+              separatorBuilder: (context, index) => const SizedBox(height: 0), // Removed gap (8->0) - relying on item margin
               itemBuilder: (context, index) {
-                return _buildRecordListItem(events[index]);
+                return _buildRecordListItem(events[index], isCompact: true);
               },
             ),
           ),
@@ -1311,7 +1311,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
 
 
 
-  Widget _buildRecordListItem(Map<String, dynamic> record) {
+  Widget _buildRecordListItem(Map<String, dynamic> record, {bool isCompact = false}) {
     final memberName = _getMemberName(record);
     final employeeId = _getEmployeeId(record);
     final memberPhoto = _getMemberPhotoUrl(record);
@@ -1320,7 +1320,6 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
     final checkOutTime = record['actual_check_out'] as String?;
     final status = record['status'] as String? ?? 'unknown';
     final lateMinutes = record['late_minutes'] as int?;
-    final workDurationMinutes = record['work_duration_minutes'] as int?;
 
     final isPresent = status.toLowerCase() == 'present';
     final isLate = lateMinutes != null && lateMinutes > 0;
@@ -1328,15 +1327,37 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
     DateTime? parsedDate;
     try {
       parsedDate = DateTime.parse(attendanceDate);
-    } catch (e) {
-      parsedDate = null;
+    } catch (_) {}
+
+    if (isCompact) {
+      return InkWell(
+        onTap: () => _showRecordDetails(record),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade100, width: 1),
+            ),
+          ),
+          child: Row(
+            children: [
+              _buildPhotoCircle(memberPhoto, isPresent, size: 40),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildRecordInfo(memberName, employeeId, parsedDate, attendanceDate, checkInTime, checkOutTime, isCompact: true),
+              ),
+              _buildStatusPill(status, isLate, lateMinutes),
+            ],
+          ),
+        ),
+      );
     }
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8), // Reduced to match members page
+      margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(10), // Matched radius
+        borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.02),
@@ -1354,165 +1375,10 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                // Member Photo
-                Container(
-                  width: 44, // Matched size
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.grey.shade100,
-                    border: Border.all(
-                      color: isPresent
-                          ? successColor.withOpacity(0.3)
-                          : errorColor.withOpacity(0.3),
-                      width: 2,
-                    ),
-                  ),
-                  child: ClipOval(
-                    child: memberPhoto != null
-                        ? CachedNetworkImage(
-                            imageUrl: memberPhoto,
-                            width: 44,
-                            height: 44,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) => Container(color: Colors.grey.shade50),
-                            errorWidget: (context, url, error) => Icon(
-                              Icons.person,
-                              color: Colors.grey.shade400,
-                              size: 24,
-                            ),
-                          )
-                        : Icon(
-                            Icons.person,
-                            color: Colors.grey.shade400,
-                            size: 24,
-                          ),
-                  ),
-                ),
+                _buildPhotoCircle(memberPhoto, isPresent),
                 const SizedBox(width: 12),
-                // Member Info
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        memberName,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                          letterSpacing: -0.2,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.calendar_today,
-                            size: 11,
-                            color: Colors.grey.shade500,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            parsedDate != null
-                                ? DateFormat('dd MMM').format(parsedDate)
-                                : attendanceDate,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey.shade500,
-                              fontWeight: FontWeight.w400,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            Icons.access_time,
-                            size: 11,
-                            color: Colors.grey.shade500,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _formatTime(checkInTime),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey.shade500, // Matched color
-                            ),
-                          ),
-                          if (checkOutTime != null) ...[
-                            const SizedBox(width: 4),
-                            const Text(
-                              '-',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _formatTime(checkOutTime),
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          _buildStatusChip(status),
-                          if (isLate) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: warningColor.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                '+${lateMinutes}m',
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  color: warningColor,
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (workDurationMinutes != null) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                '${(workDurationMinutes / 60).toStringAsFixed(1)}h',
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.blue,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right,
-                  color: Colors.grey.shade400,
-                  size: 20,
+                  child: _buildRecordInfo(memberName, employeeId, parsedDate, attendanceDate, checkInTime, checkOutTime),
                 ),
               ],
             ),
@@ -1520,6 +1386,111 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage>
         ),
       ),
     );
+  }
+
+  Widget _buildPhotoCircle(String? photoUrl, bool isPresent, {double size = 44}) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.grey.shade100,
+          border: Border.all(
+            color: isPresent
+                ? successColor.withOpacity(0.3)
+                : errorColor.withOpacity(0.3),
+            width: 2,
+          ),
+        ),
+        child: ClipOval(
+          child: photoUrl != null
+              ? CachedNetworkImage(
+                  imageUrl: photoUrl,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(color: Colors.grey.shade50),
+                  errorWidget: (context, url, error) => Icon(
+                    Icons.person,
+                    color: Colors.grey.shade400,
+                    size: size * 0.6,
+                  ),
+                )
+              : Icon(
+                  Icons.person,
+                  color: Colors.grey.shade400,
+                  size: size * 0.6,
+                ),
+        ),
+      );
+  }
+
+  Widget _buildRecordInfo(String name, String id, DateTime? date, String dateStr, String? inTime, String? outTime, {bool isCompact = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          name,
+          style: TextStyle(
+            fontSize: isCompact ? 13 : 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.black87,
+            letterSpacing: -0.2,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 2),
+        Row(
+          children: [
+            if (!isCompact) ...[
+              Icon(Icons.calendar_today, size: 11, color: Colors.grey.shade500),
+              const SizedBox(width: 4),
+              Text(
+                date != null ? DateFormat('dd MMM').format(date) : dateStr,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Icon(Icons.access_time, size: 11, color: Colors.grey.shade500),
+            const SizedBox(width: 4),
+            Text(
+              _formatTime(inTime),
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+            ),
+            if (outTime != null) ...[
+              const SizedBox(width: 4),
+              const Text('-', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const SizedBox(width: 4),
+              Text(
+                _formatTime(outTime),
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatusPill(String status, bool isLate, int? lateMinutes) {
+     return Row(
+       children: [
+         if (isLate) 
+           Container(
+             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+             margin: const EdgeInsets.only(right: 4),
+             decoration: BoxDecoration(
+               color: warningColor.withOpacity(0.1),
+               borderRadius: BorderRadius.circular(4),
+             ),
+             child: Text(
+               '+${lateMinutes}m',
+               style: const TextStyle(fontSize: 10, color: warningColor, fontWeight: FontWeight.bold),
+             ),
+           ),
+          _buildStatusChip(status),
+       ],
+     );
   }
 
   Widget _buildStatusChip(String status) {

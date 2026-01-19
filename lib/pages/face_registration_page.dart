@@ -23,7 +23,7 @@ class FaceRegistrationPage extends StatefulWidget {
   State<FaceRegistrationPage> createState() => _FaceRegistrationPageState();
 }
 
-enum CaptureAngle { front, left, right, complete }
+enum CaptureAngle { front, left, right, up, down, complete }
 
 class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
@@ -116,7 +116,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
-          _currentStep = 'Posisikan Wajah';
+          _currentStep = 'Tahap 1: Wajah Depan';
           _guidanceMessage = 'Lihat Lurus ke Kamera';
         });
         // Start silent stream instead of polling timer
@@ -227,19 +227,28 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4) return {'isValid': false, 'message': 'Buka mata Anda'};
 
     final double headY = face.headEulerAngleY ?? 0.0;
+    final double headX = face.headEulerAngleX ?? 0.0;
     final double headZ = (face.headEulerAngleZ ?? 0.0).abs();
+    
     if (headZ > 35.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'};
 
     // Angle specific validation
     switch (_currentAngle) {
       case CaptureAngle.front:
         if (headY.abs() > 10.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'};
+        if (headX.abs() > 10.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
         break;
       case CaptureAngle.left:
-        if (headY < 20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri'};
+        if (headY < 20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri >>'};
         break;
       case CaptureAngle.right:
-        if (headY > -20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kanan'};
+        if (headY > -20.0) return {'isValid': false, 'message': '<< Miringkan Wajah ke Kanan'};
+        break;
+      case CaptureAngle.up:
+        if (headX < 10.0) return {'isValid': false, 'message': 'Dongakkan Kepala ke Atas'};
+        break;
+      case CaptureAngle.down:
+        if (headX > -10.0) return {'isValid': false, 'message': 'Tundukkan Kepala ke Bawah'};
         break;
       default:
         break;
@@ -285,27 +294,19 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         await File(imagePath).delete(); // Delete others
       }
 
-      // Progress to next angle
+      // Progress to next angle (5 Steps)
       if (_currentAngle == CaptureAngle.front) {
         _currentAngle = CaptureAngle.left;
-        _consecutiveValidFrames = 0;
-        _isTakingPicture = false;
-        _startImageStream();
-        setState(() {
-          _guidanceMessage = 'Miringkan Wajah ke KIRI';
-          _currentStep = 'Tahap 2: Samping Kiri';
-          _overlayColor = Colors.blue;
-        });
+        _resetStreamForAngle('Tahap 2: Samping Kiri', 'Miringkan Wajah ke Kiri >>');
       } else if (_currentAngle == CaptureAngle.left) {
         _currentAngle = CaptureAngle.right;
-        _consecutiveValidFrames = 0;
-        _isTakingPicture = false;
-        _startImageStream();
-        setState(() {
-          _guidanceMessage = 'Miringkan Wajah ke KANAN';
-          _currentStep = 'Tahap 3: Samping Kanan';
-          _overlayColor = Colors.blue;
-        });
+        _resetStreamForAngle('Tahap 3: Samping Kanan', '<< Miringkan Wajah ke Kanan');
+      } else if (_currentAngle == CaptureAngle.right) {
+        _currentAngle = CaptureAngle.up;
+        _resetStreamForAngle('Tahap 4: Agak Mendongak', 'Dongakkan kepala ke ATAS');
+      } else if (_currentAngle == CaptureAngle.up) {
+        _currentAngle = CaptureAngle.down;
+        _resetStreamForAngle('Tahap 5: Agak Menunduk', 'Tundukkan kepala ke BAWAH');
       } else {
         _currentAngle = CaptureAngle.complete;
         setState(() {
@@ -325,6 +326,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       });
     }
   }
+  
+  void _resetStreamForAngle(String stepName, String msg) {
+    _consecutiveValidFrames = 0;
+    _isTakingPicture = false;
+    _startImageStream();
+    setState(() {
+      _currentStep = stepName;
+      _guidanceMessage = msg;
+      _overlayColor = Colors.blue;
+    });
+  }
 
   Future<void> _finalizeMultiAngleRegistration() async {
     setState(() {
@@ -334,16 +346,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
     try {
       // 1. Combine templates into version 4 (Multi-Template)
-      final List<Map<String, dynamic>> combinedList = [
-        _capturedTemplates[CaptureAngle.front]!,
-        _capturedTemplates[CaptureAngle.left]!,
-        _capturedTemplates[CaptureAngle.right]!,
-      ];
-
+      final List<Map<String, dynamic>> combinedList = [];
+      if (_capturedTemplates.containsKey(CaptureAngle.front)) combinedList.add(_capturedTemplates[CaptureAngle.front]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.left)) combinedList.add(_capturedTemplates[CaptureAngle.left]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.right)) combinedList.add(_capturedTemplates[CaptureAngle.right]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.up)) combinedList.add(_capturedTemplates[CaptureAngle.up]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.down)) combinedList.add(_capturedTemplates[CaptureAngle.down]!);
+      
       final multiTemplate = {
         'version': 4,
         'templates': combinedList,
-        'totalAngles': 3,
+        'totalAngles': combinedList.length,
         'enrollmentDate': DateTime.now().toIso8601String(),
       };
 

@@ -88,13 +88,9 @@ class _FaceAttendanceMultiUserPageState
   List<Map<String, dynamic>> _detectedFaces = [];
   bool _hasFacesInView = false;
   
-  // ✅ NEW: Store face data with user info for better UI
+  // ✅ Store face data with user info for better UI
   final Map<int, Map<String, dynamic>> _faceDataMap = {};
   int _faceIdCounter = 0;
-  
-  // ✅ NEW: Processing queue to prevent lag
-  final List<Future<void>> _processingQueue = [];
-  bool _isQueueProcessing = false;
 
   // ✅ NEW: Persistent Face Tracking
   // Map<trackingId, {name, similarity, memberId, timestamp}>
@@ -110,11 +106,11 @@ class _FaceAttendanceMultiUserPageState
   // Configuration
   static const int _requiredStableFrames = 0; // Optimized for Instant Recognition
   static const double _stabilityThreshold = 120.0; // High tolerance for movement
-  static const Duration _recognitionCooldown = Duration(seconds: 3);
+  static const Duration _recognitionCooldown = Duration(seconds: 2); // ✅ FASTER: 2s cooldown for quicker re-recognition
   
-  // ✅ Multi-Frame Averaging Configuration (Optimized)
-  static const int _multiFrameCount = 2; // Reduced from 3 to 2 for speed
-  static const Duration _multiFrameInterval = Duration(milliseconds: 100); // Reduced from 150ms
+  // ✅ Adaptive Multi-Frame Configuration (Speed + Accuracy Balance)
+  static const int _multiFrameCount = 2; // ✅ 2 frames for accuracy, but adaptive
+  static const Duration _multiFrameInterval = Duration(milliseconds: 50); // ✅ FASTER: 50ms interval
   static const double _maxMovementThreshold = 50.0; // Max pixel movement between frames
   
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
@@ -144,8 +140,6 @@ class _FaceAttendanceMultiUserPageState
     _messageTimer?.cancel();
     _scheduleCheckTimer?.cancel();
     _isProcessing = false;
-    _isQueueProcessing = false;
-    _processingQueue.clear();
     _faceDataMap.clear();
     _detectedFaces.clear();
     _cameraController?.dispose();
@@ -601,18 +595,18 @@ class _FaceAttendanceMultiUserPageState
   int _consecutiveNoFaceFrames = 0;
 
   Future<void> _processCameraImage(CameraImage image) async {
-    if (_isProcessing || _isTakingPicture || _isQueueProcessing) return;
+    if (_isProcessing || _isTakingPicture) return;
 
     final currentTime = DateTime.now().millisecondsSinceEpoch;
     
-    // ✅ DYNAMIC THROTTLING
+    // ✅ OPTIMIZED THROTTLING for ~2 second recognition
     int throttleDuration;
     if (_cooldowns.isNotEmpty) {
-      throttleDuration = 200; // Slower cooldown check
+      throttleDuration = 150; // Faster cooldown check
     } else if (_isIdleMode) {
-      throttleDuration = 500; // Idle check
+      throttleDuration = 400; // Faster idle check
     } else {
-      throttleDuration = 80; // ✅ FAST POLLING: 80ms for instant feel
+      throttleDuration = 60; // ✅ ULTRA FAST: 60ms (~16fps) for instant recognition
     }
     
     if (currentTime - _lastProcessingTime < throttleDuration) return;
@@ -977,6 +971,15 @@ class _FaceAttendanceMultiUserPageState
             embeddings.add(embedding.map((e) => (e as num).toDouble()).toList());
             lastTemplate = template; // Keep last template for metadata
             debugPrint('✅ Frame ${i + 1}/${_multiFrameCount} captured');
+            
+            // ✅ ADAPTIVE: If first frame has excellent quality, skip second frame for speed
+            if (i == 0 && _multiFrameCount > 1) {
+              final qualityScore = (template['qualityScore'] as num?)?.toDouble() ?? 0.0;
+              if (qualityScore >= 0.85) {
+                debugPrint('🚀 Excellent quality (${(qualityScore*100).toInt()}%), skipping frame 2 for speed');
+                break; // Use single high-quality frame
+              }
+            }
           }
         } catch (e) {
           debugPrint('⚠️ Failed to extract embedding from frame $i: $e');
@@ -1092,15 +1095,15 @@ class _FaceAttendanceMultiUserPageState
              'timestamp': DateTime.now(),
            };
            
-           // Process Attendance Logic (Throttle/Queue)
-           // ✅ FIXED: Pass context data to handler
-           _handleAttendance(result, bytes, template);
-           
-           if (mounted) {
-              SoundHelper.playSuccessSound(); 
-           }
-           // ✅ SUCCESS: Long Cooldown to prevent spam
-           _cooldowns[id] = DateTime.now().add(_recognitionCooldown);
+            // Process Attendance Logic - Direct async (no queue)
+            // ✅ OPTIMIZED: Process immediately without queue delays
+            _handleAttendance(result, bytes, template); // Fire and forget
+            
+            if (mounted) {
+               SoundHelper.playSuccessSound(); 
+            }
+            // ✅ SUCCESS: Cooldown to prevent spam
+            _cooldowns[id] = DateTime.now().add(_recognitionCooldown);
 
         } else {
            _persistentFaceTracker[id] = {
@@ -1135,168 +1138,147 @@ class _FaceAttendanceMultiUserPageState
   // Reuse logic but modify to update persistent tracker
 
   
-  // ✅ NEW: Processing queue to prevent lag
-  void _addToProcessingQueue(Future<void> Function() task) {
-    _processingQueue.add(task());
-    _processQueue();
-  }
-  
-  Future<void> _processQueue() async {
-    if (_isQueueProcessing || _processingQueue.isEmpty) return;
-    
-    _isQueueProcessing = true;
-    try {
-      while (_processingQueue.isNotEmpty) {
-        final task = _processingQueue.removeAt(0);
-        await task.timeout(const Duration(seconds: 10), onTimeout: () {
-          debugPrint('⚠️ Queue task timeout');
-        });
-        // Minimal delay between tasks for better performance
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
-    } finally {
-      _isQueueProcessing = false;
-    }
-  }
+  // ✅ REMOVED: Processing queue eliminated to prevent delays
+  // Attendance is now processed directly without queue overhead
 
-  // ✅ NEW: Centralized Attendance Handling with State Machine Validation
+  // ✅ OPTIMIZED: Direct Attendance Handling (No Queue)
   Future<void> _handleAttendance(
     Map<String, dynamic> result,
     Uint8List imageBytes,
     Map<String, dynamic> template,
   ) async {
-    _addToProcessingQueue(() async {
-        try {
-            final user = result; // result IS the user map from biometric service
-            final memberId = user['organization_member_id'] as int;
-            final userName = user['user_name'] ?? 'Unknown';
-            final biometricId = user['biometric_id'] as int;
-            final profilePhotoUrl = user['profile_photo_url'] as String?;
-             
-            final isCheckIn = _attendanceMode == 'check_in';
-            final attendanceType = isCheckIn ? 'check_in' : 'check_out'; // Fixed logic
-            
-            // Check duplicates (offline DB)
-            final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
-            
-            final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
-                organizationMemberId: memberId,
-                eventType: attendanceType,
-                attendanceDate: todayStr,
-            );
-            
-            if (alreadyRecorded) {
-                debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping');
-                return;
-            }
-            
-            // ✅ Check Same-Mode Cooldown (5 minutes)
-            final cooldownKey = '${memberId}_$attendanceType';
-            final lastTime = _lastAttendanceTime[cooldownKey];
-            
-            if (lastTime != null) {
-                final timeSinceLastAttendance = DateTime.now().difference(lastTime);
-                final remainingCooldown = _sameModeCooldown - timeSinceLastAttendance;
-                
-                if (remainingCooldown.isNegative == false) {
-                    // Still in cooldown
-                    final remainingMinutes = remainingCooldown.inMinutes;
-                    final remainingSeconds = remainingCooldown.inSeconds % 60;
-                    
-                    debugPrint('⏳ USER $userName: Same-mode cooldown active. Wait ${remainingMinutes}m ${remainingSeconds}s');
-                    
-                    if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                                content: Text(
-                                    '$userName sudah ${attendanceType == 'check_in' ? 'Check-In' : 'Check-Out'}. '
-                                    'Ganti mode atau tunggu ${remainingMinutes}m ${remainingSeconds}s',
-                                ),
-                                backgroundColor: Colors.orange,
-                                duration: const Duration(seconds: 3),
-                            ),
-                        );
-                    }
-                    return;
-                }
-            }
-            
-            // Get Profile Photo Base64
-            final profilePhotoBase64 = await _getProfilePhotoBase64(
-                memberId,
-                profilePhotoUrl,
-            ).timeout(const Duration(milliseconds: 300), onTimeout: () => null);
+    // Process directly without queue - run async in background
+    try {
+      final user = result; // result IS the user map from biometric service
+      final memberId = user['organization_member_id'] as int;
+      final userName = user['user_name'] ?? 'Unknown';
+      final biometricId = user['biometric_id'] as int;
+      final profilePhotoUrl = user['profile_photo_url'] as String?;
+       
+      final isCheckIn = _attendanceMode == 'check_in';
+      final attendanceType = isCheckIn ? 'check_in' : 'check_out'; // Fixed logic
+      
+      // Check duplicates (offline DB)
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+      
+      final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
+          organizationMemberId: memberId,
+          eventType: attendanceType,
+          attendanceDate: todayStr,
+      );
+      
+      if (alreadyRecorded) {
+          debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping');
+          return;
+      }
+      
+      // ✅ Check Same-Mode Cooldown (5 minutes)
+      final cooldownKey = '${memberId}_$attendanceType';
+      final lastTime = _lastAttendanceTime[cooldownKey];
+      
+      if (lastTime != null) {
+          final timeSinceLastAttendance = DateTime.now().difference(lastTime);
+          final remainingCooldown = _sameModeCooldown - timeSinceLastAttendance;
+          
+          if (remainingCooldown.isNegative == false) {
+              // Still in cooldown
+              final remainingMinutes = remainingCooldown.inMinutes;
+              final remainingSeconds = remainingCooldown.inSeconds % 60;
+              
+              debugPrint('⏳ USER $userName: Same-mode cooldown active. Wait ${remainingMinutes}m ${remainingSeconds}s');
+              
+              if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text(
+                              '$userName sudah ${attendanceType == 'check_in' ? 'Check-In' : 'Check-Out'}. '
+                              'Ganti mode atau tunggu ${remainingMinutes}m ${remainingSeconds}s',
+                          ),
+                          backgroundColor: Colors.orange,
+                          duration: const Duration(seconds: 3),
+                      ),
+                  );
+              }
+              return;
+          }
+      }
+      
+      // Get Profile Photo Base64 - Skip for speed (optional)
+      // ✅ OPTIMIZED: Reduced timeout to 100ms to prevent delays
+      final profilePhotoBase64 = await _getProfilePhotoBase64(
+          memberId,
+          profilePhotoUrl,
+      ).timeout(const Duration(milliseconds: 100), onTimeout: () => null);
 
-            // Save Offline (Save bytes to file for proof?)
-            // For Kiosk mode, maybe we don't save every file to disk to save space?
-            // Or only on success. 
-            // We use imageBytes directly to encode for DB if needed, but offline DB expects file path.
-            // Let's Skip file saving for speed unless required. 
-            // Saving Base64 directly to DB is supported by _saveOfflineAttendance logic if we modify it, 
-            // but currently it takes localPhotoPath.
+      // Save Offline (Save bytes to file for proof?)
+      // For Kiosk mode, maybe we don't save every file to disk to save space?
+      // Or only on success. 
+      // We use imageBytes directly to encode for DB if needed, but offline DB expects file path.
+      // Let's Skip file saving for speed unless required. 
+      // Saving Base64 directly to DB is supported by _saveOfflineAttendance logic if we modify it, 
+      // but currently it takes localPhotoPath.
+      
+      // Workaround: Use bytes to creating a temp file is expensive.
+      // Just pass null for localPhotoPath and rely on template embedding?
+      // Or base64 encode bytes.
+      
+      String? capturedBase64;
+      // capturedBase64 = base64Encode(imageBytes); // Can be large
+      
+      final offlineId = await _saveOfflineAttendance(
+          memberId: memberId,
+          userName: userName,
+          attendanceType: attendanceType,
+          template: template,
+          localPhotoPath: null, // Skipping file save for speed
+          profilePhotoBase64: profilePhotoBase64,
+      );
+      
+      // ✅ Update Last Attendance Time for Cooldown Tracking
+      if (offlineId != null && offlineId != -1) {
+          _lastAttendanceTime[cooldownKey] = DateTime.now();
+          debugPrint('✅ Updated cooldown tracker for $userName ($attendanceType)');
+      }
+      
+      // Trigger Sync
+       if (_isOnline && offlineId != null && offlineId != -1) {
+          // Delayed sync
+          Timer(const Duration(seconds: 5), () {
+               AttendanceSyncService().syncPendingAttendances();
+          });
+      }
+      
+      // Update Biometric Usage
+      await _biometricService.updateLastUsed(biometricId);
+      
+      // Update UI list
+      if (mounted) {
+          setState(() {
+            _totalProcessedToday++;
+            final now = DateTime.now();
+            final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
             
-            // Workaround: Use bytes to creating a temp file is expensive.
-            // Just pass null for localPhotoPath and rely on template embedding?
-            // Or base64 encode bytes.
-            
-            String? capturedBase64;
-            // capturedBase64 = base64Encode(imageBytes); // Can be large
-            
-            final offlineId = await _saveOfflineAttendance(
-                memberId: memberId,
-                userName: userName,
-                attendanceType: attendanceType,
-                template: template,
-                localPhotoPath: null, // Skipping file save for speed
-                profilePhotoBase64: profilePhotoBase64,
-            );
-            
-            // ✅ Update Last Attendance Time for Cooldown Tracking
-            if (offlineId != null && offlineId != -1) {
-                _lastAttendanceTime[cooldownKey] = DateTime.now();
-                debugPrint('✅ Updated cooldown tracker for $userName ($attendanceType)');
-            }
-            
-            // Trigger Sync
-             if (_isOnline && offlineId != null && offlineId != -1) {
-                // Delayed sync
-                Timer(const Duration(seconds: 5), () {
-                     AttendanceSyncService().syncPendingAttendances();
-                });
-            }
-            
-            // Update Biometric Usage
-            await _biometricService.updateLastUsed(biometricId);
-            
-            // Update UI list
-            if (mounted) {
-                setState(() {
-                  _totalProcessedToday++;
-                  final now = DateTime.now();
-                  final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-                  
-                  _recentAttendanceList.insert(0, {
-                    'name': userName,
-                    'department': user['department_name'] ?? '-',
-                    'photo_base64': profilePhotoBase64,
-                    'time': timeStr,
-                    'type': attendanceType,
-                    'timestamp': now,
-                  });
-                   if (_recentAttendanceList.length > 10) _recentAttendanceList.removeLast();
-                });
-            }
-            
-            _showMessage(
-                'Sukses: $userName (${isCheckIn ? "MASUK" : "KELUAR"})',
-                MessageType.success,
-                seconds: 2,
-            );
+            _recentAttendanceList.insert(0, {
+              'name': userName,
+              'department': user['department_name'] ?? '-',
+              'photo_base64': profilePhotoBase64,
+              'time': timeStr,
+              'type': attendanceType,
+              'timestamp': now,
+            });
+             if (_recentAttendanceList.length > 10) _recentAttendanceList.removeLast();
+          });
+      }
+      
+      _showMessage(
+          'Sukses: $userName (${isCheckIn ? "MASUK" : "KELUAR"})',
+          MessageType.success,
+          seconds: 2,
+      );
 
-        } catch(e) {
-           debugPrint('Error in handleAttendance: $e');
-        }
-    });
+    } catch(e) {
+       debugPrint('Error in handleAttendance: $e');
+    }
   }
 
   void _cleanupOldTimestamps() {

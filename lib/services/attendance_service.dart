@@ -220,7 +220,10 @@ class AttendanceService {
              final startMinute = int.parse(parts[1]);
              
              // 3. Construct Schedule DateTime for "Today"
-             final scheduleTime = DateTime(
+             // IMPORTANT: nowInOrg is a UTC-based DateTime shifted by the timezone offset.
+             // We MUST use DateTime.utc to create scheduleTime to prevent Flutter from 
+             // adding/subtracting the device's local timezone offset during comparison.
+             final scheduleTime = DateTime.utc(
                 nowInOrg.year, 
                 nowInOrg.month, 
                 nowInOrg.day, 
@@ -443,8 +446,8 @@ class AttendanceService {
              final endMinute = int.parse(parts[1]);
              
              // 3. Construct Schedule End DateTime for "Today"
-             // Careful: If schedule is overnight, logic might need adjustment (assuming same day for now)
-             final scheduleEndTime = DateTime(
+             // Use .utc to match nowInOrg's representation (shifted UTC)
+             final scheduleEndTime = DateTime.utc(
                 nowInOrg.year, 
                 nowInOrg.month, 
                 nowInOrg.day, 

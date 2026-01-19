@@ -116,6 +116,11 @@ class MemberPerformanceService {
             positions(
               id,
               title
+            ),
+            biometric_data(
+              id,
+              is_active,
+              biometric_type
             )
           ''')
           .eq('organization_id', organizationId);
@@ -827,13 +832,23 @@ class MemberPerformanceService {
   /// Get performance trend data for charts (weekly or monthly)
   Future<List<Map<String, dynamic>>> getPerformanceTrend(
     int organizationId, {
-    required String period, // 'weekly' or 'monthly'
+    required String period, // 'daily', 'weekly', or 'monthly'
     DateTime? startDate,
     DateTime? endDate,
   }) async {
     try {
       final now = DateTime.now().toUtc();
-      final start = startDate ?? DateTime(now.year, now.month - 2, 1); // Last 3 months default
+      
+      // Default ranges based on period
+      DateTime start;
+      if (period == 'daily') {
+        start = startDate ?? now.subtract(const Duration(days: 7)); // Last 7 days
+      } else if (period == 'weekly') {
+        start = startDate ?? DateTime(now.year, now.month - 2, 1); // Last 3 months
+      } else {
+        start = startDate ?? DateTime(now.year - 1, now.month, 1); // Last year
+      }
+      
       final end = endDate ?? now;
       
       final startDateStr = start.toIso8601String().split('T')[0];
@@ -848,7 +863,7 @@ class MemberPerformanceService {
       // Get attendance records for the period
       final records = await _supabase
           .from('attendance_records')
-          .select('organization_member_id, attendance_date, status, actual_check_in, actual_check_out')
+          .select('organization_member_id, attendance_date, status, actual_check_in, actual_check_out, work_duration_minutes')
           .filter('organization_member_id', 'in', memberIds)
           .gte('attendance_date', startDateStr)
           .lte('attendance_date', endDateStr)
@@ -864,8 +879,10 @@ class MemberPerformanceService {
         final date = DateTime.parse(dateStr);
         
         String periodKey;
-        if (period == 'weekly') {
-          // Get week number
+        if (period == 'daily') {
+          periodKey = dateStr; // YYYY-MM-DD
+        } else if (period == 'weekly') {
+          // Get week number (Monday of that week)
           final weekStart = date.subtract(Duration(days: date.weekday - 1));
           periodKey = weekStart.toIso8601String().split('T')[0];
         } else {
@@ -892,17 +909,13 @@ class MemberPerformanceService {
         
         // Calculate average work hours
         int totalWorkMinutes = 0;
-        int activeWorkLogs = 0;
         
         for (final record in periodRecords) {
           final minutes = record['work_duration_minutes'] as int? ?? 0;
-          if (minutes > 0) {
-            totalWorkMinutes += minutes;
-            activeWorkLogs++;
-          }
+          totalWorkMinutes += minutes;
         }
         
-        // Calculate average work hours for this period (across all present members)
+        // Calculate average work hours for this period (across all records)
         final avgWorkHours = totalCount > 0 ? (totalWorkMinutes / 60) / totalCount : 0.0;
         
         trendData.add({
@@ -914,6 +927,9 @@ class MemberPerformanceService {
           'present_count': presentCount,
         });
       }
+
+      // Sort by period key to ensure chronological order
+      trendData.sort((a, b) => (a['period'] as String).compareTo(b['period'] as String));
 
       return trendData;
     } catch (e) {

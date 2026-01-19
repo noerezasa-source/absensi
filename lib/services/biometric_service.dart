@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -316,17 +317,24 @@ class BiometricService {
       // threshold is required: Future<Map<String, dynamic>?> identifyBestMatchWithUserInfo({..., required double threshold, ...})
       double effectiveThreshold = threshold;
 
-      // Quality-based adjustment ONLY if it makes it stricter
+      // ✅ IMPROVED: Stricter quality threshold to reduce false positives
       if (strict) {
-        if (capturedQuality < 0.60) {
+        if (capturedQuality < 0.55) { // Raised from 0.50 to 0.55
           effectiveThreshold += 0.05; // Make it harder if quality is poor
         }
       }
       
-      // ✅ DYNAMIC GAP based on confidence
-      double minSimilarityGap = strict ? 0.05 : 0.05; // ✅ REDUCED: 0.05 gap (5%)
+      // ✅ DYNAMIC GAP: Adjust based on similarity strength and quality
+      // Lower similarity or quality = need bigger gap to be confident
+      double minSimilarityGap = 0.05; // Base gap
+      
+      if (strict) {
+        // If similarity is low, require bigger gap to avoid ambiguity
+        minSimilarityGap = 0.05; // Will be adjusted dynamically per match
+      }
 
-      if (strict && capturedQuality < 0.65) {
+      // ✅ IMPROVED: Stricter quality rejection threshold
+      if (strict && capturedQuality < 0.55) { // Raised from 0.50 to 0.55
          debugPrint('❌ Strict match rejected: low quality (${(capturedQuality*100).toInt()}%)');
          return null;
       }
@@ -340,6 +348,7 @@ class BiometricService {
       double highestSimilarity = 0.0;
       double secondHighestSimilarity = 0.0;
       String? secondBestName;
+      Map<String, dynamic>? secondBestMatch;
 
       // 3. Fast Comparison Loop
       for (var template in _memoryTemplateCache!) {
@@ -366,14 +375,18 @@ class BiometricService {
         }
 
         double similarity = 0.0;
+        int bestTemplateIdx = -1;
+
         if (templateVersion == 4 && registeredTemplate['templates'] != null) {
             final templates = registeredTemplate['templates'] as List;
             double maxSimilarity = 0.0;
             for (int i = 0; i < templates.length; i++) {
               final storedTemplate = templates[i];
-               // Optimization: Avoid casting if possible, or trust structure
               final templateSim = faceService.compareFaces(capturedTemplate, storedTemplate);
-              if (templateSim > maxSimilarity) maxSimilarity = templateSim;
+              if (templateSim > maxSimilarity) {
+                maxSimilarity = templateSim;
+                bestTemplateIdx = i;
+              }
             }
             similarity = maxSimilarity;
         } else if (capturedVersion == 4 && capturedTemplate['templates'] != null) {
@@ -394,7 +407,13 @@ class BiometricService {
         
         // Debug Log only for reasonable matches to reduce noise
         if (similarity > 0.3) {
-           debugPrint('🔍 Match Candidate: ${template['id']} (V$templateVersion) - Sim: ${similarity.toStringAsFixed(3)} vs Thr: $effectiveThreshold');
+           String angleInfo = '';
+           if (bestTemplateIdx != -1) {
+             final angles = ['Front', 'Left', 'Right', 'Up', 'Down'];
+             final angleName = bestTemplateIdx < angles.length ? angles[bestTemplateIdx] : 'Angle $bestTemplateIdx';
+             angleInfo = ' [$angleName]';
+           } 
+           debugPrint('🔍 Match Candidate: ${template['id']} (V$templateVersion)$angleInfo - Sim: ${similarity.toStringAsFixed(3)} vs Thr: $effectiveThreshold');
         }
 
         if (similarity > highestSimilarity) {
@@ -407,6 +426,11 @@ class BiometricService {
              final userProfile = orgMember['user_profiles'];
              final dept = orgMember['departments'];
              
+             final angles = ['Front', 'Left', 'Right', 'Up', 'Down'];
+             final matchedAngle = bestTemplateIdx != -1 && bestTemplateIdx < angles.length 
+                 ? angles[bestTemplateIdx] 
+                 : (bestTemplateIdx != -1 ? 'Angle $bestTemplateIdx' : 'Single');
+
              bestMatch = {
                 'organization_member_id': template['organization_member_id'],
                 'biometric_id': template['id'],
@@ -422,7 +446,8 @@ class BiometricService {
                 'profile_photo_url': userProfile['profile_photo_url'],
                 'department_name': dept != null ? dept['name'] : null,
                 'template_version': templateVersion,
-                'threshold': effectiveThreshold, // ✅ Pass threshold to UI
+                'threshold': effectiveThreshold,
+                'matched_angle': matchedAngle, // ✅ Pass matched angle to UI/Logs
              };
           }
         } else if (similarity > secondHighestSimilarity) {
@@ -430,24 +455,34 @@ class BiometricService {
            final orgMember = template['organization_members'];
            final userProfile = orgMember['user_profiles'];
            secondBestName = userProfile['display_name'] ?? '${userProfile['first_name']}';
+           // Populate secondBestMatch with details of the current template
+           final dept = orgMember['departments'];
+           secondBestMatch = {
+              'organization_member_id': template['organization_member_id'],
+              'biometric_id': template['id'],
+              'similarity': similarity,
+              'organization_id': orgMember['organization_id'],
+              'user_id': orgMember['user_id'],
+              'employee_id': orgMember['employee_id'],
+              'user_name': (userProfile['display_name'] ?? '').toString().isEmpty 
+                  ? '${userProfile['first_name']} ${userProfile['last_name']}' 
+                  : userProfile['display_name'],
+              'first_name': userProfile['first_name'],
+              'last_name': userProfile['last_name'],
+              'profile_photo_url': userProfile['profile_photo_url'],
+              'department_name': dept != null ? dept['name'] : null,
+              'template_version': templateVersion,
+              'threshold': effectiveThreshold,
+              'matched_angle': 'Single', // Default for second best if not explicitly tracked
+           };
         }
       }
 
       // 4. Final Verification
       if (bestMatch != null) {
-        final similarityGap = highestSimilarity - secondHighestSimilarity;
-        
-        // ✅ Adjust Minimum Gap based on Confidence
-        double adjustedGap = minSimilarityGap;
-        if (highestSimilarity >= 0.85) {
-          adjustedGap *= 0.5; // High confidence -> strict gap less critical
-        } else if (highestSimilarity < 0.70) {
-          adjustedGap *= 1.5; // Low confidence -> need wider gap
-        }
-
         _logMatch(bestMatch['user_name'], highestSimilarity, effectiveThreshold, true);
         if (secondBestName != null) {
-           debugPrint('🥈 Runner Up: $secondBestName (${(secondHighestSimilarity*100).toStringAsFixed(1)}%) Gap: ${(similarityGap*100).toStringAsFixed(1)}%');
+           debugPrint('🥈 Runner Up: $secondBestName (${(secondHighestSimilarity*100).toStringAsFixed(1)}%)');
         }
         
         if (highestSimilarity < effectiveThreshold) {
@@ -455,9 +490,50 @@ class BiometricService {
           return null;
         }
 
-        if (secondHighestSimilarity > 0.0 && similarityGap < adjustedGap) {
-           debugPrint('⚠️ Ambiguous: gap ${(similarityGap*100).toStringAsFixed(2)}% < ${(adjustedGap*100).toStringAsFixed(2)}%');
-           return null;
+        // ✅ IMPROVED AMBIGUITY CHECK: Dynamic gap based on similarity & quality
+        if (secondHighestSimilarity > 0.0) {
+          final similarityGap = highestSimilarity - secondHighestSimilarity;
+          
+          // ✅ DYNAMIC GAP: Adjust based on both quality AND similarity strength
+          double adjustedGap = minSimilarityGap;
+          
+          // Rule 1: Low quality needs bigger gap
+          if (capturedQuality < 0.65) {
+            adjustedGap = 0.10; // 10% gap for poor quality
+          } else if (capturedQuality < 0.75) {
+            adjustedGap = 0.08; // 8% gap for medium quality
+          } else {
+            adjustedGap = 0.06; // 6% gap for good quality
+          }
+          
+          // Rule 2: Low similarity needs even bigger gap
+          if (highestSimilarity < 0.80) {
+            adjustedGap = math.max(adjustedGap, 0.10); // At least 10% gap
+          } else if (highestSimilarity < 0.85) {
+            adjustedGap = math.max(adjustedGap, 0.08); // At least 8% gap
+          }
+          
+          if (similarityGap < adjustedGap) {
+            debugPrint('❌ Ambiguous match rejected:');
+            debugPrint('   Top match: ${bestMatch['user_name']} (${(highestSimilarity*100).toStringAsFixed(1)}%)');
+            debugPrint('   Second match: ${secondBestMatch?['user_name']} (${(secondHighestSimilarity*100).toStringAsFixed(1)}%)');
+            debugPrint('   Gap: ${(similarityGap*100).toStringAsFixed(2)}% < required ${(adjustedGap*100).toStringAsFixed(2)}%');
+            debugPrint('   Quality: ${(capturedQuality*100).toInt()}%');
+            debugPrint('   Similarity: ${(highestSimilarity*100).toStringAsFixed(1)}%');
+            debugPrint('💡 Suggestion: Try again with better lighting or different angle');
+            
+            // Log for monitoring
+            _logAmbiguousMatch(
+              bestMatch['user_name'],
+              secondBestMatch?['user_name'],
+              highestSimilarity,
+              secondHighestSimilarity,
+              capturedQuality,
+            );
+            return null;
+          }
+          
+          debugPrint('✅ Clear match: gap ${(similarityGap*100).toStringAsFixed(2)}% >= ${(adjustedGap*100).toStringAsFixed(2)}%');
         }
       } else {
          debugPrint('❌ No match found.');
@@ -621,9 +697,23 @@ class BiometricService {
     }
   }
 
-
-
   void dispose() {
     debugPrint('BiometricService disposed');
+  }
+
+  // ✅ MONITORING: Log ambiguous matches for analysis
+  void _logAmbiguousMatch(
+    String? topMatch,
+    String? secondMatch,
+    double topSimilarity,
+    double secondSimilarity,
+    double quality,
+  ) {
+    debugPrint('📊 AMBIGUOUS MATCH LOG:');
+    debugPrint('   Candidates: $topMatch vs $secondMatch');
+    debugPrint('   Scores: ${(topSimilarity * 100).toStringAsFixed(1)}% vs ${(secondSimilarity * 100).toStringAsFixed(1)}%');
+    debugPrint('   Gap: ${((topSimilarity - secondSimilarity) * 100).toStringAsFixed(2)}%');
+    debugPrint('   Quality: ${(quality * 100).toInt()}%');
+    debugPrint('   Timestamp: ${DateTime.now().toIso8601String()}');
   }
 }

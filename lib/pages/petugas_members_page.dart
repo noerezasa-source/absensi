@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -84,6 +85,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   bool _isPaginationDisabled = false; // Flag to completely disable pagination
 
   late TabController _tabController;
+  StreamSubscription? _biometricSubscription;
 
   @override
   void initState() {
@@ -91,6 +93,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     _tabController = TabController(length: 3, vsync: this);
     _scrollController.addListener(_onScroll);
     _loadDataOptimized();
+    _setupBiometricRealtimeListener();
   }
 
 
@@ -100,10 +103,27 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
   @override
   void dispose() {
+    _biometricSubscription?.cancel();
     _tabController.dispose();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _setupBiometricRealtimeListener() {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    // Listen to biometric_data table changes
+    _biometricSubscription = _supabase
+        .from('biometric_data')
+        .stream(primaryKey: ['id'])
+        .listen((_) {
+          if (!mounted) return;
+          debugPrint('🔄 Biometric data changed, refreshing member list...');
+          // Refresh list to update Face/No Face badges
+          _loadOrganizationMembersOptimized(page: _currentPage);
+        });
   }
 
   Future<void> _loadDataOptimized() async {
@@ -1741,6 +1761,16 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final position = member['positions'] as Map<String, dynamic>?;
     final isActive = member['status'] != 'inactive';
     
+    // Check biometric data - it's an array of objects
+    final biometricData = member['biometric_data'] as List?;
+    final hasBiometric = biometricData != null && 
+                         biometricData.isNotEmpty &&
+                         biometricData.any((template) => 
+                           template is Map && 
+                           template['is_active'] == true && 
+                           template['biometric_type'] == 'face_recognition'
+                         );
+    
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -1829,6 +1859,47 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                 ),
               ),
               const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                margin: const EdgeInsets.only(right: 4),
+                decoration: BoxDecoration(
+                  color: hasBiometric 
+                      ? const Color(0xFF10B981).withOpacity(0.1)
+                      : Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: hasBiometric
+                        ? const Color(0xFF10B981).withOpacity(0.3)
+                        : Colors.grey.withOpacity(0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      hasBiometric 
+                          ? Icons.face_retouching_natural
+                          : Icons.face_retouching_off,
+                      size: 12,
+                      color: hasBiometric 
+                          ? const Color(0xFF10B981)
+                          : Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      hasBiometric ? 'Face' : 'No Face',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: hasBiometric 
+                            ? const Color(0xFF10B981)
+                            : Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               _buildCompactRoleBadge(member),
               const SizedBox(width: 4),
               Icon(
@@ -2034,8 +2105,37 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             ),
             const SizedBox(height: 8),
             const Text(
-              'Akurasi pengenalan wajah kini lebih tinggi dengan 3 sudut (Depan, Kiri, Kanan).',
+              'Pilih metode registrasi wajah sesuai kebutuhan.',
               style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.withOpacity(0.2)),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                   Row(
+                    children: [
+                      Icon(Icons.check_circle, size: 14, color: Color(0xFF10B981)),
+                      SizedBox(width: 6),
+                      Text('Live Camera: 5 Sudut (Akurasi Tinggi)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                   ),
+                   SizedBox(height: 4),
+                   Row(
+                    children: [
+                      Icon(Icons.check_circle, size: 14, color: Color(0xFF6B46C1)),
+                      SizedBox(width: 6),
+                      Text('Upload Photo: 1 Foto Depan (Praktis)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                   ),
+                ],
+              ),
             ),
             const SizedBox(height: 24),
             Row(
@@ -2068,7 +2168,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     const Color(0xFF6B46C1),
                     () {
                       Navigator.pop(context);
-                      _registerFaceFromMultiPhoto(member);
+                      _registerFaceFromSinglePhoto(member);
                     },
                   ),
                 ),
@@ -2109,113 +2209,97 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     );
   }
 
-  Future<void> _registerFaceFromMultiPhoto(Map<String, dynamic> member) async {
+  Future<void> _registerFaceFromSinglePhoto(Map<String, dynamic> member) async {
     final faceService = FaceRecognitionTFLiteService();
     final organizationMemberId = member['id'] as int?;
     
     if (organizationMemberId == null) return;
 
-    final Map<CaptureAngle, Map<String, dynamic>> templates = {};
-    String? frontImagePath;
-
     try {
       await faceService.initialize();
       final ImagePicker picker = ImagePicker();
 
-      // Sequential picker flow
-      final angles = [CaptureAngle.front, CaptureAngle.left, CaptureAngle.right];
-      
-      for (final angle in angles) {
-        if (!mounted) return;
-        
-        final String angleName = angle == CaptureAngle.front ? 'DEPAN' : (angle == CaptureAngle.left ? 'KIRI' : 'KANAN');
-        
-        // Custom instruction dialog for each photo
-        final XFile? image = await showDialog<XFile?>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => AlertDialog(
-            title: Text('Pilih Foto Wajah $angleName'),
-            content: Text('Silakan pilih foto member yang menghadap ke $angleName.'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
-              ElevatedButton(
-                onPressed: () async {
-                  final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 100);
-                  if (mounted) Navigator.pop(context, img);
-                },
-                child: const Text('Buka Galeri'),
-              ),
-            ],
+      // Single photo picker
+      final XFile? image = await showDialog<XFile?>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Pilih Foto Wajah Depan'),
+          content: const Text(
+            'Pastikan foto:\n'
+            '1. Wajah menghadap lurus ke depan\n'
+            '2. Pencahayaan terang & jelas\n'
+            '3. Tidak memakai masker/kacamata gelap',
+            style: TextStyle(fontSize: 14),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context), 
+              child: const Text('Batal')
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 100);
+                if (mounted) Navigator.pop(context, img);
+              },
+              child: const Text('Buka Galeri'),
+            ),
+          ],
+        ),
+      );
+
+      if (image == null) return; // User cancelled
+
+      if (!mounted) return;
+      _showProcessingOverlay(context, 'Memproses foto & Menyimpan data...');
+
+      try {
+        final faceTemplate = await faceService.extractFaceFeatures(
+          image.path,
+          allowSidePose: false, // Strict check for single upload
         );
 
-        if (image == null) return; // User cancelled
-
-        // Show processing
-        if (!mounted) return;
-        _showProcessingOverlay(context, 'Memproses foto $angleName...');
-
-        try {
-          final faceTemplate = await faceService.extractFaceFeatures(
-            image.path,
-            allowSidePose: angle != CaptureAngle.front,
-          );
-
-          // Validation
-          final double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-          if (qualityScore < 0.60) {
-             throw Exception('Kualitas foto $angleName kurang tajam. Pilih foto lain.');
-          }
-
-          templates[angle] = faceTemplate;
-          if (angle == CaptureAngle.front) frontImagePath = image.path;
-          
-          if (mounted) Navigator.pop(context); // Close processing overlay
-        } catch (e) {
-          if (mounted) Navigator.pop(context); // Close processing overlay
-          _showErrorDialog('Gagal: $e');
-          return; // Stop flow
+        // Quality check
+        double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+        if (qualityScore < 0.65) {
+            throw Exception('Kualitas foto kurang baik (Score: ${(qualityScore*100).toInt()}%). Gunakan foto yang lebih jelas.');
         }
-      }
-
-      // Finalize
-      if (templates.length == 3 && frontImagePath != null) {
-        _showProcessingOverlay(context, 'Menyimpan data multi-angle...');
-        
-        final combinedTemplate = {
-          'version': 4,
-          'templates': [templates[CaptureAngle.front], templates[CaptureAngle.left], templates[CaptureAngle.right]],
-          'totalAngles': 3,
-          'enrollmentDate': DateTime.now().toIso8601String(),
-        };
 
         final biometricService = BiometricService();
         final storageService = SupabaseStorageService();
 
-        // Upload Front Photo
-        await storageService.uploadFaceTemplate(File(frontImagePath), organizationMemberId);
+        // 1. Upload Photo
+        final processedFile = File(image.path); // Or add compression if needed
+        await storageService.uploadFaceTemplate(processedFile, organizationMemberId);
         
-        // Register DB
+        // 2. Register Template to DB (Version 5 - Single)
         await biometricService.registerFaceTemplate(
           organizationMemberId: organizationMemberId,
-          faceTemplate: combinedTemplate,
+          faceTemplate: faceTemplate,
         );
 
         if (mounted) {
-          Navigator.pop(context); // Close processing
-          _showSuccessSnackBar('Wajah ${_getMemberName(member)} berhasil didaftarkan (Multi-Angle)!');
+          Navigator.of(context).pop(); // Close processing overlay safely
+          _showSuccessSnackBar('Wajah ${_getMemberName(member)} berhasil didaftarkan (Single Mode)!');
           _loadOrganizationMembersOptimized();
         }
+
+      } catch (e) {
+        if (mounted) Navigator.of(context).pop(); // Close processing overlay on error
+        _showErrorDialog('Gagal: $e');
       }
 
     } catch (e) {
-      debugPrint('Multi-photo reg error: $e');
+      debugPrint('Single-photo reg error: $e');
+      // If overlay was shown, ensure it's popped (though the inner catch handles most)
+       // Check if we are still in a dialog context if needed, but safest is to rely on user report or inner catch.
       if (mounted) _showErrorDialog('Terjadi kesalahan sistem: $e');
     } finally {
       faceService.dispose();
     }
   }
+
+
 
   void _showProcessingOverlay(BuildContext context, String message) {
     showDialog(
@@ -2526,15 +2610,44 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                               if (value.toInt() >= _performanceTrend.length) {
                                 return const SizedBox.shrink();
                               }
-                              final period = _performanceTrend[value.toInt()]['period'] as String;
-                              final label = period.split('-').last;
+                              final trendItem = _performanceTrend[value.toInt()];
+                              final period = trendItem['period'] as String;
+                              
+                              String label = '';
+                              try {
+                                final date = DateTime.parse(period.length == 7 ? '$period-01' : period);
+                                
+                                // Detect if we are in Daily mode (YYYY-MM-DD) or Weekly (always Monday)
+                                // If the period string has 10 chars, it's YYYY-MM-DD
+                                if (period.length == 10) {
+                                   // Check if this is part of a weekly group or daily group
+                                   // Actually, we look at the _selectedTimePeriod
+                                   if (_selectedTimePeriod == 'Today' || _selectedTimePeriod == 'This Week') {
+                                     // Fully daily mode -> Show Mon, Tue, etc.
+                                     final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                                     label = dayNames[date.weekday - 1];
+                                   } else {
+                                     // Weekly mode -> Show Date (e.g., 12 Jan)
+                                     final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                     label = '${date.day} ${monthNames[date.month - 1]}';
+                                   }
+                                } else {
+                                  // Monthly format (YYYY-MM)
+                                  final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                  label = monthNames[date.month - 1];
+                                }
+                              } catch (e) {
+                                label = period.split('-').last;
+                              }
+
                               return Padding(
                                 padding: const EdgeInsets.only(top: 8),
                                 child: Text(
                                   label,
                                   style: TextStyle(
-                                    fontSize: 10,
+                                    fontSize: 9,
                                     color: Colors.grey.shade600,
+                                    fontWeight: label.length > 3 ? FontWeight.normal : FontWeight.bold,
                                   ),
                                 ),
                               );
@@ -2729,10 +2842,35 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     
     try {
       final organizationId = widget.memberData['organization_id'] as int;
+      final now = DateTime.now();
+      
+      String period = 'monthly';
+      DateTime startDate;
+      
+      switch (_selectedTimePeriod) {
+        case 'Today':
+        case 'This Week':
+          period = 'daily';
+          // Start from Monday of this week
+          startDate = now.subtract(Duration(days: now.weekday - 1));
+          break;
+        case 'This Month':
+          period = 'weekly';
+          startDate = DateTime(now.year, now.month, 1);
+          break;
+        case 'Last Month':
+          period = 'weekly';
+          startDate = DateTime(now.year, now.month - 1, 1);
+          break;
+        default:
+          period = 'weekly';
+          startDate = now.subtract(const Duration(days: 30));
+      }
       
       final trendData = await _performanceService.getPerformanceTrend(
         organizationId,
-        period: 'weekly',
+        period: period,
+        startDate: startDate,
       );
       
       setState(() {
