@@ -2590,83 +2590,14 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                         leftTitles: AxisTitles(
                           sideTitles: SideTitles(
                             showTitles: true,
-                            reservedSize: 40,
+                            reservedSize: 32,
                             getTitlesWidget: (value, meta) {
-                              return Text(
-                                '${(value * 100).toInt()}%',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.grey.shade600,
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        bottomTitles: AxisTitles(
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 30,
-                            getTitlesWidget: (value, meta) {
-                              if (value.toInt() >= _performanceTrend.length) {
-                                return const SizedBox.shrink();
-                              }
-                              final trendItem = _performanceTrend[value.toInt()];
-                              final period = trendItem['period'] as String;
-                              
-                              String label = '';
-                              try {
-                                final date = DateTime.parse(period.length == 7 ? '$period-01' : period);
-                                
-                                // Detect if we are in Daily mode (YYYY-MM-DD) or Weekly (always Monday)
-                                // If the period string has 10 chars, it's YYYY-MM-DD
-                                if (period.length == 10) {
-                                   // Check if this is part of a weekly group or daily group
-                                   // Actually, we look at the _selectedTimePeriod
-                                   if (_selectedTimePeriod == 'Today' || _selectedTimePeriod == 'This Week') {
-                                     // Fully daily mode -> Show Mon, Tue, etc.
-                                     final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                                     label = dayNames[date.weekday - 1];
-                                   } else {
-                                     // Weekly mode -> Show Date (e.g., 12 Jan)
-                                     final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                                     label = '${date.day} ${monthNames[date.month - 1]}';
-                                   }
-                                } else {
-                                  // Monthly format (YYYY-MM)
-                                  final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                                  label = monthNames[date.month - 1];
-                                }
-                              } catch (e) {
-                                label = period.split('-').last;
-                              }
-
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Text(
-                                  label,
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: Colors.grey.shade600,
-                                    fontWeight: label.length > 3 ? FontWeight.normal : FontWeight.bold,
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        rightTitles: AxisTitles(
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 40,
-                            getTitlesWidget: (value, meta) {
-                              // Display Work Hours (0-12h range mapping to 0-1)
-                              final hours = (value * 12).toInt();
-                              if (hours % 4 == 0) { // Show 0, 4, 8, 12
+                              if (value == 0 || value == 0.5 || value == 1.0) {
                                 return Text(
-                                  '${hours}h',
+                                  '${(value * 100).toInt()}',
                                   style: TextStyle(
                                     fontSize: 10,
-                                    color: Colors.purple.shade300,
+                                    color: Colors.grey.shade400,
                                   ),
                                 );
                               }
@@ -2674,6 +2605,59 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             },
                           ),
                         ),
+                        bottomTitles: AxisTitles(
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 24,
+                            interval: 1, 
+                            getTitlesWidget: (value, meta) {
+                              final index = value.toInt();
+                              if (index < 0 || index >= _performanceTrend.length) {
+                                return const SizedBox.shrink();
+                              }
+                              
+                              // Logic to show labels sparsely (every 7 points if many, or start/end)
+                              final totalPoints = _performanceTrend.length;
+                              bool showLabel = false;
+                              
+                              if (totalPoints <= 8) {
+                                // For few points (like a week), show every 2nd or 3rd to keep it clean
+                                showLabel = index % 2 == 0 || index == totalPoints - 1;
+                              } else {
+                                // For more points, show once a week (every 7)
+                                showLabel = index % 7 == 0 || index == totalPoints - 1;
+                              }
+
+                              if (!showLabel) return const SizedBox.shrink();
+
+                              final trendItem = _performanceTrend[index];
+                              final period = trendItem['period'] as String;
+                              
+                              String label = '';
+                              try {
+                                final date = DateTime.parse(period.length == 7 ? '$period-01' : period);
+                                // Format as MM/DD following the concept image
+                                final month = date.month.toString().padLeft(2, '0');
+                                final day = date.day.toString().padLeft(2, '0');
+                                label = '$month/$day';
+                              } catch (e) {
+                                label = period.split('-').last;
+                              }
+
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                  label,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.grey.shade500,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                       ),
                       borderData: FlBorderData(show: false),
@@ -2689,19 +2673,15 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             );
                           }).toList(),
                           isCurved: true,
-                          color: Colors.green,
-                          barWidth: 3,
-                          dotData: const FlDotData(show: true),
-                          belowBarData: BarAreaData(
-                            show: true,
-                            color: Colors.green.withOpacity(0.1),
-                          ),
+                          curveSmoothness: 0.35,
+                          color: const Color(0xFF03A9F4), // Light blue like concept
+                          barWidth: 2,
+                          dotData: const FlDotData(show: false), // Clean look, no dots
                         ),
                         // Work Hours line (normalized 0-12h to 0-1.0)
                         LineChartBarData(
                           spots: _performanceTrend.asMap().entries.map((entry) {
                             final hours = entry.value['avg_work_hours'] as double? ?? 0.0;
-                            // Normalize (12 hours = 1.0)
                             final normalized = (hours / 12).clamp(0.0, 1.0);
                             return FlSpot(
                               entry.key.toDouble(),
@@ -2709,9 +2689,10 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             );
                           }).toList(),
                           isCurved: true,
-                          color: Colors.purple,
-                          barWidth: 3,
-                          dotData: const FlDotData(show: true),
+                          curveSmoothness: 0.35,
+                          color: const Color(0xFF2E7D32), // Dark green like concept
+                          barWidth: 2,
+                          dotData: const FlDotData(show: false), // No dots
                         ),
                       ],
                       lineTouchData: LineTouchData(

@@ -230,7 +230,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final double headX = face.headEulerAngleX ?? 0.0;
     final double headZ = (face.headEulerAngleZ ?? 0.0).abs();
     
-    if (headZ > 35.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'};
+    if (headZ > 35.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'}; // Keep head straight/level
 
     // Angle specific validation
     switch (_currentAngle) {
@@ -239,16 +239,28 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         if (headX.abs() > 10.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
         break;
       case CaptureAngle.left:
+        // Range: 20 to 35 degrees (Reduced from 50)
         if (headY < 20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri >>'};
+        if (headY > 35.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
         break;
       case CaptureAngle.right:
+        // Range: -35 to -20 degrees (Reduced from -50)
         if (headY > -20.0) return {'isValid': false, 'message': '<< Miringkan Wajah ke Kanan'};
+        if (headY < -35.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
         break;
       case CaptureAngle.up:
+        // Range: 10 to 35 degrees (Up is usually positive X in some libs, but check context: user code said headX < 10 for "Dongakkan", implying negative or positive? 
+        // Wait, original code was `if (headX < 10.0) return msg 'Dongakkan'`. This implies Up requires X > 10.
+        // Let's stick to X > 10.
+        // Range: 10 to 35
         if (headX < 10.0) return {'isValid': false, 'message': 'Dongakkan Kepala ke Atas'};
+        if (headX > 35.0) return {'isValid': false, 'message': 'Terlalu mendongak!'};
         break;
       case CaptureAngle.down:
+        // Original code: `if (headX > -10.0) return msg 'Tundukkan'`. Implies Down requires X < -10.
+        // Range: -35 to -10
         if (headX > -10.0) return {'isValid': false, 'message': 'Tundukkan Kepala ke Bawah'};
+        if (headX < -35.0) return {'isValid': false, 'message': 'Terlalu menunduk!'};
         break;
       default:
         break;
@@ -273,9 +285,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       // Quality check
       double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-      if (qualityScore < 0.60) {
+      
+      // Dynamic Threshold: 0.90 for Front, 0.60 for Angles (due to rotation penalty)
+      double minQuality = _currentAngle == CaptureAngle.front ? 0.90 : 0.60;
+      
+      if (qualityScore < minQuality) {
         setState(() {
-          _guidanceMessage = 'Cahaya kurang terang. Coba lagi.';
+          _guidanceMessage = 'Kualitas ${(qualityScore*100).toInt()}%. Butuh > ${(minQuality*100).toInt()}%. Coba lagi.';
           _overlayColor = Colors.orange;
         });
         await Future.delayed(const Duration(seconds: 2));

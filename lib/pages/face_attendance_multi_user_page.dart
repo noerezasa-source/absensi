@@ -50,7 +50,7 @@ enum MessageType {
 class _FaceAttendanceMultiUserPageState
     extends State<FaceAttendanceMultiUserPage> {
   CameraController? _cameraController;
-  final FaceRecognitionTFLiteService _faceService = FaceRecognitionTFLiteService();
+  late FaceRecognitionTFLiteService _faceService; // ✅ Use SHARED instance from BiometricService
   final BiometricService _biometricService = BiometricService();
   final AttendanceService _attendanceService = AttendanceService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
@@ -105,13 +105,13 @@ class _FaceAttendanceMultiUserPageState
   
   // Configuration
   static const int _requiredStableFrames = 0; // Optimized for Instant Recognition
-  static const double _stabilityThreshold = 120.0; // High tolerance for movement
+  static const double _stabilityThreshold = 200.0; // ✅ INCREASED: More tolerant of motion (was 120.0)
   static const Duration _recognitionCooldown = Duration(seconds: 2); // ✅ FASTER: 2s cooldown for quicker re-recognition
   
   // ✅ Adaptive Multi-Frame Configuration (Speed + Accuracy Balance)
   static const int _multiFrameCount = 2; // ✅ 2 frames for accuracy, but adaptive
   static const Duration _multiFrameInterval = Duration(milliseconds: 50); // ✅ FASTER: 50ms interval
-  static const double _maxMovementThreshold = 50.0; // Max pixel movement between frames
+  static const double _maxMovementThreshold = 100.0; // ✅ INCREASED: Allow more movement while walking (was 50.0)
   
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
   static const Duration _sameModeCooldown = Duration(minutes: 5);
@@ -120,6 +120,8 @@ class _FaceAttendanceMultiUserPageState
   bool _isOnline = true;
   String? _debugExternalDir; // Cache for debug path
   DateTime _lastDebugSave = DateTime.fromMillisecondsSinceEpoch(0); // For throttling debug saves
+  DateTime _lastCameraProcess = DateTime.fromMillisecondsSinceEpoch(0); // ✅ NEW: Throttle detection loop
+  static const Duration _cameraThrottle = Duration(milliseconds: 85); // ✅ 85ms = ~12 FPS processing (Smooth & Efficient)
 
   @override
   void initState() {
@@ -143,7 +145,7 @@ class _FaceAttendanceMultiUserPageState
     _faceDataMap.clear();
     _detectedFaces.clear();
     _cameraController?.dispose();
-    _faceService.dispose();
+    // ❌ REMOVED: _faceService.dispose(); // KEEP MODEL PERSISTENT IN MEMORY
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -472,7 +474,8 @@ class _FaceAttendanceMultiUserPageState
   Future<void> _initializeFaceService() async {
     try {
       _showMessage('Menyiapkan...', MessageType.loading);
-      await _faceService.initialize();
+      // ✅ USE SHARED SERVICE: Prevents 2-3s delay from reloading models
+      _faceService = await _biometricService.getFaceService();
       _clearMessage();
     } catch (e) {
       debugPrint('Failed to init TFLite: $e');
@@ -507,7 +510,7 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.high, // ✅ UPGRADED: High resolution for better accuracy
+        ResolutionPreset.veryHigh, // ✅ UPGRADED: Full HD for maximum clarity
         // ✅ FIXED: Stream requires YUV420 on Android, BGRA8888 on iOS
       imageFormatGroup: Platform.isAndroid 
           ? ImageFormatGroup.yuv420 
@@ -610,8 +613,13 @@ class _FaceAttendanceMultiUserPageState
     }
     
     if (currentTime - _lastProcessingTime < throttleDuration) return;
-    _lastProcessingTime = currentTime;
-
+    if (_isProcessing) return;
+    
+    // ✅ THROTTLE: Don't process every frame (reduce CPU load)
+    final now = DateTime.now();
+    if (now.difference(_lastCameraProcess) < _cameraThrottle) return;
+    _lastCameraProcess = now;
+    
     _isProcessing = true;
 
     try {
@@ -962,7 +970,7 @@ class _FaceAttendanceMultiUserPageState
           final template = await _faceService.buildTemplateFromBytes(
             bytes, width, height, rotation, face,
             allowSidePose: false,
-            debugPath: _debugExternalDir,
+            // debugPath: _debugExternalDir, // ❌ REMOVED: Saving debug images is slow during recognition
           );
           
           // Extract embedding array
@@ -972,12 +980,12 @@ class _FaceAttendanceMultiUserPageState
             lastTemplate = template; // Keep last template for metadata
             debugPrint('✅ Frame ${i + 1}/${_multiFrameCount} captured');
             
-            // ✅ ADAPTIVE: If first frame has excellent quality, skip second frame for speed
+            // ✅ ADAPTIVE: If first frame has decent quality, skip second frame for speed
             if (i == 0 && _multiFrameCount > 1) {
               final qualityScore = (template['qualityScore'] as num?)?.toDouble() ?? 0.0;
-              if (qualityScore >= 0.85) {
-                debugPrint('🚀 Excellent quality (${(qualityScore*100).toInt()}%), skipping frame 2 for speed');
-                break; // Use single high-quality frame
+              if (qualityScore >= 0.65) { // ✅ RELAXED: Skip frame 2 if quality >= 65% (was 85%)
+                debugPrint('🚀 Decent quality (${(qualityScore*100).toInt()}%), skipping frame 2 for speed');
+                break; // Use single frame
               }
             }
           }
@@ -1051,8 +1059,9 @@ class _FaceAttendanceMultiUserPageState
     if (id == -1) return;
 
     try {
+        final stopwatch = Stopwatch()..start();
         // ✅ Multi-Frame Averaging: Capture and average embeddings from 3 frames
-        debugPrint('🎯 Starting multi-frame recognition for face $id');
+        debugPrint('🎯 [BENCH] Starting multi-frame recognition for face $id');
         
         if (_lastStreamBytes == null) {
            debugPrint('⚠️ No stream bytes available for recognition');
@@ -1061,7 +1070,10 @@ class _FaceAttendanceMultiUserPageState
         }
 
         // Capture multi-frame averaged embedding
+        final captureStart = stopwatch.elapsedMilliseconds;
         final template = await _captureMultiFrameEmbedding(face, id);
+        final captureEnd = stopwatch.elapsedMilliseconds;
+        debugPrint('🎬 [BENCH] Capture+Extraction took: ${captureEnd - captureStart}ms');
         
         if (template == null) {
            debugPrint('❌ Multi-frame capture failed, aborting recognition');
@@ -1075,12 +1087,16 @@ class _FaceAttendanceMultiUserPageState
         // Capture current bytes for attendance photo
         final bytes = Uint8List.fromList(_lastStreamBytes!);
 
+        final matchStart = stopwatch.elapsedMilliseconds;
         final result = await _biometricService.identifyBestMatchWithUserInfo(
            capturedTemplate: template,
            organizationId: widget.organizationId,
            strict: true, // Enforce strict matching
-           threshold: 0.75, // ✅ STRONGER: Increased from 0.65 for better accuracy
+           threshold: 0.72, // ✅ SPEED: Lowered from 0.75 to 0.72 for faster matching
         );
+        final matchEnd = stopwatch.elapsedMilliseconds;
+        debugPrint('🔍 [BENCH] Matching against database took: ${matchEnd - matchStart}ms');
+        debugPrint('🚀 [BENCH] TOTAL Recognition Cycle: ${stopwatch.elapsedMilliseconds}ms');
 
         if (result != null) {
            final name = result['user_name'];

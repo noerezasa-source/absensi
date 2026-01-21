@@ -29,8 +29,8 @@ class FaceRecognitionTFLiteService {
         enableLandmarks: true, // Needed for alignment
         enableClassification: true, // Needed for eye open prob
         enableTracking: true, // ✅ ENABLED: For persistent ID tracking
-        performanceMode: FaceDetectorMode.accurate,
-        minFaceSize: 0.15, // ✅ INCREASED: Prevent false detections on walls/objects (was 0.1)
+        performanceMode: FaceDetectorMode.fast, // ✅ REVERTED: Accurate mode caused GPU timeouts (Black Screen)
+        minFaceSize: 0.08, // ✅ REVERTED: 0.08 for wider detection range
       ),
     );
   }
@@ -118,7 +118,7 @@ class FaceRecognitionTFLiteService {
     
     // Check face size
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    if (faceArea < 8000) { 
+    if (faceArea < 4000) { // ✅ RELAXED: Allow smaller faces at distance (was 8000)
       debugPrint('❌ Face rejected: Face too small');
       return false;
     }

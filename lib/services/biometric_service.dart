@@ -18,6 +18,17 @@ class BiometricService {
   // ✅ PERFORMANCE: Static instances to persist across multiple BiometricService creations
   // This prevents reloading the heavy TFLite model and Isolate on every match
   static FaceRecognitionTFLiteService? _persistentFaceService;
+  
+  // ✅ NEW: Expose shared service to prevent multiple model loads in memory
+  Future<FaceRecognitionTFLiteService> getFaceService() async {
+    if (_persistentFaceService == null) {
+      debugPrint('🚀 Initializing shared persistent face service...');
+      _persistentFaceService = FaceRecognitionTFLiteService();
+      await _persistentFaceService!.initialize();
+    }
+    return _persistentFaceService!;
+  }
+  
   static List<Map<String, dynamic>>? _memoryTemplateCache;
   static Map<int, Map<String, dynamic>>? _parsedTemplateCache;
   static int? _cachedOrganizationId;
@@ -155,7 +166,7 @@ class BiometricService {
         debugPrint('⚠️ Failed to cache face templates: $e');
       }
     }
-
+  
     // ✅ CHECK MEMORY CACHE EXPIRY
     if (_memoryTemplateCache != null && 
         _cachedOrganizationId == organizationId &&
@@ -285,12 +296,7 @@ class BiometricService {
       debugPrint('=== IDENTIFYING BEST MATCH (OPTIMIZED) ===');
 
       // 1. Initialize Service ONCE
-      if (_persistentFaceService == null) {
-        debugPrint('🚀 Initializing persistent face service...');
-        _persistentFaceService = FaceRecognitionTFLiteService();
-        await _persistentFaceService!.initialize();
-      }
-      final faceService = _persistentFaceService!;
+      final faceService = await getFaceService();
 
       // 2. Load and Cache Templates ONCE (per session/org)
       if (_memoryTemplateCache == null || _cachedOrganizationId != organizationId) {
@@ -314,15 +320,16 @@ class BiometricService {
       final capturedQuality = (capturedTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
 
       // ✅ USE PASSED THRESHOLD: Don't override with hardcoded values
-      // threshold is required: Future<Map<String, dynamic>?> identifyBestMatchWithUserInfo({..., required double threshold, ...})
       double effectiveThreshold = threshold;
 
-      // ✅ IMPROVED: Stricter quality threshold to reduce false positives
+      // ❌ REMOVED: Threshold penalty for poor quality (prevents distant recognition)
+      /*
       if (strict) {
-        if (capturedQuality < 0.55) { // Raised from 0.50 to 0.55
-          effectiveThreshold += 0.05; // Make it harder if quality is poor
+        if (capturedQuality < 0.55) { 
+          effectiveThreshold += 0.05; 
         }
       }
+      */
       
       // ✅ DYNAMIC GAP: Adjust based on similarity strength and quality
       // Lower similarity or quality = need bigger gap to be confident
@@ -333,9 +340,9 @@ class BiometricService {
         minSimilarityGap = 0.05; // Will be adjusted dynamically per match
       }
 
-      // ✅ IMPROVED: Stricter quality rejection threshold
-      if (strict && capturedQuality < 0.55) { // Raised from 0.50 to 0.55
-         debugPrint('❌ Strict match rejected: low quality (${(capturedQuality*100).toInt()}%)');
+      // ✅ IMPROVED: Lowered quality rejection threshold for distance
+      if (strict && capturedQuality < 0.40) { // Reduced from 0.55 to 0.40 for faster distant recognition
+         debugPrint('❌ Strict match rejected: very low quality (${(capturedQuality*100).toInt()}%)');
          return null;
       }
 

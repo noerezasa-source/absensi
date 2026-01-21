@@ -229,7 +229,7 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
   receivePort.listen((message) async {
     if (message is InferenceRequest) {
       try {
-        img.Image? image;
+        img.Image? faceImage;
 
         if (message.imagePath != null) {
           final imageFile = File(message.imagePath!);
@@ -237,42 +237,29 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
              throw Exception('Image file not found: ${message.imagePath}');
           }
           final imageBytes = await imageFile.readAsBytes();
-          image = img.decodeImage(imageBytes);
+          faceImage = img.decodeImage(imageBytes);
         } else if (message.imageBytes != null && message.imageWidth != null && message.imageHeight != null) {
-           // Provide raw YUV/NV21 handling if needed, or assume it's already converted to RGB?
-           // The concatenating planes in main thread creates a rough YUV buffer.
-           // However, converting YUV to RGB effectively in Dart is slow.
-           // BETTER: Since we used `takePicture` before, that was JPEG.
-           // Now we send raw bytes from `cameraImage`.
-           // Ideally, we should do YUV -> RGB here. 
-           image = _convertYUV420ToImage(message.imageBytes!, message.imageWidth!, message.imageHeight!);
-           
-           // Rotate if needed! (Crucial for correct coordinates)
-           if (message.rotation != null && message.rotation != 0) {
-             image = img.copyRotate(image!, angle: message.rotation!);
-           }
+          // ✅ OPTIMIZED: Region-Based Conversion
+          // Instead of converting the whole 1280x720 frame (Slow!), we only convert the face area.
+          faceImage = _convertYUVRegionToImage(
+             message.imageBytes!, 
+             message.imageWidth!, 
+             message.imageHeight!, 
+             message.faceData,
+             inputSize,
+             message.rotation ?? 0 // Pass rotation for coordinate mapping
+          );
+          
+          // Rotation is now handled by _convertYUVRegionToImage for coordinate mapping.
+          // If the final faceImage needs additional rotation (e.g., from message.rotation), apply it here.
+          // Note: _convertYUVRegionToImage already applies rotation to make the face upright.
         }
 
-        if (image == null) {
-          throw Exception('Failed to decode or process image');
+        if (faceImage == null) {
+          throw Exception('Failed to decode or process image into faceImage');
         }
-
-        // Process
-        final enhancedImage = _enhanceImage(image);
-        // Combined Crop & Align (Fixes rotation coordinate issues)
-        final faceImage = _cropAndAlignFace(enhancedImage, message.faceData, inputSize);
         
-        // ✅ DEBUG: Save cropped face to check alignment/rotation
-        if (message.debugPath != null) {
-           try {
-             final debugFile = File('${message.debugPath}/debug_face_${DateTime.now().millisecondsSinceEpoch}.png');
-             debugFile.writeAsBytesSync(img.encodePng(faceImage));
-             print('DEBUG: Saved face crop to ${debugFile.path}');
-           } catch (e) {
-             print('DEBUG: Failed to save face crop: $e');
-           }
-        }
-
+        // Final inference
         final embedding = _runInference(interpreter!, faceImage, inputSize, embeddingSize);
         
         initData.sendPort.send(InferenceResponse(
@@ -293,41 +280,116 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
 
 // --- Helper Functions in Isolate ---
 
-// Simple YUV420 to RGB conversion (Approximation for performance)
-img.Image _convertYUV420ToImage(Uint8List yuvBytes, int width, int height) {
-  final image = img.Image(width: width, height: height);
+// ✅ OPTIMIZED: Region-Based YUV420 to RGB conversion (Rotation Aware)
+img.Image _convertYUVRegionToImage(Uint8List yuvBytes, int frameWidth, int frameHeight, Map<String, dynamic> faceData, int targetSize, int rotation) {
+  final box = faceData['boundingBox'] as Map<String, dynamic>;
+  double sLeft = (box['left'] as num).toDouble();
+  double sTop = (box['top'] as num).toDouble();
+  double sWidth = (box['width'] as num).toDouble();
+  double sHeight = (box['height'] as num).toDouble();
+
+  // 1. UN-ROTATE coordinates from "Screen/MLKit" space to "Raw Buffer" space
+  // ML Kit gives coordinates relative to the rotated InputImage.
+  // We need to map them back to the raw yuvBytes buffer (usually landscape).
+  double bLeft, bTop, bWidth, bHeight;
   
-  int frameSize = width * height;
+  if (rotation == 90) {
+    // Portrait: Screen(720x1280) -> Buffer(1280x720)
+    bLeft = sTop;
+    bTop = frameHeight - sLeft - sWidth;
+    bWidth = sHeight;
+    bHeight = sWidth;
+  } else if (rotation == 270) {
+    bLeft = frameWidth - sTop - sHeight;
+    bTop = sLeft;
+    bWidth = sHeight;
+    bHeight = sWidth;
+  } else if (rotation == 180) {
+    bLeft = frameWidth - sLeft - sWidth;
+    bTop = frameHeight - sTop - sHeight;
+    bWidth = sWidth;
+    bHeight = sHeight;
+  } else {
+    // 0 or default
+    bLeft = sLeft;
+    bTop = sTop;
+    bWidth = sWidth;
+    bHeight = sHeight;
+  }
+
+  // 2. Calculate Crop Area with margin
+  const margin = 0.25;
+  final marginW = bWidth * margin;
+  final marginH = bHeight * margin;
+
+  int startX = max(0, (bLeft - marginW).toInt());
+  int startY = max(0, (bTop - marginH).toInt());
+  int endX = min(frameWidth - 1, (bLeft + bWidth + marginW).toInt());
+  int endY = min(frameHeight - 1, (bTop + bHeight + marginH).toInt());
   
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-       int yIndex = y * width + x;
-       if (yIndex >= yuvBytes.length) break;
+  int cropW = endX - startX;
+  int cropH = endY - startY;
+  
+  if (cropW <= 0 || cropH <= 0) {
+     // Fallback to minimal sensible area if mapping fails
+     startX = 0; startY = 0; cropW = min(frameWidth, 200); cropH = min(frameHeight, 200);
+  }
+
+  final image = img.Image(width: cropW, height: cropH);
+  final int frameSize = frameWidth * frameHeight;
+  
+  // 3. Convert ONLY the region (High performance loop)
+  for (int y = 0; y < cropH; y++) {
+    final int actualY = startY + y;
+    final int yOffset = actualY * frameWidth;
+    final int uvY = actualY >> 1;
+    final int uvRowStart = frameSize + (uvY * frameWidth);
+
+    for (int x = 0; x < cropW; x++) {
+       final int actualX = startX + x;
+       final int yIndex = yOffset + actualX;
        
-       int yVal = yuvBytes[yIndex] & 0xFF;
+       if (yIndex >= frameSize) break;
+       final int yVal = yuvBytes[yIndex] & 0xFF;
        
-       // NV21 Logic (Standard Android)
-       int uvIndex = frameSize + (y >> 1) * width + (x & ~1);
+       final int uvX = actualX & ~1;
+       final int uvIndex = uvRowStart + uvX;
+       
        int uVal = 128;
        int vVal = 128;
-       
        if (uvIndex + 1 < yuvBytes.length) {
          vVal = yuvBytes[uvIndex] & 0xFF;
          uVal = yuvBytes[uvIndex + 1] & 0xFF;
        }
        
+       // Faster YUV to RGB integer math
        int r = (yVal + 1.370705 * (vVal - 128)).toInt();
        int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128)).toInt();
        int b = (yVal + 1.732446 * (uVal - 128)).toInt();
        
+       // Manual clamping is faster than .clamp()
        image.setPixelRgb(x, y, 
-         r.clamp(0, 255), 
-         g.clamp(0, 255), 
-         b.clamp(0, 255)
+         r < 0 ? 0 : (r > 255 ? 255 : r),
+         g < 0 ? 0 : (g > 255 ? 255 : g),
+         b < 0 ? 0 : (b > 255 ? 255 : b)
        );
     }
   }
-  return image;
+
+  // 4. Resize and Rotate for final model alignment
+  var faceImage = img.copyResize(
+    image, 
+    width: targetSize, 
+    height: targetSize,
+    interpolation: img.Interpolation.nearest
+  );
+
+  // Apply the same rotation to the face crop to make it upright for the AI
+  if (rotation != 0) {
+    faceImage = img.copyRotate(faceImage, angle: rotation);
+  }
+
+  return faceImage;
 }
 
 img.Image _enhanceImage(img.Image image) {

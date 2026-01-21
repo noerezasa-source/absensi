@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "com.example.absensimassal"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "29.0.13599879" // ✅ FIXED: Used the exact version found in the SDK folder
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
