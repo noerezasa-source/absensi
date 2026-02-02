@@ -266,10 +266,25 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     
     if (headZ > 45.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'}; // Relaxed from 35
 
-    // Angle specific validation - Simplified to Front Only
-    // Relaxed thresholds: 15 degrees instead of 10
-    if (headY.abs() > 15.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'};
-    if (headX.abs() > 15.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
+    // Angle specific validation
+    switch (_currentAngle) {
+      case CaptureAngle.front:
+        if (headY.abs() > 10.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'}; // Relaxed from 10 to 15? No, keep 10 for front but provide clear feedback
+        if (headX.abs() > 10.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
+        break;
+      case CaptureAngle.left:
+        // Range: 20 to 45 degrees (Relaxed)
+        if (headY < 15.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri >>'};
+        if (headY > 45.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
+        break;
+      case CaptureAngle.right:
+        // Range: -45 to -20 degrees (Relaxed)
+        if (headY > -15.0) return {'isValid': false, 'message': '<< Miringkan Wajah ke Kanan'};
+        if (headY < -45.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
+        break;
+      default:
+        break;
+    }
     
     return {'isValid': true, 'message': 'Sempurna, Tahan!'};
   }
@@ -291,8 +306,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       // Quality check
       double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
       
-      // Dynamic Threshold: 0.85 for Front (Relaxed from 0.90)
-      double minQuality = 0.85;
+      // Dynamic Threshold: 0.85 for Front, 0.60 for Sides.
+      double minQuality = _currentAngle == CaptureAngle.front ? 0.85 : 0.60;
       
       if (qualityScore < minQuality) {
         setState(() {
@@ -309,15 +324,29 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       // Store template
       _capturedTemplates[_currentAngle] = faceTemplate;
-      _frontImagePath = imagePath; // Keep front image for profile photo
+      
+      if (_currentAngle == CaptureAngle.front) {
+        _frontImagePath = imagePath; // Keep front image
+      } else {
+        await File(imagePath).delete(); // Delete others
+      }
 
-      // SINGLE STEP COMPLETION
-      setState(() {
-        _guidanceMessage = 'Selesai! Menyimpan...';
-        _isRegistrationComplete = true;
-        _currentStep = 'Menyimpan Data...';
-      });
-      await _finalizeMultiAngleRegistration();
+      // PROGRESS LOGIC
+      if (_currentAngle == CaptureAngle.front) {
+        _currentAngle = CaptureAngle.left;
+        _resetStreamForAngle('Tahap 2: Samping Kiri', 'Miringkan Wajah ke Kiri >>');
+      } else if (_currentAngle == CaptureAngle.left) {
+        _currentAngle = CaptureAngle.right;
+        _resetStreamForAngle('Tahap 3: Samping Kanan', '<< Miringkan Wajah ke Kanan');
+      } else {
+        // Complete
+        setState(() {
+          _guidanceMessage = 'Selesai! Menyimpan...';
+          _isRegistrationComplete = true;
+          _currentStep = 'Menyimpan Data...';
+        });
+        await _finalizeMultiAngleRegistration();
+      }
 
     } catch (e) {
       debugPrint('Error processing angle: $e');
@@ -345,14 +374,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     });
 
     try {
-      // 1. Combine templates (Just Front now)
+      // 1. Combine templates
       final List<Map<String, dynamic>> combinedList = [];
       if (_capturedTemplates.containsKey(CaptureAngle.front)) combinedList.add(_capturedTemplates[CaptureAngle.front]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.left)) combinedList.add(_capturedTemplates[CaptureAngle.left]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.right)) combinedList.add(_capturedTemplates[CaptureAngle.right]!);
       
       final multiTemplate = {
         'version': 4,
         'templates': combinedList,
-        'totalAngles': 1, // Changed from combinedList.length or logic
+        'totalAngles': combinedList.length,
         'enrollmentDate': DateTime.now().toIso8601String(),
       };
 
@@ -1043,11 +1074,21 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   double _getProgressPercentage() {
-    // Simplified progress since it's just 1 step now
     if (_isRegistrationComplete) return 100;
-    if (_isTakingPicture) return 90;
-    if (_consecutiveValidFrames > 0) return 50;
-    return 10;
+    
+    double base = 0;
+    switch (_currentAngle) {
+      case CaptureAngle.front: base = 0; break;
+      case CaptureAngle.left: base = 33; break;
+      case CaptureAngle.right: base = 66; break;
+      default: return 100;
+    }
+
+    // Add small visual progress for validation success
+    if (_isTakingPicture) return base + 30; // Almost done with step
+    if (_consecutiveValidFrames > 0) return base + 15; // Validating
+    
+    return base + 5; // Started step
   }
 
   Widget _buildCorner(int position) {
