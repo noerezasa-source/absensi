@@ -39,12 +39,14 @@ class InferenceResponse {
   final int requestId;
   final List<double>? embedding;
   final double? qualityScore;
+  final List<List<double>>? landmarks3d; // NEW: 68 points (x, y, z)
   final String? error;
 
   InferenceResponse({
     required this.requestId,
     this.embedding,
     this.qualityScore,
+    this.landmarks3d,
     this.error,
   });
 }
@@ -82,12 +84,17 @@ class IsolateInferenceService {
       final modelData = await rootBundle.load('assets/models/w600k_mbf_optimized.tflite');
       final modelBytes = modelData.buffer.asUint8List();
 
+      // Load 1K3D68 High-Precision Landmark model (Buffalo_S)
+      final landmarkData = await rootBundle.load('assets/models/1k3d68_optimized.tflite');
+      final landmarkBytes = landmarkData.buffer.asUint8List();
+
       _isolate = await Isolate.spawn(
         _isolateEntryPoint,
         _IsolateInitData(
           receivePort.sendPort,
           rootIsolateToken!,
           modelBytes,
+          landmarkBytes,
         ),
       );
 
@@ -179,9 +186,10 @@ class IsolateInferenceService {
 class _IsolateInitData {
   final SendPort sendPort;
   final RootIsolateToken rootToken;
-  final Uint8List modelBytes;
+  final Uint8List recognitionModelBytes;
+  final Uint8List landmarkModelBytes;
 
-  _IsolateInitData(this.sendPort, this.rootToken, this.modelBytes);
+  _IsolateInitData(this.sendPort, this.rootToken, this.recognitionModelBytes, this.landmarkModelBytes);
 }
 
 // Global function for Isolate entry point
@@ -192,45 +200,48 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
   final receivePort = ReceivePort();
   initData.sendPort.send(receivePort.sendPort);
 
-  // Load W600K MBF optimized model from buffer
-  Interpreter? interpreter;
-  int inputSize = 112; 
-  int embeddingSize = 512; // W600K model output size
-  
+  // Load Recognition Model
+  Interpreter? recognitionInterpreter;
+  int recognitionInputSize = 112; 
+  int embeddingSize = 512;
+
+  // Load Landmark Model (Buffalo_S 1K3D68)
+  Interpreter? landmarkInterpreter;
+  int landmarkInputSize = 192; // Buffalo_S landmark standard
+
   try {
-    // Determine the buffer length and address if necessary, or just copy it.
-    // TFLite Flutter's fromBuffer accepts Uint8List directly.
-    interpreter = Interpreter.fromBuffer(
-      initData.modelBytes,
+    recognitionInterpreter = Interpreter.fromBuffer(
+      initData.recognitionModelBytes,
       options: InterpreterOptions()..threads = 4,
     );
+    print('ISOLATE: Recognition Model loaded successfully');
     
-    print('ISOLATE: Model loaded successfully');
-    
-    // Update shapes
-    final inputTensor = interpreter.getInputTensor(0);
-    final outputTensor = interpreter.getOutputTensor(0);
-    
-    final inputShape = inputTensor.shape;
-    final outputShape = outputTensor.shape;
-    
-    print('ISOLATE: Input Tensor: Shape=$inputShape, Type=${inputTensor.type}');
-    print('ISOLATE: Output Tensor: Shape=$outputShape, Type=${outputTensor.type}');
+    landmarkInterpreter = Interpreter.fromBuffer(
+      initData.landmarkModelBytes,
+      options: InterpreterOptions()..threads = 2,
+    );
+    print('ISOLATE: Landmark Model loaded successfully');
 
-    if (inputShape.length >= 3) inputSize = inputShape[1];
-    if (outputShape.length >= 2) embeddingSize = outputShape[1];
+    // Configure Recognition Model
+    final recInTensor = recognitionInterpreter.getInputTensor(0);
+    final recOutTensor = recognitionInterpreter.getOutputTensor(0);
+    if (recInTensor.shape.length >= 3) recognitionInputSize = recInTensor.shape[1];
+    if (recOutTensor.shape.length >= 2) embeddingSize = recOutTensor.shape[1];
     
-    print('ISOLATE: Configured inputSize=$inputSize, embeddingSize=$embeddingSize');
+    // Configure Landmark Model
+    final lanInTensor = landmarkInterpreter.getInputTensor(0);
+    if (lanInTensor.shape.length >= 3) landmarkInputSize = lanInTensor.shape[1];
+
+    print('ISOLATE: Models Configured. RecInput=$recognitionInputSize, LanInput=$landmarkInputSize, Emb=$embeddingSize');
     
   } catch (e) {
-    print('ISOLATE: Failed to load model: $e');
+    print('ISOLATE: Failed to load models: $e');
   }
 
   receivePort.listen((message) async {
     if (message is InferenceRequest) {
       try {
         img.Image? faceImage;
-
         if (message.imagePath != null) {
           final imageFile = File(message.imagePath!);
           if (!await imageFile.exists()) {
@@ -239,32 +250,44 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           final imageBytes = await imageFile.readAsBytes();
           faceImage = img.decodeImage(imageBytes);
         } else if (message.imageBytes != null && message.imageWidth != null && message.imageHeight != null) {
-          // ✅ OPTIMIZED: Region-Based Conversion
-          // Instead of converting the whole 1280x720 frame (Slow!), we only convert the face area.
+          // ✅ TURBO: Single-Pass Conversion
+          // Instead of converting twice (once for 112 and once for 192), 
+          // we convert once to the highest needed resolution (LandmarkSize).
+          final int maxNeededSize = max(recognitionInputSize, landmarkInputSize);
+          
           faceImage = _convertYUVRegionToImage(
              message.imageBytes!, 
              message.imageWidth!, 
              message.imageHeight!, 
              message.faceData,
-             inputSize,
-             message.rotation ?? 0 // Pass rotation for coordinate mapping
+             maxNeededSize,
+             message.rotation ?? 0
           );
-          
-          // Rotation is now handled by _convertYUVRegionToImage for coordinate mapping.
-          // If the final faceImage needs additional rotation (e.g., from message.rotation), apply it here.
-          // Note: _convertYUVRegionToImage already applies rotation to make the face upright.
         }
 
         if (faceImage == null) {
-          throw Exception('Failed to decode or process image into faceImage');
+          throw Exception('Failed to decode or process image');
         }
         
-        // Final inference
-        final embedding = _runInference(interpreter!, faceImage, inputSize, embeddingSize);
+        // 1. Run Recognition Model (W600K)
+        // Resize if base image is larger than needed
+        final img.Image recImage = (faceImage.width == recognitionInputSize) 
+            ? faceImage 
+            : img.copyResize(faceImage, width: recognitionInputSize, height: recognitionInputSize);
+            
+        final embedding = _runInference(recognitionInterpreter!, recImage, recognitionInputSize, embeddingSize);
         
+        // 2. Run Landmark Model (1K3D68)
+        final img.Image lanImage = (faceImage.width == landmarkInputSize)
+            ? faceImage
+            : img.copyResize(faceImage, width: landmarkInputSize, height: landmarkInputSize);
+
+        final landmarks3d = _runLandmarkInference(landmarkInterpreter!, lanImage, landmarkInputSize);
+
         initData.sendPort.send(InferenceResponse(
           requestId: message.requestId,
           embedding: embedding,
+          landmarks3d: landmarks3d,
           qualityScore: 1.0, 
         ));
 
@@ -335,72 +358,94 @@ img.Image _convertYUVRegionToImage(Uint8List yuvBytes, int frameWidth, int frame
      startX = 0; startY = 0; cropW = min(frameWidth, 200); cropH = min(frameHeight, 200);
   }
 
-  final image = img.Image(width: cropW, height: cropH);
+  // 3. One-Pass Turbo Loop: Crop + Scale + Convert YUV
+  final image = img.Image(width: targetSize, height: targetSize);
   final int frameSize = frameWidth * frameHeight;
   
-  // 3. Convert ONLY the region (High performance loop)
-  for (int y = 0; y < cropH; y++) {
-    final int actualY = startY + y;
-    final int yOffset = actualY * frameWidth;
-    final int uvY = actualY >> 1;
+  final double scaleX = cropW / targetSize;
+  final double scaleY = cropH / targetSize;
+
+  for (int y = 0; y < targetSize; y++) {
+    final int sourceY = startY + (y * scaleY).toInt();
+    final int yOffset = sourceY * frameWidth;
+    final int uvY = sourceY >> 1;
     final int uvRowStart = frameSize + (uvY * frameWidth);
 
-    for (int x = 0; x < cropW; x++) {
-       final int actualX = startX + x;
-       final int yIndex = yOffset + actualX;
-       
-       if (yIndex >= frameSize) break;
-       final int yVal = yuvBytes[yIndex] & 0xFF;
-       
-       final int uvX = actualX & ~1;
-       final int uvIndex = uvRowStart + uvX;
-       
-       int uVal = 128;
-       int vVal = 128;
-       if (uvIndex + 1 < yuvBytes.length) {
-         vVal = yuvBytes[uvIndex] & 0xFF;
-         uVal = yuvBytes[uvIndex + 1] & 0xFF;
-       }
-       
-       // Faster YUV to RGB integer math
-       int r = (yVal + 1.370705 * (vVal - 128)).toInt();
-       int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128)).toInt();
-       int b = (yVal + 1.732446 * (uVal - 128)).toInt();
-       
-       // Manual clamping is faster than .clamp()
-       image.setPixelRgb(x, y, 
-         r < 0 ? 0 : (r > 255 ? 255 : r),
-         g < 0 ? 0 : (g > 255 ? 255 : g),
-         b < 0 ? 0 : (b > 255 ? 255 : b)
-       );
+    for (int x = 0; x < targetSize; x++) {
+      final int sourceX = startX + (x * scaleX).toInt();
+      final int yIndex = yOffset + sourceX;
+      
+      if (yIndex >= frameSize) continue;
+      final int yVal = yuvBytes[yIndex] & 0xFF;
+      
+      final int uvX = sourceX & ~1;
+      final int uvIndex = uvRowStart + uvX;
+      
+      int uVal = 128;
+      int vVal = 128;
+      if (uvIndex + 1 < yuvBytes.length) {
+        vVal = yuvBytes[uvIndex] & 0xFF;
+        uVal = yuvBytes[uvIndex + 1] & 0xFF;
+      }
+      
+      // Integer-only YUV conversion for speed
+      int r = (yVal + (1.370705 * (vVal - 128)).toInt());
+      int g = (yVal - (0.337633 * (uVal - 128)).toInt() - (0.698001 * (vVal - 128)).toInt());
+      int b = (yVal + (1.732446 * (uVal - 128)).toInt());
+      
+      // Fast Clamp
+      r = r < 0 ? 0 : (r > 255 ? 255 : r);
+      g = g < 0 ? 0 : (g > 255 ? 255 : g);
+      b = b < 0 ? 0 : (b > 255 ? 255 : b);
+      
+      image.setPixelRgb(x, y, r, g, b);
     }
   }
 
-  // 4. Resize and Rotate for final model alignment
-  var faceImage = img.copyResize(
-    image, 
-    width: targetSize, 
-    height: targetSize,
-    interpolation: img.Interpolation.nearest
-  );
-
-  // Apply the same rotation to the face crop to make it upright for the AI
+  // 4. Final Processing (Rotation)
+  var faceImage = image;
   if (rotation != 0) {
     faceImage = img.copyRotate(faceImage, angle: rotation);
   }
 
+  // lighting normalization removed here to preserve speed on low-end.
+  // We rely on TFLite model's own normalization if possible.
   return faceImage;
 }
 
-img.Image _enhanceImage(img.Image image) {
-  // ✅ TUNED: Less aggressive enhancement to preserve natural features
+// ✅ NEW: Robust Lighting Normalization (CLAHE-lite)
+img.Image _normalizeLighting(img.Image image) {
+  // 1. Calculate average luminance
+  double totalLuminance = 0;
+  final numPixels = image.width * image.height;
+  
+  for (final pixel in image) {
+    // Standard luminance formula: 0.299R + 0.587G + 0.114B
+    totalLuminance += (0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b);
+  }
+  
+  final avgLuminance = totalLuminance / numPixels;
+  final targetLuminance = 128.0; // Aim for middle gray
+  
+  // 2. Adjust brightness (Gamma-like shift)
+  // If image is too dark, boost it. If too bright, dim it.
+  double adjustmentFactor = targetLuminance / (avgLuminance + 1.0);
+  
+  // Clamp adjustment to prevent extreme artifacts
+  adjustmentFactor = adjustmentFactor.clamp(0.5, 2.0);
+
+  if ((adjustmentFactor - 1.0).abs() < 0.05) return image; // No significant adjustment needed
+
   return img.adjustColor(
     image,
-    brightness: 1.0,  // Neutral
-    contrast: 1.0,    // Neutral
-    saturation: 1.0,  // Neutral
-    gamma: 1.0,       // Neutral
+    brightness: adjustmentFactor,
+    contrast: 1.1, // Slight contrast boost for features
   );
+}
+
+img.Image _enhanceImage(img.Image image) {
+  // ✅ Deprecated: Replaced by _normalizeLighting
+  return image;
 }
 
 img.Image _cropAndAlignFace(img.Image image, Map<String, dynamic> faceData, int inputSize) {
@@ -457,6 +502,36 @@ img.Image _cropAndAlignFace(img.Image image, Map<String, dynamic> faceData, int 
   );
 }
 
+/// Helper to dequantize TFLite output tensors correctly
+List<double> _dequantize(Tensor tensor, dynamic output) {
+  // If the model is already float32, just cast and return
+  if (tensor.type == TensorType.float32) {
+    if (output is List<List<double>>) return List<double>.from(output[0]);
+    if (output is List<double>) return List<double>.from(output);
+    // Dynamic cast if needed
+    final list = (output is List) ? output[0] as List : output as List;
+    return list.map((e) => (e as num).toDouble()).toList();
+  }
+
+  // Dequantization: real_value = (quantized_value - zero_point) * scale
+  double scale = 1.0;
+  int zeroPoint = 0;
+
+  try {
+    final params = tensor.params;
+    scale = params.scale;
+    zeroPoint = params.zeroPoint;
+  } catch (e) {
+    print('ISOLATE: Warning - could not read quantization params: $e');
+  }
+
+  final List<dynamic> rawList = (output is List && output.isNotEmpty && output[0] is List) 
+      ? output[0] 
+      : (output as List);
+      
+  return rawList.map((q) => ((q as num).toInt() - zeroPoint) * scale).toList();
+}
+
 List<double> _runInference(Interpreter interpreter, img.Image faceImage, int inputSize, int embeddingSize) {
   final inputTensor = interpreter.getInputTensor(0);
   final inputType = inputTensor.type;
@@ -470,14 +545,12 @@ List<double> _runInference(Interpreter interpreter, img.Image faceImage, int inp
   } else {
      input = _preprocessImageFloat(faceImage, inputSize);
   }
-
-  // Handle output type
-  final outputTensor = interpreter.getOutputTensor(0);
-  final outputType = outputTensor.type;
   
-  Object output;
-  if (outputType == TensorType.uint8 || outputType == TensorType.int8) {
-    // Both uint8 and int8 use integer lists for output buffer
+  final outputTensor = interpreter.getOutputTensor(0);
+  final dynamic output;
+
+  // Allocate output buffer based on model type
+  if (outputTensor.type == TensorType.uint8 || outputTensor.type == TensorType.int8) {
     output = List.generate(1, (_) => List<int>.filled(embeddingSize, 0));
   } else {
     output = List.generate(1, (_) => List<double>.filled(embeddingSize, 0.0));
@@ -485,39 +558,67 @@ List<double> _runInference(Interpreter interpreter, img.Image faceImage, int inp
 
   interpreter.run(input, output);
   
-  List<double> embedding;
-  if (output is List<List<int>>) {
-    // Apply Dequantization: real_value = (quantized_value - zero_point) * scale
-    // If params are missing, assume symmetric (zp=0, scale=1 or arbitrary since we normalize)
-    // But checking params is safer.
-    
-    // params map might be empty or specific structure in newer tflite_flutter
-    // We try to access scale and zeroPoint directly if exposed, or through params
-    
-    double scale = 1.0;
-    int zeroPoint = 0;
-    
-    try {
-      // Accessing quantization params - API depends on version.
-      // Assuming Tensor.params is available and contains scale/zeroPoint
-      // If version 0.10+:
-      final params = outputTensor.params; 
-      scale = params.scale;
-      zeroPoint = params.zeroPoint;
-    } catch (e) {
-      // Fallback or old version
-      // If int8, usually symmetric around 0.
-      print('ISOLATE: Warning - could not read quantization params: $e');
-    }
-
-    final rawIntList = output[0];
-    embedding = rawIntList.map((q) => (q - zeroPoint) * scale).toList();
-    
-  } else {
-    embedding = List<double>.from((output as List)[0]);
-  }
-
+  final embedding = _dequantize(outputTensor, output);
   return _normalizeEmbedding(embedding);
+}
+
+/// ✅ NEW: High-Precision 3D Landmark Inference (Buffalo_S 1K3D68)
+List<List<double>> _runLandmarkInference(Interpreter interpreter, img.Image image, int inputSize) {
+  // Landmarks model usually expects 0..255 or -1..1. Buffalo_S 1k3d68 usually expects 0..255.
+  final input = _preprocessImageUint8(image, inputSize);
+  
+  final outTensor = interpreter.getOutputTensor(0);
+  final outShape = outTensor.shape;
+  final dynamic output;
+  
+  if (outShape.length == 3) {
+    // [1, N, M] - e.g. [1, 68, 3]
+    if (outTensor.type == TensorType.uint8 || outTensor.type == TensorType.int8) {
+       output = List.generate(outShape[0], (_) => List.generate(outShape[1], (_) => List<int>.filled(outShape[2], 0)));
+    } else {
+       output = List.generate(outShape[0], (_) => List.generate(outShape[1], (_) => List<double>.filled(outShape[2], 0.0)));
+    }
+    
+    interpreter.run(input, output);
+    
+    // Process and dequantize
+    final result = <List<double>>[];
+    final List<dynamic> batch = output[0];
+    for (var point in batch) {
+       final List<dynamic> p = point as List;
+       // We can't use _dequantize here easily for individual points because it expects the whole tensor
+       // but we can manually apply the params if it's quantized.
+       if (outTensor.type != TensorType.float32) {
+          final s = outTensor.params.scale;
+          final z = outTensor.params.zeroPoint;
+          result.add(p.map((v) => ((v as num).toInt() - z) * s).toList());
+       } else {
+          result.add(p.map((v) => (v as num).toDouble()).toList());
+       }
+    }
+    return result;
+  } else {
+    // Flat output like [1, 3309] or [1, 204]
+    final flatSize = outShape.reduce((a, b) => a * b);
+    if (outTensor.type == TensorType.uint8 || outTensor.type == TensorType.int8) {
+       output = List.generate(1, (_) => List<int>.filled(flatSize, 0));
+    } else {
+       output = List.generate(1, (_) => List<double>.filled(flatSize, 0.0));
+    }
+    
+    interpreter.run(input, output);
+    
+    final flatList = _dequantize(outTensor, output);
+    
+    // Reshape to points with x,y,z (Assume triplets)
+    final points = <List<double>>[];
+    final numPoints = flatList.length ~/ 3;
+    
+    for (int i = 0; i < numPoints; i++) {
+      points.add([flatList[i * 3], flatList[i * 3 + 1], flatList[i * 3 + 2]]);
+    }
+    return points;
+  }
 }
 
 // Standard Float32 Preprocessing (-1 to 1)

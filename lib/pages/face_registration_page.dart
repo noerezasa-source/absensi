@@ -23,7 +23,7 @@ class FaceRegistrationPage extends StatefulWidget {
   State<FaceRegistrationPage> createState() => _FaceRegistrationPageState();
 }
 
-enum CaptureAngle { front, left, right, up, down, complete }
+enum CaptureAngle { front, left, right, complete }
 
 class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
@@ -52,6 +52,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   final Map<CaptureAngle, Map<String, dynamic>> _capturedTemplates = {};
   String? _frontImagePath;
 
+  // Deboucing & Auto-clear
+  DateTime? _lastGuidanceUpdate;
+  Timer? _errorTimer;
+
   @override
   void initState() {
     super.initState();
@@ -61,9 +65,45 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   @override
   void dispose() {
     _stopStream();
+    _errorTimer?.cancel();
     _cameraController?.dispose();
     _faceService.dispose();
     super.dispose();
+  }
+
+  // Helper for debouncing guidance messages
+  void _updateGuidance(String message, Color color) {
+    final now = DateTime.now();
+    if (_lastGuidanceUpdate != null && 
+        now.difference(_lastGuidanceUpdate!) < const Duration(milliseconds: 500) &&
+        message == _guidanceMessage) {
+      return; // Skip update if too soon and message is same
+    }
+    
+    if (mounted) {
+      setState(() {
+        _guidanceMessage = message;
+        _overlayColor = color;
+        _lastGuidanceUpdate = now;
+      });
+    }
+  }
+
+  // Helper for auto-clearing errors
+  void _showError(String message) {
+    if (!mounted) return;
+    setState(() {
+      _errorMessage = message;
+    });
+    
+    _errorTimer?.cancel();
+    _errorTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() {
+          _errorMessage = null;
+        });
+      }
+    });
   }
 
   Future<void> _initializeModel() async {
@@ -182,10 +222,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         
         if (validation['isValid'] == true) {
           _consecutiveValidFrames++;
-          setState(() {
-             _overlayColor = Colors.green.withOpacity(0.3);
-             _guidanceMessage = 'Tahan posisi...';
-          });
+          _updateGuidance('Tahan posisi...', Colors.green.withOpacity(0.3));
 
           // Check stability before capturing
           if (_consecutiveValidFrames >= _requiredValidFrames && !_isTakingPicture) {
@@ -203,10 +240,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           }
         } else {
           _consecutiveValidFrames = 0;
-          setState(() {
-            _overlayColor = Colors.orange.withOpacity(0.3);
-            _guidanceMessage = validation['message'] ?? 'Sesuaikan posisi';
-          });
+          _updateGuidance(validation['message'] ?? 'Sesuaikan posisi', Colors.orange.withOpacity(0.3));
         }
       }
     } catch (e) {
@@ -230,41 +264,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final double headX = face.headEulerAngleX ?? 0.0;
     final double headZ = (face.headEulerAngleZ ?? 0.0).abs();
     
-    if (headZ > 35.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'}; // Keep head straight/level
+    if (headZ > 45.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'}; // Relaxed from 35
 
-    // Angle specific validation
-    switch (_currentAngle) {
-      case CaptureAngle.front:
-        if (headY.abs() > 10.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'};
-        if (headX.abs() > 10.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
-        break;
-      case CaptureAngle.left:
-        // Range: 20 to 35 degrees (Reduced from 50)
-        if (headY < 20.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri >>'};
-        if (headY > 35.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
-        break;
-      case CaptureAngle.right:
-        // Range: -35 to -20 degrees (Reduced from -50)
-        if (headY > -20.0) return {'isValid': false, 'message': '<< Miringkan Wajah ke Kanan'};
-        if (headY < -35.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
-        break;
-      case CaptureAngle.up:
-        // Range: 10 to 35 degrees (Up is usually positive X in some libs, but check context: user code said headX < 10 for "Dongakkan", implying negative or positive? 
-        // Wait, original code was `if (headX < 10.0) return msg 'Dongakkan'`. This implies Up requires X > 10.
-        // Let's stick to X > 10.
-        // Range: 10 to 35
-        if (headX < 10.0) return {'isValid': false, 'message': 'Dongakkan Kepala ke Atas'};
-        if (headX > 35.0) return {'isValid': false, 'message': 'Terlalu mendongak!'};
-        break;
-      case CaptureAngle.down:
-        // Original code: `if (headX > -10.0) return msg 'Tundukkan'`. Implies Down requires X < -10.
-        // Range: -35 to -10
-        if (headX > -10.0) return {'isValid': false, 'message': 'Tundukkan Kepala ke Bawah'};
-        if (headX < -35.0) return {'isValid': false, 'message': 'Terlalu menunduk!'};
-        break;
-      default:
-        break;
-    }
+    // Angle specific validation - Simplified to Front Only
+    // Relaxed thresholds: 15 degrees instead of 10
+    if (headY.abs() > 15.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'};
+    if (headX.abs() > 15.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
     
     return {'isValid': true, 'message': 'Sempurna, Tahan!'};
   }
@@ -286,14 +291,15 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       // Quality check
       double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
       
-      // Dynamic Threshold: 0.90 for Front, 0.60 for Angles (due to rotation penalty)
-      double minQuality = _currentAngle == CaptureAngle.front ? 0.90 : 0.60;
+      // Dynamic Threshold: 0.85 for Front (Relaxed from 0.90)
+      double minQuality = 0.85;
       
       if (qualityScore < minQuality) {
         setState(() {
-          _guidanceMessage = 'Kualitas ${(qualityScore*100).toInt()}%. Butuh > ${(minQuality*100).toInt()}%. Coba lagi.';
           _overlayColor = Colors.orange;
         });
+        _updateGuidance('Kualitas ${(qualityScore*100).toInt()}%. Butuh > ${(minQuality*100).toInt()}%. Coba lagi.', Colors.orange);
+        
         await Future.delayed(const Duration(seconds: 2));
         await File(imagePath).delete();
         _isTakingPicture = false;
@@ -303,43 +309,21 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       // Store template
       _capturedTemplates[_currentAngle] = faceTemplate;
-      
-      if (_currentAngle == CaptureAngle.front) {
-        _frontImagePath = imagePath; // Keep front image for profile photo
-      } else {
-        await File(imagePath).delete(); // Delete others
-      }
+      _frontImagePath = imagePath; // Keep front image for profile photo
 
-      // Progress to next angle (5 Steps)
-      if (_currentAngle == CaptureAngle.front) {
-        _currentAngle = CaptureAngle.left;
-        _resetStreamForAngle('Tahap 2: Samping Kiri', 'Miringkan Wajah ke Kiri >>');
-      } else if (_currentAngle == CaptureAngle.left) {
-        _currentAngle = CaptureAngle.right;
-        _resetStreamForAngle('Tahap 3: Samping Kanan', '<< Miringkan Wajah ke Kanan');
-      } else if (_currentAngle == CaptureAngle.right) {
-        _currentAngle = CaptureAngle.up;
-        _resetStreamForAngle('Tahap 4: Agak Mendongak', 'Dongakkan kepala ke ATAS');
-      } else if (_currentAngle == CaptureAngle.up) {
-        _currentAngle = CaptureAngle.down;
-        _resetStreamForAngle('Tahap 5: Agak Menunduk', 'Tundukkan kepala ke BAWAH');
-      } else {
-        _currentAngle = CaptureAngle.complete;
-        setState(() {
-          _guidanceMessage = 'Semua sudut selesai!';
-          _isRegistrationComplete = true;
-          _currentStep = 'Menyimpan Semua Data...';
-        });
-        await _finalizeMultiAngleRegistration();
-      }
+      // SINGLE STEP COMPLETION
+      setState(() {
+        _guidanceMessage = 'Selesai! Menyimpan...';
+        _isRegistrationComplete = true;
+        _currentStep = 'Menyimpan Data...';
+      });
+      await _finalizeMultiAngleRegistration();
 
     } catch (e) {
       debugPrint('Error processing angle: $e');
       _isTakingPicture = false;
       _startImageStream();
-      setState(() {
-        _errorMessage = 'Gagal memproses sudut ini. Coba lagi.';
-      });
+      _showError('Gagal memproses: $e');
     }
   }
   
@@ -361,18 +345,14 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     });
 
     try {
-      // 1. Combine templates into version 4 (Multi-Template)
+      // 1. Combine templates (Just Front now)
       final List<Map<String, dynamic>> combinedList = [];
       if (_capturedTemplates.containsKey(CaptureAngle.front)) combinedList.add(_capturedTemplates[CaptureAngle.front]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.left)) combinedList.add(_capturedTemplates[CaptureAngle.left]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.right)) combinedList.add(_capturedTemplates[CaptureAngle.right]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.up)) combinedList.add(_capturedTemplates[CaptureAngle.up]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.down)) combinedList.add(_capturedTemplates[CaptureAngle.down]!);
       
       final multiTemplate = {
         'version': 4,
         'templates': combinedList,
-        'totalAngles': combinedList.length,
+        'totalAngles': 1, // Changed from combinedList.length or logic
         'enrollmentDate': DateTime.now().toIso8601String(),
       };
 
@@ -403,8 +383,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _showSuccessDialog();
       }
     } catch (e) {
+      _showError('Gagal registrasi: $e');
       setState(() {
-        _errorMessage = 'Gagal registrasi: $e';
         _isLoading = false;
         _isRegistrationComplete = false;
       });
@@ -814,6 +794,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
+    final double viewfinderWidth = screenSize.width * 0.7;
+    final double viewfinderHeight = viewfinderWidth * 1.3;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -831,7 +813,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       ),
       body: Stack(
         children: [
-          // ===== FULL CAMERA BACKGROUND (SAMA SEPERTI ATTENDANCE) =====
+          // 1. FULL CAMERA BACKGROUND
           if (_isCameraInitialized && _cameraController != null)
             Positioned.fill(
               child: FittedBox(
@@ -848,108 +830,165 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               child: CircularProgressIndicator(color: Colors.white),
             ),
 
-          // Face overlay guide
+          // 2. DARKENED OVERLAY WITH VIEWPORT CUTOUT
+          if (_isCameraInitialized && _isModelInitialized)
+            Positioned.fill(
+              child: ColorFiltered(
+                colorFilter: ColorFilter.mode(
+                  Colors.black.withOpacity(0.5),
+                  BlendMode.srcOut,
+                ),
+                child: Stack(
+                  children: [
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.black,
+                        backgroundBlendMode: BlendMode.dstOut,
+                      ),
+                    ),
+                    Center(
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 200), // Lift viewfinder further up
+                        width: viewfinderWidth,
+                        height: viewfinderHeight,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(40),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // 3. WHITE CORNER BRACKETS
           if (_isCameraInitialized && _isModelInitialized)
             Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // ✅ SIMPLIFIED: No progress indicator needed for single pose
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: 280,
-                    height: 350,
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: _isLoading 
-                            ? Colors.green 
-                            : _overlayColor,
-                        width: 3,
-                      ),
-                      borderRadius: BorderRadius.circular(200),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 200), // Lift corners further up to match cutout
+                width: viewfinderWidth,
+                height: viewfinderHeight,
+                child: Stack(
+                  children: [
+                    // Top Left
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      child: _buildCorner(0),
                     ),
+                    // Top Right
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: _buildCorner(1),
+                    ),
+                    // Bottom Left
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      child: _buildCorner(2),
+                    ),
+                    // Bottom Right
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: _buildCorner(3),
+                    ),
+                  ],
+                ),
+               ),
+            ),
+
+          // 4. PROGRESS CARD
+          if (_isCameraInitialized && _isModelInitialized)
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 30, // Positioned slightly lower
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFF8938DF), // Light Purple from Dashboard
+                      Color(0xFF4A1E79), // Dark Purple from Dashboard
+                    ],
                   ),
-                ],
-              ),
-            ),
-
-          // Guidance message overlay
-          if (_guidanceMessage.isNotEmpty && !_isLoading)
-            Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                margin: const EdgeInsets.symmetric(horizontal: 24),
-                decoration: BoxDecoration(
-                  color: _overlayColor == Colors.red 
-                      ? Colors.red.withValues(alpha: 0.9)
-                      : _overlayColor == Colors.orange
-                          ? Colors.orange.withValues(alpha: 0.9)
-                          : Colors.blue.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      _overlayColor == Colors.red 
-                          ? Icons.error_outline
-                          : _overlayColor == Colors.orange
-                              ? Icons.warning_amber
-                              : Icons.face,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _guidanceMessage,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
+                  borderRadius: BorderRadius.circular(36),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.4),
+                      blurRadius: 25,
+                      offset: const Offset(0, 15),
                     ),
                   ],
                 ),
-              ),
-            ),
-
-          // Model status indicator
-          if (!_isModelInitialized)
-            Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                margin: const EdgeInsets.symmetric(horizontal: 24),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    ),
-                    SizedBox(width: 12),
                     Text(
-                      'Loading Model...',
-                      style: TextStyle(
+                      _guidanceMessage.isNotEmpty ? _guidanceMessage : 'Scanning your face...',
+                      style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 22, // Slightly larger like mockup
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _currentStep,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Text(
+                          'PROGRESS',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.8,
+                          ),
+                        ),
+                        Text(
+                          '${_getProgressPercentage().toInt()}%',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        height: 7, // Thinner progress bar
+                        width: double.infinity,
+                        color: Colors.white.withOpacity(0.15),
+                        child: FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: _getProgressPercentage() / 100,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -957,22 +996,21 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               ),
             ),
 
-          // Error message
+          // Error message overlay
           if (_errorMessage != null)
             Positioned(
-              top: 50,
-              left: 0,
-              right: 0,
+              top: 10,
+              left: 20,
+              right: 20,
               child: Container(
                 padding: const EdgeInsets.all(16),
-                margin: const EdgeInsets.symmetric(horizontal: 24),
                 decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.red.withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.error, color: Colors.white),
+                    const Icon(Icons.error_outline, color: Colors.white),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
@@ -980,6 +1018,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 14,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
@@ -988,50 +1027,79 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               ),
             ),
 
-          // Instructions
-          Positioned(
-            bottom: 40,
-            left: 0,
-            right: 0,
-            child: Column(
-              children: [
-                if (_isLoading)
-                  const CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2,
-                  )
-                else
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _isProcessing ? Colors.blue : Colors.white,
-                    ),
-                  ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    _currentStep,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
+          // Loading overlay
+          if (_isLoading)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withOpacity(0.7),
+                child: const Center(
+                  child: CircularProgressIndicator(color: Colors.white),
                 ),
-              ],
+              ),
             ),
-          ),
+        ],
+      ),
+    );
+  }
+
+  double _getProgressPercentage() {
+    // Simplified progress since it's just 1 step now
+    if (_isRegistrationComplete) return 100;
+    if (_isTakingPicture) return 90;
+    if (_consecutiveValidFrames > 0) return 50;
+    return 10;
+  }
+
+  Widget _buildCorner(int position) {
+    const double size = 48; // Larger corner symbols
+    const double thickness = 5; // Bolder corners
+    const double radius = 32; // Rounded corners match cutout
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        children: [
+          if (position == 0) // Top Left
+            Container(
+              decoration: const BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: Colors.white, width: thickness),
+                  left: BorderSide(color: Colors.white, width: thickness),
+                ),
+                borderRadius: BorderRadius.only(topLeft: Radius.circular(radius)),
+              ),
+            ),
+          if (position == 1) // Top Right
+            Container(
+              decoration: const BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: Colors.white, width: thickness),
+                  right: BorderSide(color: Colors.white, width: thickness),
+                ),
+                borderRadius: BorderRadius.only(topRight: Radius.circular(radius)),
+              ),
+            ),
+          if (position == 2) // Bottom Left
+            Container(
+              decoration: const BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: Colors.white, width: thickness),
+                  left: BorderSide(color: Colors.white, width: thickness),
+                ),
+                borderRadius: BorderRadius.only(bottomLeft: Radius.circular(radius)),
+              ),
+            ),
+          if (position == 3) // Bottom Right
+            Container(
+              decoration: const BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: Colors.white, width: thickness),
+                  right: BorderSide(color: Colors.white, width: thickness),
+                ),
+                borderRadius: BorderRadius.only(bottomRight: Radius.circular(radius)),
+              ),
+            ),
         ],
       ),
     );

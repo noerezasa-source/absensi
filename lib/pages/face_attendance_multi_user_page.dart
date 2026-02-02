@@ -104,13 +104,13 @@ class _FaceAttendanceMultiUserPageState
   final Map<int, DateTime> _cooldowns = {};
   
   // Configuration
-  static const int _requiredStableFrames = 0; // Optimized for Instant Recognition
-  static const double _stabilityThreshold = 200.0; // ✅ INCREASED: More tolerant of motion (was 120.0)
+  static const int _requiredStableFrames = 1; // ⚡ REDUCED: Was 2 (Requires 3 frames total). Now 1 (Requires 2 frames total).
+  static const double _stabilityThreshold = 300.0; // 🚀 INCREASED: More tolerant of motion (was 200.0)
   static const Duration _recognitionCooldown = Duration(seconds: 2); // ✅ FASTER: 2s cooldown for quicker re-recognition
   
   // ✅ Adaptive Multi-Frame Configuration (Speed + Accuracy Balance)
-  static const int _multiFrameCount = 2; // ✅ 2 frames for accuracy, but adaptive
-  static const Duration _multiFrameInterval = Duration(milliseconds: 50); // ✅ FASTER: 50ms interval
+  static const int _multiFrameCount = 2; // ✅ REDUCED: 2 frames for faster response while maintaining liveness
+  static const Duration _multiFrameInterval = Duration(milliseconds: 10); // ✅ FASTER: 10ms interval (Rapid burst)
   static const double _maxMovementThreshold = 100.0; // ✅ INCREASED: Allow more movement while walking (was 50.0)
   
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
@@ -190,16 +190,23 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<String?> _downloadAsBase64(String url) async {
+    if (url.isEmpty) return null;
     try {
-      final uri = Uri.parse(url);
+      final uri = Uri.tryParse(url);
+      if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+         // debugPrint('⚠️ Invalid URI skipped: $url');
+         return null;
+      }
+      
       final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 5);
       final request = await client.getUrl(uri);
       final response = await request.close();
       if (response.statusCode != 200) return null;
       final bytes = await consolidateHttpClientResponseBytes(response);
       return base64Encode(bytes);
     } catch (e) {
-      debugPrint('Download to base64 failed: $e');
+      // debugPrint('Download to base64 failed: $e');
       return null;
     }
   }
@@ -600,22 +607,7 @@ class _FaceAttendanceMultiUserPageState
   Future<void> _processCameraImage(CameraImage image) async {
     if (_isProcessing || _isTakingPicture) return;
 
-    final currentTime = DateTime.now().millisecondsSinceEpoch;
-    
-    // ✅ OPTIMIZED THROTTLING for ~2 second recognition
-    int throttleDuration;
-    if (_cooldowns.isNotEmpty) {
-      throttleDuration = 150; // Faster cooldown check
-    } else if (_isIdleMode) {
-      throttleDuration = 400; // Faster idle check
-    } else {
-      throttleDuration = 60; // ✅ ULTRA FAST: 60ms (~16fps) for instant recognition
-    }
-    
-    if (currentTime - _lastProcessingTime < throttleDuration) return;
-    if (_isProcessing) return;
-    
-    // ✅ THROTTLE: Don't process every frame (reduce CPU load)
+    // ✅ THROTTLE: Don't process every frame (~12 FPS)
     final now = DateTime.now();
     if (now.difference(_lastCameraProcess) < _cameraThrottle) return;
     _lastCameraProcess = now;
@@ -906,6 +898,9 @@ class _FaceAttendanceMultiUserPageState
             if (name == 'Unknown') {
                boxColor = Colors.red;
                statusText = null; // Clean UI
+            } else if (name == 'Error') {
+               boxColor = Colors.red.withOpacity(0.5);
+               statusText = 'Error';
             } else {
                boxColor = Colors.green;
                statusText = name;
@@ -930,6 +925,7 @@ class _FaceAttendanceMultiUserPageState
     debugPrint('🎬 Starting multi-frame capture for face $id (${_multiFrameCount} frames)');
     
     final embeddings = <List<double>>[];
+    final templates = <Map<String, dynamic>>[]; // ✅ Added for Phase 4/5 logic
     Map<String, dynamic>? lastTemplate;
     Rect? previousFaceRect;
     
@@ -970,23 +966,48 @@ class _FaceAttendanceMultiUserPageState
           final template = await _faceService.buildTemplateFromBytes(
             bytes, width, height, rotation, face,
             allowSidePose: false,
-            // debugPath: _debugExternalDir, // ❌ REMOVED: Saving debug images is slow during recognition
           );
           
           // Extract embedding array
           final embedding = template['embedding'] as List<dynamic>?;
           if (embedding != null) {
             embeddings.add(embedding.map((e) => (e as num).toDouble()).toList());
-            lastTemplate = template; // Keep last template for metadata
+            templates.add(template); // Store full template for liveness analysis
+            lastTemplate = template; 
             debugPrint('✅ Frame ${i + 1}/${_multiFrameCount} captured');
-            
-            // ✅ ADAPTIVE: If first frame has decent quality, skip second frame for speed
-            if (i == 0 && _multiFrameCount > 1) {
-              final qualityScore = (template['qualityScore'] as num?)?.toDouble() ?? 0.0;
-              if (qualityScore >= 0.65) { // ✅ RELAXED: Skip frame 2 if quality >= 65% (was 85%)
-                debugPrint('🚀 Decent quality (${(qualityScore*100).toInt()}%), skipping frame 2 for speed');
-                break; // Use single frame
-              }
+
+            // --- TURBO FAST-ACCEPT LOGIC (Phase 7/11) ---
+            if (i == 0) {
+               final liveness = _checkBehavioralLiveness([embedding.map((e) => (e as num).toDouble()).toList()], [template]);
+               final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
+                  capturedTemplate: template, 
+                  organizationId: widget.organizationId,
+                  threshold: 0.70,
+                  strict: true,
+               );
+               
+               if (liveness['isLive'] && bestMatch != null) {
+                  final similarity = bestMatch['similarity'] as double? ?? 0.0;
+                  final secondSim = bestMatch['second_similarity'] as double? ?? 0.0;
+                  final gap = similarity - secondSim;
+                  
+                  // --- TURBO FAST-ACCEPT CRITERIA ---
+                  bool isClearMatch = similarity > 0.85 || (similarity > 0.72 && gap > 0.05);
+
+                  if (isClearMatch) {
+                    debugPrint('⚡ TURBO: Immediate Accept (Sim: ${similarity.toStringAsFixed(3)}, Gap: ${gap.toStringAsFixed(3)})');
+                    return {
+                      ...template,
+                      'embedding': embedding.map((e) => (e as num).toDouble()).toList(),
+                      'frame_count': 1,
+                      'multi_frame': false,
+                      'turbo_mode': true,
+                      'liveness_verified': true,
+                      'liveness_detail': liveness,
+                      'matched_user': bestMatch,
+                    };
+                  }
+               }
             }
           }
         } catch (e) {
@@ -1006,9 +1027,18 @@ class _FaceAttendanceMultiUserPageState
         return lastTemplate;
       }
       
-      // Average embeddings
-      final avgEmbedding = _averageEmbeddings(embeddings);
-      debugPrint('✅ Averaged ${embeddings.length} embeddings');
+      // 2. Behavioral Liveness Check
+      final livenessResult = _checkBehavioralLiveness(embeddings, templates);
+      debugPrint('📊 Liveness Result: ${livenessResult['isLive']} - Reason: ${livenessResult['reason']}');
+      
+      if (!livenessResult['isLive']) {
+        debugPrint('🚫 Liveness rejected: ${livenessResult['reason']}');
+        return null;
+      }
+
+      // 3. Weighted Average (Phase 4)
+      final weights = templates.map((t) => (t['qualityScore'] as double? ?? 0.5)).toList();
+      final avgEmbedding = _weightedAverageEmbeddings(embeddings, weights);
       
       // Return template with averaged embedding
       return {
@@ -1016,6 +1046,8 @@ class _FaceAttendanceMultiUserPageState
         'embedding': avgEmbedding,
         'frame_count': embeddings.length,
         'multi_frame': true,
+        'liveness_verified': true,
+        'liveness_detail': livenessResult,
       };
       
     } catch (e) {
@@ -1024,27 +1056,115 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  /// ✅ Average multiple embeddings (element-wise mean)
-  List<double> _averageEmbeddings(List<List<double>> embeddings) {
+  // ✅ Phase 5: Multi-Frame Behavioral Liveness Analysis
+  Map<String, dynamic> _checkBehavioralLiveness(List<List<double>> embeddings, List<Map<String, dynamic>> templates) {
+    if (templates.length < 2) {
+       // Single frame "Turbo" mode assumes liveness if similarity is very high
+       // or relies on 3D depth from isolate
+       final depth = (templates.first['advancedAttributes']?['depthScore'] ?? 0.0) as double;
+       return {
+         'isLive': depth > 0.010, // Base depth check
+         'reason': 'turbo_depth_check',
+         'depthScore': depth,
+       };
+    }
+
+    // 1. Check Eye Variation (Blink Detection) over time
+    double maxEyeOpen = 0.0;
+    double minEyeOpen = 1.0;
+    for (var t in templates) {
+      final left = (t['qualityScores']?['leftEyeOpen'] ?? 0.0) as double;
+      final right = (t['qualityScores']?['rightEyeOpen'] ?? 0.0) as double;
+      final avg = (left + right) / 2;
+      if (avg > maxEyeOpen) maxEyeOpen = avg;
+      if (avg < minEyeOpen) minEyeOpen = avg;
+    }
+    final eyeVariation = maxEyeOpen - minEyeOpen;
+
+    // 2. Check for Pixel-Perfect Identity (Static Image Detection)
+    // If landmarks are EXACTLY the same across frames, it's a photo, not a human.
+    bool pixelPerfectIdentity = true;
+    for (int i = 0; i < templates.length - 1; i++) {
+        final l1 = templates[i]['landmarks'] as Map?;
+        final l2 = templates[i+1]['landmarks'] as Map?;
+        if (l1 != null && l2 != null) {
+          if (l1['noseBase']?['x'] != l2['noseBase']?['x']) {
+            pixelPerfectIdentity = false;
+          }
+        }
+    }
+
+    // 3. Adaptive 3D Depth Check (Anti-Spoofing)
+    double avgDepth = 0.0;
+    double avgArea = 0.0;
+    for (var t in templates) {
+      avgDepth += (t['advancedAttributes']?['depthScore'] ?? 0.0) as double;
+      final bbox = t['boundingBox'] as Map?;
+      if (bbox != null) avgArea += (bbox['width'] as num) * (bbox['height'] as num);
+    }
+    avgDepth /= templates.length;
+    avgArea /= templates.length;
+
+    final double adaptiveThreshold = avgArea > 8000 ? 0.015 : 0.010;
+
+    if (avgDepth < adaptiveThreshold) {
+      return {'isLive': false, 'reason': 'flat_surface_detected', 'depthScore': avgDepth};
+    }
+
+    if (pixelPerfectIdentity) {
+      return {'isLive': false, 'reason': 'static_image_detected'};
+    }
+
+    return {
+      'isLive': true,
+      'reason': eyeVariation > 0.15 ? 'blink_detected' : 'stable_3d_live',
+      'eyeVariation': eyeVariation,
+      'depthScore': avgDepth
+    };
+  }
+
+  // ✅ Phase 4: Weighted average of multiple embeddings
+  List<double> _weightedAverageEmbeddings(List<List<double>> embeddings, List<double> weights) {
     if (embeddings.isEmpty) return [];
+    if (embeddings.length != weights.length) return _averageEmbeddings(embeddings);
     
     final embeddingSize = embeddings.first.length;
     final averaged = List<double>.filled(embeddingSize, 0.0);
+    double totalWeight = 0.0;
     
-    // Sum all embeddings
+    for (int j = 0; j < embeddings.length; j++) {
+      final weight = weights[j];
+      totalWeight += weight;
+      for (int i = 0; i < embeddingSize; i++) {
+        averaged[i] += embeddings[j][i] * weight;
+      }
+    }
+    
+    if (totalWeight == 0) return _averageEmbeddings(embeddings);
+    for (int i = 0; i < embeddingSize; i++) averaged[i] /= totalWeight;
+
+    double sumSquares = 0.0;
+    for (var v in averaged) sumSquares += v * v;
+    final double magnitude = sqrt(sumSquares);
+    return magnitude < 1e-6 ? averaged : averaged.map((v) => v / magnitude).toList();
+  }
+
+  /// ✅ Average multiple embeddings (element-wise mean)
+  List<double> _averageEmbeddings(List<List<double>> embeddings) {
+    if (embeddings.isEmpty) return [];
+    final embeddingSize = embeddings.first.length;
+    final averaged = List<double>.filled(embeddingSize, 0.0);
     for (final embedding in embeddings) {
       for (int i = 0; i < embeddingSize; i++) {
         averaged[i] += embedding[i];
       }
     }
-    
-    // Divide by count to get mean
     final count = embeddings.length.toDouble();
-    for (int i = 0; i < embeddingSize; i++) {
-      averaged[i] /= count;
-    }
-    
-    return averaged;
+    for (int i = 0; i < embeddingSize; i++) averaged[i] /= count;
+    double sumSquares = 0.0;
+    for (var v in averaged) sumSquares += v * v;
+    final double magnitude = sqrt(sumSquares);
+    return magnitude < 1e-6 ? averaged : averaged.map((v) => v / magnitude).toList();
   }
 
   /// ✅ Calculate movement distance between two face rectangles
@@ -1092,7 +1212,7 @@ class _FaceAttendanceMultiUserPageState
            capturedTemplate: template,
            organizationId: widget.organizationId,
            strict: true, // Enforce strict matching
-           threshold: 0.72, // ✅ SPEED: Lowered from 0.75 to 0.72 for faster matching
+           threshold: 0.70, // ✅ Phase 11 tuned
         );
         final matchEnd = stopwatch.elapsedMilliseconds;
         debugPrint('🔍 [BENCH] Matching against database took: ${matchEnd - matchStart}ms');
@@ -1111,9 +1231,7 @@ class _FaceAttendanceMultiUserPageState
              'timestamp': DateTime.now(),
            };
            
-            // Process Attendance Logic - Direct async (no queue)
-            // ✅ OPTIMIZED: Process immediately without queue delays
-            _handleAttendance(result, bytes, template); // Fire and forget
+           _handleAttendance(result, bytes, template); // Fire and forget
             
             if (mounted) {
                SoundHelper.playSuccessSound(); 
@@ -1121,6 +1239,20 @@ class _FaceAttendanceMultiUserPageState
             // ✅ SUCCESS: Cooldown to prevent spam
             _cooldowns[id] = DateTime.now().add(_recognitionCooldown);
 
+            // ✅ NEW: Adaptive Learning (Evolution)
+            final matchedBiometricId = result['biometric_id'] as int?;
+            final currentSim = result['similarity'] as double? ?? 0.0;
+            
+            if (matchedBiometricId != null && currentSim >= 0.90) {
+               final originalTemplate = _biometricService.getParsedTemplateFromCache(matchedBiometricId);
+               if (originalTemplate != null) {
+                  _biometricService.evolveTemplate(
+                    biometricId: matchedBiometricId,
+                    currentTemplate: originalTemplate,
+                    capturedTemplate: template,
+                  );
+               }
+            }
         } else {
            _persistentFaceTracker[id] = {
              'name': 'Unknown',
@@ -1146,7 +1278,10 @@ class _FaceAttendanceMultiUserPageState
        _cooldowns[id] = DateTime.now().add(const Duration(seconds: 1));
     } finally {
        // Transition to COOLDOWN state (duration determined above)
-       _faceStates[id] = FaceTrackingState.cooldown;
+       // ONLY if not already reset to idle (capture failure)
+       if (_faceStates[id] != FaceTrackingState.idle) {
+          _faceStates[id] = FaceTrackingState.cooldown;
+       }
     }
   }
 
@@ -1174,21 +1309,8 @@ class _FaceAttendanceMultiUserPageState
       final isCheckIn = _attendanceMode == 'check_in';
       final attendanceType = isCheckIn ? 'check_in' : 'check_out'; // Fixed logic
       
-      // Check duplicates (offline DB)
-      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
-      
-      final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
-          organizationMemberId: memberId,
-          eventType: attendanceType,
-          attendanceDate: todayStr,
-      );
-      
-      if (alreadyRecorded) {
-          debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping');
-          return;
-      }
-      
-      // ✅ Check Same-Mode Cooldown (5 minutes)
+      // 🏁 RACE FIX: Cooldown check MUST be the very first thing (Sync Check)
+      // Before any await.
       final cooldownKey = '${memberId}_$attendanceType';
       final lastTime = _lastAttendanceTime[cooldownKey];
       
@@ -1197,104 +1319,122 @@ class _FaceAttendanceMultiUserPageState
           final remainingCooldown = _sameModeCooldown - timeSinceLastAttendance;
           
           if (remainingCooldown.isNegative == false) {
-              // Still in cooldown
+             // ... Cooldown Rejection Logic ...
               final remainingMinutes = remainingCooldown.inMinutes;
               final remainingSeconds = remainingCooldown.inSeconds % 60;
-              
               debugPrint('⏳ USER $userName: Same-mode cooldown active. Wait ${remainingMinutes}m ${remainingSeconds}s');
-              
-              if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                          content: Text(
-                              '$userName sudah ${attendanceType == 'check_in' ? 'Check-In' : 'Check-Out'}. '
-                              'Ganti mode atau tunggu ${remainingMinutes}m ${remainingSeconds}s',
-                          ),
-                          backgroundColor: Colors.orange,
-                          duration: const Duration(seconds: 3),
-                      ),
-                  );
-              }
               return;
           }
       }
       
-      // Get Profile Photo Base64 - Skip for speed (optional)
-      // ✅ OPTIMIZED: Reduced timeout to 100ms to prevent delays
-      final profilePhotoBase64 = await _getProfilePhotoBase64(
-          memberId,
-          profilePhotoUrl,
-      ).timeout(const Duration(milliseconds: 100), onTimeout: () => null);
+      // 🔒 IMMEDIATE LOCK (Before DB Check or any Await)
+      _lastAttendanceTime[cooldownKey] = DateTime.now();
+      debugPrint('🔒 LOCKED Cooldown for $userName ($attendanceType) immediately.');
 
-      // Save Offline (Save bytes to file for proof?)
-      // For Kiosk mode, maybe we don't save every file to disk to save space?
-      // Or only on success. 
-      // We use imageBytes directly to encode for DB if needed, but offline DB expects file path.
-      // Let's Skip file saving for speed unless required. 
-      // Saving Base64 directly to DB is supported by _saveOfflineAttendance logic if we modify it, 
-      // but currently it takes localPhotoPath.
-      
-      // Workaround: Use bytes to creating a temp file is expensive.
-      // Just pass null for localPhotoPath and rely on template embedding?
-      // Or base64 encode bytes.
-      
-      String? capturedBase64;
-      // capturedBase64 = base64Encode(imageBytes); // Can be large
-      
-      final offlineId = await _saveOfflineAttendance(
-          memberId: memberId,
-          userName: userName,
-          attendanceType: attendanceType,
-          template: template,
-          localPhotoPath: null, // Skipping file save for speed
-          profilePhotoBase64: profilePhotoBase64,
-      );
-      
-      // ✅ Update Last Attendance Time for Cooldown Tracking
-      if (offlineId != null && offlineId != -1) {
-          _lastAttendanceTime[cooldownKey] = DateTime.now();
-          debugPrint('✅ Updated cooldown tracker for $userName ($attendanceType)');
-      }
-      
-      // Trigger Sync
-       if (_isOnline && offlineId != null && offlineId != -1) {
-          // Delayed sync
-          Timer(const Duration(seconds: 5), () {
-               AttendanceSyncService().syncPendingAttendances();
-          });
-      }
-      
-      // Update Biometric Usage
-      await _biometricService.updateLastUsed(biometricId);
-      
-      // Update UI list
-      if (mounted) {
-          setState(() {
-            _totalProcessedToday++;
-            final now = DateTime.now();
-            final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-            
-            _recentAttendanceList.insert(0, {
-              'name': userName,
-              'department': user['department_name'] ?? '-',
-              'photo_base64': profilePhotoBase64,
-              'time': timeStr,
-              'type': attendanceType,
-              'timestamp': now,
-            });
-             if (_recentAttendanceList.length > 10) _recentAttendanceList.removeLast();
-          });
-      }
-      
+      // 🚀 OPTIMIZATION: HAPPY PATH - UPDATE UI IMMEDIATELY (Phase 9)
       _showMessage(
           'Sukses: $userName (${isCheckIn ? "MASUK" : "KELUAR"})',
           MessageType.success,
           seconds: 2,
       );
 
+      debugPrint('Step 1: UI Update Start');
+      if (mounted) {
+          debugPrint('📋 TOP-LEVEL UI UPDATE: $userName, Dept=${user['department_name']}');
+          setState(() {
+            _totalProcessedToday++;
+            final now = DateTime.now();
+            final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+            
+            // We use the last downloaded photo if available, otherwise fetch in background
+            _recentAttendanceList.insert(0, {
+              'name': userName,
+              'department': user['department_name'] ?? '-',
+              'photo_base64': null, // Will be updated if fetched
+              'time': timeStr,
+              'type': attendanceType,
+              'timestamp': now,
+            });
+            if (_recentAttendanceList.length > 10) _recentAttendanceList.removeLast();
+          });
+      }
+      debugPrint('Step 2: UI Update End');
+
+      // Check duplicates (offline DB) - Now safe to await in background
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+      debugPrint('Step 3: Duplicate Check Start ($todayStr)');
+      
+      final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
+          organizationMemberId: memberId,
+          eventType: attendanceType,
+          attendanceDate: todayStr,
+      );
+      debugPrint('Step 4: Duplicate Check End ($alreadyRecorded)');
+      
+      if (alreadyRecorded) {
+          debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping database write');
+          return;
+      }
+
+      // 📥 BACKGROUND TASKS: Non-blocking
+      debugPrint('Step 5: Background Tasks Start');
+      _processBackgroundAttendance(user, template, attendanceType, memberId, userName, biometricId, profilePhotoUrl);
+      debugPrint('Step 6: HandleAttendance Finished');
+
     } catch(e) {
        debugPrint('Error in handleAttendance: $e');
     }
+  }
+
+  // ✅ New helper for background tasks
+  Future<void> _processBackgroundAttendance(
+    Map<String, dynamic> user,
+    Map<String, dynamic> template,
+    String attendanceType,
+    int memberId,
+    String userName,
+    int biometricId,
+    String? profilePhotoUrl,
+  ) async {
+      try {
+          // 1. Photo Fetch
+          final profilePhotoBase64 = await _getProfilePhotoBase64(memberId, profilePhotoUrl)
+              .timeout(const Duration(seconds: 3), onTimeout: () => null);
+
+          // Update UI with photo if found
+          if (mounted && profilePhotoBase64 != null) {
+              setState(() {
+                  for (var item in _recentAttendanceList) {
+                      if (item['name'] == userName && item['photo_base64'] == null) {
+                          item['photo_base64'] = profilePhotoBase64;
+                          break;
+                      }
+                  }
+              });
+          }
+
+          // 2. Database Save
+          final offlineId = await _saveOfflineAttendance(
+              memberId: memberId,
+              userName: userName,
+              attendanceType: attendanceType,
+              template: template,
+              localPhotoPath: null, 
+              profilePhotoBase64: profilePhotoBase64,
+          );
+
+          // 3. Biometric Evolution & Usage Update
+          await _biometricService.updateLastUsed(biometricId);
+          
+          if (offlineId != null && offlineId != -1) {
+              debugPrint('💾 Saved attendance record for $userName ($attendanceType) to offline DB');
+              if (_isOnline) {
+                  AttendanceSyncService().syncPendingAttendances();
+              }
+          }
+      } catch (e) {
+          debugPrint('❌ Background processing failed for $userName: $e');
+      }
   }
 
   void _cleanupOldTimestamps() {
@@ -1802,211 +1942,90 @@ class _FaceAttendanceMultiUserPageState
                 return Positioned(
                   left: left,
                   top: top,
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOut,
-                    builder: (context, value, child) {
-                      return Opacity(
-                        opacity: value,
-                        child: Transform.scale(
-                          scale: 0.9 + (0.1 * value),
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        // Border Box
-                        Container(
-                          width: width,
-                          height: height,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            border: Border.all(
-                              color: boxColor,
-                              width: 3,
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        // Status/Name Label
-                        if (name != null)
-                          Positioned(
-                            top: height + 8,
-                            left: -20,
-                            right: -20,
-                            child: Container(
-                              constraints: BoxConstraints(
-                                maxWidth: width + 40,
-                                minWidth: 80,
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: boxColor.withOpacity(0.95),
-                                borderRadius: BorderRadius.circular(10),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.4),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 3),
-                                  ),
-                                ],
-                              ),
-                              child: Text(
-                                name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ),
-                      ],
+                  child: CustomPaint(
+                    painter: _FaceBracketPainter(color: boxColor),
+                    child: Container(
+                      width: width,
+                      height: height,
                     ),
                   ),
                 );
               }),
 
-            // Top App Bar
+            // ✅ NEW: Premium Top Bar Overlay
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.6),
-                      Colors.transparent,
-                    ],
+              top: MediaQuery.of(context).padding.top + 10,
+              left: 16,
+              right: 16,
+              child: Row(
+                children: [
+                  // Back Button (Circular Translucent)
+                  _buildCircularActionButton(
+                    icon: Icons.chevron_left,
+                    onTap: () => Navigator.of(context).pop(),
                   ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      onPressed: () async {
-                        final shouldExit = await showDialog<bool>(
-                          context: context,
-                          barrierDismissible: false,
-                          builder: (dialogContext) => AlertDialog(
-                            title: Row(
-                              children: [
-                                Icon(Icons.exit_to_app, color: Colors.red.shade600, size: 24),
-                                const SizedBox(width: 8),
-                                const Text('Keluar?'),
-                              ],
-                            ),
-                            content: Text('Total diproses: $_totalProcessedToday orang\n\nYakin ingin keluar dari mode absensi?'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(dialogContext).pop(false),
-                                child: const Text('Batal'),
-                              ),
-                              ElevatedButton(
-                                onPressed: () => Navigator.of(dialogContext).pop(true),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                  foregroundColor: Colors.white,
-                                ),
-                                child: const Text('Keluar'),
-                              ),
-                            ],
-                          ),
-                        );
-                        
-                        if (shouldExit == true && context.mounted) {
-                          Navigator.of(context).pop(true);
-                        }
-                      },
+                  const Spacer(),
+                  // SESSION COUNT Pill
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E26).withOpacity(0.8),
+                      borderRadius: BorderRadius.circular(30),
+                      border: Border.all(color: Colors.white10),
                     ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _organizationName.isEmpty ? 'Absensi Wajah' : _organizationName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          if (!_isOnline) ...[
-                            const SizedBox(height: 6),
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.red.withValues(alpha: 0.8),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.cloud_off,
-                                    size: 14,
-                                    color: Colors.white,
-                                  ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'Offline',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    Row(
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_organizationMemberId != null)
-                          IconButton(
-                            icon: const Icon(Icons.edit_note, color: Colors.white),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => ManualCheckPage(
-                                    organizationMemberId: _organizationMemberId!,
-                                    memberData: {
-                                      'organization_id': widget.organizationId,
-                                    },
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        IconButton(
-                          icon: const Icon(Icons.more_vert, color: Colors.white),
-                          onPressed: () => _showMenu(context),
+                        const Icon(Icons.people_alt_outlined, color: Color(0xFF9B59B6), size: 20),
+                        const SizedBox(width: 8),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                              'SESSION COUNT',
+                              style: TextStyle(color: Colors.white70, fontSize: 8, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              '$_totalProcessedToday',
+                              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                  const Spacer(),
+                  // Manual Attendance
+                  _buildCircularActionButton(
+                    icon: Icons.assignment_ind_outlined,
+                    onTap: () async {
+                      if (_organizationMemberId != null) {
+                        final success = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ManualCheckPage(
+                              organizationMemberId: _organizationMemberId!,
+                              memberData: {'organization_id': widget.organizationId},
+                            ),
+                          ),
+                        );
+                        if (success == true) {
+                          // Refresh data if needed or show message
+                          _showMessage('Absensi manual berhasil', MessageType.success);
+                        }
+                      } else {
+                        _showMessage('Gagal: Sesi petugas tidak ditemukan', MessageType.error);
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 10),
+                  // Menu Button
+                  _buildCircularActionButton(
+                    icon: Icons.more_vert,
+                    onTap: () => _showMenu(context),
+                  ),
+                ],
               ),
             ),
 
@@ -2175,115 +2194,70 @@ class _FaceAttendanceMultiUserPageState
                                   } else if (photoUrl != null && photoUrl.isNotEmpty) {
                                     avatar = NetworkImage(photoUrl);
                                   }
-                                  
-                                  return TweenAnimationBuilder<double>(
-                                    key: ValueKey(item['timestamp']),
-                                    tween: Tween(begin: 0.0, end: 1.0),
-                                    duration: const Duration(milliseconds: 300),
-                                    curve: Curves.easeOut,
-                                    builder: (context, value, child) {
-                                      return Transform.translate(
-                                        offset: Offset(0, 10 * (1 - value)),
-                                        child: Opacity(opacity: value, child: child),
-                                      );
-                                    },
-                                    child: Container(
-                                      margin: const EdgeInsets.only(bottom: 2), // Reduced margin
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), // Reduced padding
-                                      decoration: BoxDecoration(
-                                        color: index % 2 == 0 ? Colors.grey.shade50 : Colors.white,
-                                        borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(color: Colors.grey.shade200, width: 0.5),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          CircleAvatar(
-                                            radius: 14, // Reduced radius
+
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(40),
+                                      border: Border.all(color: const Color(0xFFE8DAEF), width: 1.2),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        // Compact Avatar with Ring
+                                        Container(
+                                          padding: const EdgeInsets.all(1.5),
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            border: Border.all(color: const Color(0xFF8E44AD).withOpacity(0.15)),
+                                          ),
+                                          child: CircleAvatar(
+                                            radius: 18,
+                                            backgroundColor: Colors.grey.shade100,
                                             backgroundImage: avatar,
                                             child: avatar == null
-                                                ? const Icon(Icons.person, size: 14, color: Colors.white70) // Reduced icon
+                                                ? const Icon(Icons.person, color: Colors.grey, size: 18)
                                                 : null,
                                           ),
-                                          const SizedBox(width: 8),
-                                          // Name and Department
-                                          Expanded(
-                                            flex: 2,
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  item['name'],
-                                                  style: const TextStyle(
-                                                    fontSize: 11, // Reduced font
-                                                    fontWeight: FontWeight.w600,
-                                                    color: Colors.black87,
-                                                  ),
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                                Text(
-                                                  item['department'] ?? '-',
-                                                  style: TextStyle(
-                                                    fontSize: 10, // Reduced font
-                                                    color: Colors.grey.shade600,
-                                                    fontWeight: FontWeight.w500,
-                                                  ),
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          // Time
-                                          Column(
-                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        // Info
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2), // Compact padding
-                                                decoration: BoxDecoration(
-                                                  color: Colors.grey.shade100,
-                                                  borderRadius: BorderRadius.circular(4),
+                                              Text(
+                                                item['name'],
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 14,
+                                                  color: Color(0xFF2C3E50),
                                                 ),
-                                                child: Text(
-                                                  item['time'],
-                                                  style: TextStyle(
-                                                    fontSize: 10, // Reduced font
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.grey.shade800,
-                                                  ),
-                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
-                                              const SizedBox(height: 2), // Reduced gap
-                                              if (item['type'] != null)
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2), // Compact padding
-                                                  decoration: BoxDecoration(
-                                                    color: item['type'] == 'check_in' 
-                                                        ? Colors.green.withOpacity(0.1)
-                                                        : Colors.orange.withOpacity(0.1),
-                                                    borderRadius: BorderRadius.circular(4),
-                                                    border: Border.all(
-                                                      color: item['type'] == 'check_in'
-                                                          ? Colors.green.withOpacity(0.5)
-                                                          : Colors.orange.withOpacity(0.5),
-                                                      width: 0.5,
-                                                    ),
-                                                  ),
-                                                  child: Text(
-                                                    item['type'] == 'check_in' ? 'Masuk' : 'Pulang',
-                                                    style: TextStyle(
-                                                      fontSize: 9, // Reduced font
-                                                      fontWeight: FontWeight.w600,
-                                                      color: item['type'] == 'check_in'
-                                                          ? Colors.green.shade700
-                                                          : Colors.orange.shade800,
-                                                    ),
-                                                  ),
+                                              Text(
+                                                '${item['department'] ?? '-'} • ${item['type'] == 'check_in' ? 'Masuk' : 'Keluar'} • ${item['time']}',
+                                                style: const TextStyle(
+                                                  color: Color(0xFF8E44AD),
+                                                  fontSize: 10.5,
+                                                  fontWeight: FontWeight.w500,
                                                 ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
                                             ],
                                           ),
-                                        ],
-                                      ),
+                                        ),
+                                        // Checkmark
+                                        const Icon(
+                                          Icons.check_circle,
+                                          color: Color(0xFF27AE60),
+                                          size: 24,
+                                        ),
+                                      ],
                                     ),
                                   );
                                 },
@@ -2405,6 +2379,21 @@ class _FaceAttendanceMultiUserPageState
     );
   }
 
+  Widget _buildCircularActionButton({required IconData icon, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.4),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Icon(icon, color: Colors.white, size: 24),
+      ),
+    );
+  }
+
   void _showMenu(BuildContext context) {
     // Direct link to the dynamic mode picker
     _openModePicker();
@@ -2415,6 +2404,61 @@ class _FaceAttendanceMultiUserPageState
   // Helper methods for the hardcoded UI are no longer needed
 
   // Removing buildModeOption to cleanup
+}
+
+/// ✅ NEW: Custom Painter for Face Bracket (VIOLET)
+class _FaceBracketPainter extends CustomPainter {
+  final Color color;
+  final double bracketSize = 25.0;
+  final double bracketWidth = 4.0;
+  final double borderRadius = 30.0;
+
+  _FaceBracketPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Use target violet if the provided color is generic green/red
+    Color drawColor = color;
+    if (color == Colors.green || color == Colors.red || color == Colors.blue) {
+       drawColor = const Color(0xFF8E44AD); // Matches image
+    }
+
+    final paint = Paint()
+      ..color = drawColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    // 1. Draw rounded main box with low opacity
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(borderRadius));
+    canvas.drawRRect(rrect, paint..color = drawColor.withOpacity(0.4));
+
+    // 2. Draw 4 thick corner brackets
+    final bracketPaint = Paint()
+      ..color = drawColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = bracketWidth
+      ..strokeCap = StrokeCap.round;
+
+    // Top-Left
+    canvas.drawLine(const Offset(0, 20), const Offset(0, 0), bracketPaint);
+    canvas.drawLine(const Offset(0, 0), const Offset(20, 0), bracketPaint);
+
+    // Top-Right
+    canvas.drawLine(Offset(size.width - 20, 0), Offset(size.width, 0), bracketPaint);
+    canvas.drawLine(Offset(size.width, 0), Offset(size.width, 20), bracketPaint);
+
+    // Bottom-Left
+    canvas.drawLine(Offset(0, size.height - 20), Offset(0, size.height), bracketPaint);
+    canvas.drawLine(Offset(0, size.height), Offset(20, size.height), bracketPaint);
+
+    // Bottom-Right
+    canvas.drawLine(Offset(size.width - 20, size.height), Offset(size.width, size.height), bracketPaint);
+    canvas.drawLine(Offset(size.width, size.height), Offset(size.width, size.height - 20), bracketPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 

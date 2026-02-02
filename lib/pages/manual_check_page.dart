@@ -37,7 +37,6 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
   bool _isSubmitting = false;
   int? _organizationId;
   final TextEditingController _searchController = TextEditingController();
-  bool _showEmployeeDialog = false;
 
   @override
   void initState() {
@@ -56,18 +55,13 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
 
   Future<void> _loadEmployees() async {
     if (_organizationId == null) {
-      setState(() {
-        _isLoadingEmployees = false;
-      });
+      if (mounted) setState(() => _isLoadingEmployees = false);
       return;
     }
 
     try {
-      setState(() {
-        _isLoadingEmployees = true;
-      });
+      if (mounted) setState(() => _isLoadingEmployees = true);
 
-      // Fetch all active members from the organization
       final response = await _supabase
           .from('organization_members')
           .select('''
@@ -97,14 +91,9 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     } catch (e) {
       debugPrint('Error loading employees: $e');
       if (mounted) {
-        setState(() {
-          _isLoadingEmployees = false;
-        });
+        setState(() => _isLoadingEmployees = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading employees: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -114,7 +103,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     final DateTime? picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 30)),
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
       lastDate: DateTime.now(),
       builder: (context, child) {
         return Theme(
@@ -132,9 +121,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     );
 
     if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-      });
+      setState(() => _selectedDate = picked);
     }
   }
 
@@ -158,50 +145,18 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     );
 
     if (picked != null && picked != _selectedTime) {
-      setState(() {
-        _selectedTime = picked;
-      });
+      setState(() => _selectedTime = picked);
     }
   }
 
   String _getEmployeeName(Map<String, dynamic> employee) {
     final profile = employee['user_profiles'] as Map<String, dynamic>?;
     if (profile == null) return 'Unknown Employee';
-
     final displayName = profile['display_name'] as String?;
-    if (displayName != null && displayName.trim().isNotEmpty) {
-      return displayName.trim();
-    }
-
-    final firstName = profile['first_name'] as String? ?? '';
-    final middleName = profile['middle_name'] as String? ?? '';
-    final lastName = profile['last_name'] as String? ?? '';
-
-    if (middleName.isNotEmpty) {
-      return '$firstName $middleName $lastName'.trim();
-    }
-
-    return '$firstName $lastName'.trim();
-  }
-
-  String? _resolveProfilePhotoUrl(String? storedPath) {
-    if (storedPath == null || storedPath.trim().isEmpty) return null;
-    
-    if (storedPath.startsWith('http://') || storedPath.startsWith('https://')) {
-      return storedPath;
-    }
-
-    final normalizedPath = storedPath.startsWith('mass-profile/')
-        ? storedPath
-        : 'mass-profile/$storedPath';
-
-    try {
-      return _supabase.storage
-          .from('profile-photos')
-          .getPublicUrl(normalizedPath);
-    } catch (_) {
-      return null;
-    }
+    if (displayName != null && displayName.trim().isNotEmpty) return displayName.trim();
+    final first = profile['first_name'] as String? ?? '';
+    final last = profile['last_name'] as String? ?? '';
+    return '$first $last'.trim();
   }
 
   void _filterEmployees(String query) {
@@ -211,10 +166,8 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
       } else {
         _filteredEmployees = _employees.where((employee) {
           final name = _getEmployeeName(employee).toLowerCase();
-          final employeeId = (employee['employee_id'] as String? ?? '').toLowerCase();
-          final searchLower = query.toLowerCase();
-          
-          return name.contains(searchLower) || employeeId.contains(searchLower);
+          final id = (employee['employee_id'] as String? ?? '').toLowerCase();
+          return name.contains(query.toLowerCase()) || id.contains(query.toLowerCase());
         }).toList();
       }
     });
@@ -226,877 +179,363 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     
     await showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return Dialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.85,
-                height: MediaQuery.of(context).size.height * 0.7,
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: Container(
+            width: double.infinity,
+            height: MediaQuery.of(context).size.height * 0.7,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // Header
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Select Employee',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    
-                    // Search Bar
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: 'Search by name or employee ID...',
-                          prefixIcon: const Icon(Icons.search, color: Color(0xFF9333EA)),
-                          suffixIcon: _searchController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, size: 20),
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      _searchController.clear();
-                                      _filterEmployees('');
-                                    });
-                                  },
-                                )
-                              : null,
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                        ),
-                        onChanged: (value) {
-                          setDialogState(() {
-                            _filterEmployees(value);
-                          });
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    
-                    // Employee Count
-                    Text(
-                      '${_filteredEmployees.length} employee(s) found',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    
-                    // Employee List
-                    Expanded(
-                      child: _filteredEmployees.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.person_off,
-                                    size: 64,
-                                    color: Colors.grey.shade300,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    'No employees found',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: Colors.grey.shade600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: _filteredEmployees.length > 10 
-                                  ? 10 
-                                  : _filteredEmployees.length,
-                              itemBuilder: (context, index) {
-                                final employee = _filteredEmployees[index];
-                                final name = _getEmployeeName(employee);
-                                final employeeId = employee['employee_id'] as String?;
-                                final profile = employee['user_profiles'] as Map<String, dynamic>?;
-                                final photoUrl = _resolveProfilePhotoUrl(
-                                  profile?['profile_photo_url'] as String?,
-                                );
-                                final isSelected = _selectedEmployeeId == employee['id'];
-                                
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  decoration: BoxDecoration(
-                                    color: isSelected 
-                                        ? const Color(0xFF9333EA).withOpacity(0.1)
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: isSelected
-                                          ? const Color(0xFF9333EA)
-                                          : Colors.grey.shade200,
-                                      width: isSelected ? 2 : 1,
-                                    ),
-                                  ),
-                                  child: ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    leading: CircleAvatar(
-                                      radius: 24,
-                                      backgroundColor: Colors.grey.shade200,
-                                      backgroundImage: photoUrl != null 
-                                          ? NetworkImage(photoUrl) 
-                                          : null,
-                                      child: photoUrl == null
-                                          ? const Icon(
-                                              Icons.person,
-                                              size: 24,
-                                              color: Colors.grey,
-                                            )
-                                          : null,
-                                    ),
-                                    title: Text(
-                                      name,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                        color: isSelected
-                                            ? const Color(0xFF9333EA)
-                                            : Colors.black87,
-                                      ),
-                                    ),
-                                    subtitle: employeeId != null
-                                        ? Text(
-                                            'ID: $employeeId',
-                                            style: TextStyle(
-                                              fontSize: 13,
-                                              color: Colors.grey.shade600,
-                                            ),
-                                          )
-                                        : null,
-                                    trailing: isSelected
-                                        ? const Icon(
-                                            Icons.check_circle,
-                                            color: Color(0xFF9333EA),
-                                            size: 24,
-                                          )
-                                        : null,
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedEmployeeId = employee['id'] as int;
-                                        _selectedEmployeeName = name;
-                                      });
-                                      Navigator.pop(context);
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
-                    ),
-                    
-                    // Show more indicator
-                    if (_filteredEmployees.length > 10)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Center(
-                          child: Text(
-                            'Showing 10 of ${_filteredEmployees.length} employees. Use search to find more.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade600,
-                              fontStyle: FontStyle.italic,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
+                    const Text('Select Employee', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
                   ],
                 ),
-              ),
-            );
-          },
-        );
-      },
+                TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search...',
+                    prefixIcon: const Icon(Icons.search, color: Color(0xFF9333EA)),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onChanged: (val) => setDialogState(() => _filterEmployees(val)),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _filteredEmployees.length,
+                    itemBuilder: (context, idx) {
+                      final employee = _filteredEmployees[idx];
+                      final name = _getEmployeeName(employee);
+                      return ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.person)),
+                        title: Text(name),
+                        subtitle: Text('ID: ${employee['employee_id'] ?? '-'}'),
+                        onTap: () {
+                          setState(() {
+                            _selectedEmployeeId = employee['id'];
+                            _selectedEmployeeName = name;
+                          });
+                          Navigator.pop(context);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
   Future<void> _submitAttendance() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-
     if (_selectedEmployeeId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select an employee'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select an employee')));
+       return;
     }
 
-    setState(() {
-      _isSubmitting = true;
-    });
-
+    setState(() => _isSubmitting = true);
+    
     try {
-      // Combine date and time
-      final eventDateTime = DateTime(
-        _selectedDate.year,
-        _selectedDate.month,
-        _selectedDate.day,
-        _selectedTime.hour,
-        _selectedTime.minute,
-      );
-
-      // Check if attendance record exists for this date
+      final eventDateTime = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedTime.hour, _selectedTime.minute);
       final attendanceDate = DateFormat('yyyy-MM-dd').format(_selectedDate);
       
-      final existingRecord = await _supabase
+      // Basic check for existing record
+      final existing = await _supabase
           .from('attendance_records')
           .select('id, actual_check_in, actual_check_out')
           .eq('organization_member_id', _selectedEmployeeId!)
           .eq('attendance_date', attendanceDate)
           .maybeSingle();
 
-      // Validasi: Cek apakah sudah ada check in/out untuk event type yang dipilih
-      if (existingRecord != null) {
-        if (_eventType == 'check_in' && existingRecord['actual_check_in'] != null) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Employee already checked in on ${DateFormat('dd MMM yyyy').format(_selectedDate)}',
-                ),
-                backgroundColor: Colors.orange,
-              ),
-            );
-          }
-          setState(() {
-            _isSubmitting = false;
-          });
-          return;
-        }
-        
-        if (_eventType == 'check_out') {
-          if (existingRecord['actual_check_in'] == null) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Employee must check in first before checking out'),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            }
-            setState(() {
-              _isSubmitting = false;
-            });
-            return;
-          }
-          
-          if (existingRecord['actual_check_out'] != null) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Employee already checked out on ${DateFormat('dd MMM yyyy').format(_selectedDate)}',
-                  ),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            }
-            setState(() {
-              _isSubmitting = false;
-            });
-            return;
-          }
-        }
-      } else if (_eventType == 'check_out') {
-        // Jika tidak ada record dan ingin check out
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No check-in record found. Please check in first.'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        setState(() {
-          _isSubmitting = false;
-        });
-        return;
-      }
-
-      Map<String, dynamic> attendanceData;
-      int recordId;
-      
+      Map<String, dynamic> data = {};
       if (_eventType == 'check_in') {
-        attendanceData = {
+        data = {
           'actual_check_in': TimezoneHelper.formatUtcForSupabase(eventDateTime),
           'check_in_method': 'manual',
-          'check_in_location': _locationController.text.isNotEmpty
-              ? {'address': _locationController.text, 'type': 'manual'}
-              : null,
+          'check_in_location': _locationController.text.isNotEmpty ? {'address': _locationController.text, 'type': 'manual'} : null,
         };
       } else {
-        attendanceData = {
+        data = {
           'actual_check_out': TimezoneHelper.formatUtcForSupabase(eventDateTime),
           'check_out_method': 'manual',
-          'check_out_location': _locationController.text.isNotEmpty
-              ? {'address': _locationController.text, 'type': 'manual'}
-              : null,
+          'check_out_location': _locationController.text.isNotEmpty ? {'address': _locationController.text, 'type': 'manual'} : null,
         };
-        
-        // Calculate work duration
-        if (existingRecord != null && existingRecord['actual_check_in'] != null) {
-          final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
-          final workDuration = eventDateTime.toUtc().difference(checkInTime).inMinutes;
-          attendanceData['work_duration_minutes'] = workDuration;
-        }
       }
 
-      if (existingRecord != null) {
-        // Update existing record
-        await _supabase
-            .from('attendance_records')
-            .update(attendanceData)
-            .eq('id', existingRecord['id']);
-        
-        recordId = existingRecord['id'] as int;
+      int recordId;
+      if (existing != null) {
+        await _supabase.from('attendance_records').update(data).eq('id', existing['id']);
+        recordId = existing['id'];
       } else {
-        // Create new record
-        attendanceData.addAll({
+        data.addAll({
           'organization_member_id': _selectedEmployeeId,
           'attendance_date': attendanceDate,
           'status': 'present',
           'validation_status': 'approved',
         });
-
-        final result = await _supabase
-            .from('attendance_records')
-            .insert(attendanceData)
-            .select('id')
-            .single();
-        
-        recordId = result['id'] as int;
+        final res = await _supabase.from('attendance_records').insert(data).select('id').single();
+        recordId = res['id'];
       }
 
-      // Create attendance log with attendance_record_id
+      // Log entry
       await _supabase.from('attendance_logs').insert({
         'organization_member_id': _selectedEmployeeId,
-        'attendance_record_id': recordId, // ← PENTING: Tambahkan ini
+        'attendance_record_id': recordId,
         'event_type': _eventType,
         'event_time': TimezoneHelper.formatUtcForSupabase(eventDateTime),
         'method': 'manual',
-        'location': _locationController.text.isNotEmpty
-            ? {'address': _locationController.text, 'type': 'manual'}
-            : null,
         'is_verified': true,
         'verification_method': 'manual_entry',
-        'raw_data': {
-          'notes': _notesController.text,
-          'entered_by': widget.organizationMemberId,
-        },
+        'raw_data': {'notes': _notesController.text, 'entered_by': widget.organizationMemberId},
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Attendance recorded successfully for $_selectedEmployeeName',
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-
-        // Navigate back to dashboard after successful submission
-        Navigator.of(context).pop(true); // Return true to indicate success
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance recorded successfully!'), backgroundColor: Colors.green));
+        Navigator.pop(context, true);
       }
     } catch (e) {
-      debugPrint('Error submitting attendance: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      debugPrint('Error: $e');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    // Aesthetic Colors from screenshots
+    final bgColor = isDark ? const Color(0xFF130F26) : const Color(0xFFFBFBFF);
+    final cardColor = isDark ? const Color(0xFF1E1E2C) : Colors.white;
+    final textColor = isDark ? Colors.white : const Color(0xFF1E1E2C);
+    final secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
+    final accentColor = const Color(0xFF9333EA);
+    
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: bgColor,
       appBar: AppBar(
-        title: const Text(
-          'Manual Check',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        backgroundColor: const Color(0xFF9333EA),
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
+        centerTitle: true,
+        leading: IconButton(
+          icon: Icon(Icons.chevron_left, color: textColor, size: 32),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
+          'Manual Check', 
+          style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 20)
+        ),
       ),
-      body: _isLoadingEmployees
-          ? const Center(child: CircularProgressIndicator())
+      body: _isLoadingEmployees 
+          ? Center(child: CircularProgressIndicator(color: accentColor))
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Header Card
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF6B46C1), Color(0xFF9333EA)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Icon(
-                              Icons.edit_note,
-                              color: Colors.white,
-                              size: 32,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Manual Attendance',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                SizedBox(height: 4),
-                                Text(
-                                  'Record attendance manually',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.white70,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Employee Selection
-                    const Text(
-                      'Select Employee',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: _showEmployeeSelectionDialog,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: _selectedEmployeeId != null
-                                ? const Color(0xFF9333EA)
-                                : Colors.grey.shade300,
-                            width: _selectedEmployeeId != null ? 2 : 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 10,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.person,
-                              color: _selectedEmployeeId != null
-                                  ? const Color(0xFF9333EA)
-                                  : Colors.grey.shade600,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _selectedEmployeeId != null
-                                  ? Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _selectedEmployeeName ?? 'Selected Employee',
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          'Tap to change',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey.shade600,
-                                          ),
-                                        ),
-                                      ],
-                                    )
-                                  : Text(
-                                      'Choose an employee',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey.shade600,
-                                      ),
-                                    ),
-                            ),
-                            Icon(
-                              Icons.arrow_drop_down,
-                              color: Colors.grey.shade600,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Event Type Selection
-                    const Text(
-                      'Attendance Type',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildEventTypeCard(
-                            'Check In',
-                            'check_in',
-                            Icons.login,
-                            Colors.green,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildEventTypeCard(
-                            'Check Out',
-                            'check_out',
-                            Icons.logout,
-                            Colors.red,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Date and Time
-                    const Text(
-                      'Date & Time',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildDateTimeCard(
-                            DateFormat('dd MMM yyyy').format(_selectedDate),
-                            Icons.calendar_today,
-                            _selectDate,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildDateTimeCard(
-                            _selectedTime.format(context),
-                            Icons.access_time,
-                            _selectTime,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Location (Optional)
-                    const Text(
-                      'Location (Optional)',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: TextFormField(
-                        controller: _locationController,
-                        decoration: const InputDecoration(
-                          hintText: 'Enter location',
-                          prefixIcon: Icon(Icons.location_on, color: Color(0xFF9333EA)),
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 16,
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Notes (Optional)
-                    const Text(
-                      'Notes (Optional)',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: TextFormField(
-                        controller: _notesController,
-                        maxLines: 3,
-                        decoration: const InputDecoration(
-                          hintText: 'Add any notes or remarks',
-                          prefixIcon: Icon(Icons.note, color: Color(0xFF9333EA)),
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 16,
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // Submit Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: _isSubmitting ? null : _submitAttendance,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF9333EA),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: _isSubmitting
-                            ? const SizedBox(
-                                height: 24,
-                                width: 24,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text(
-                                'Submit Attendance',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-                  ],
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _buildEventTypeCard(
-    String label,
-    String type,
-    IconData icon,
-    Color color,
-  ) {
-    final isSelected = _eventType == type;
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _eventType = type;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isSelected ? color.withOpacity(0.1) : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? color : Colors.grey.shade300,
-            width: 2,
-          ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: color.withOpacity(0.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                   _buildSectionTitle('Select Employee', textColor),
+                   const SizedBox(height: 12),
+                   _buildEmployeeSelector(cardColor, textColor, accentColor),
+                   
+                   const SizedBox(height: 24),
+                   _buildSectionTitle('Attendance Type', textColor),
+                   const SizedBox(height: 12),
+                   Row(
+                     children: [
+                       Expanded(child: _buildTypeCard('Check In', 'check_in', Icons.login_rounded, isDark)),
+                       const SizedBox(width: 16),
+                       Expanded(child: _buildTypeCard('Check Out', 'check_out', Icons.logout_rounded, isDark)),
+                     ],
+                   ),
+                   
+                   const SizedBox(height: 24),
+                   _buildSectionTitle('Date & Time', textColor),
+                   const SizedBox(height: 12),
+                   Row(
+                     children: [
+                       Expanded(child: _buildDateTimeBox(DateFormat('dd MMM yyyy').format(_selectedDate), Icons.calendar_month_outlined, isDark, _selectDate)),
+                       const SizedBox(width: 12),
+                       Expanded(child: _buildDateTimeBox(_selectedTime.format(context), Icons.access_time_rounded, isDark, _selectTime)),
+                     ],
+                   ),
+                   
+                   const SizedBox(height: 24),
+                   _buildSectionTitle('Location', textColor, isOptional: true),
+                   const SizedBox(height: 12),
+                   _buildTextField(_locationController, 'Enter location', Icons.location_on_outlined, isDark),
+                   
+                   const SizedBox(height: 24),
+                   _buildSectionTitle('Notes', textColor, isOptional: true),
+                   const SizedBox(height: 12),
+                   _buildTextField(_notesController, 'Add any notes or remarks', Icons.notes_rounded, isDark, maxLines: 4),
+                   
+                   const SizedBox(height: 40),
+                   _buildSubmitButton(accentColor),
+                   const SizedBox(height: 20),
                 ],
-        ),
-        child: Column(
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? color : Colors.grey,
-              size: 32,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: isSelected ? color : Colors.grey,
               ),
             ),
-          ],
-        ),
-      ),
     );
   }
 
-  Widget _buildDateTimeCard(String text, IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
+  Widget _buildSectionTitle(String title, Color color, {bool isOptional = false}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 16)),
+        if (isOptional) Text('(Optional)', style: TextStyle(color: color.withOpacity(0.5), fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _buildEmployeeSelector(Color cardColor, Color textColor, Color accentColor) {
+    return InkWell(
+      onTap: _showEmployeeSelectionDialog,
+      borderRadius: BorderRadius.circular(16),
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          color: cardColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: textColor.withOpacity(0.1)),
           boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
+            BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4)),
           ],
         ),
         child: Row(
           children: [
-            Icon(icon, color: const Color(0xFF9333EA)),
+            Icon(Icons.person_outline, color: accentColor),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                text,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
+                _selectedEmployeeName ?? 'Choose an employee',
+                style: TextStyle(color: textColor.withOpacity(_selectedEmployeeName == null ? 0.5 : 1.0), fontSize: 15),
               ),
             ),
+            Icon(Icons.keyboard_arrow_down_rounded, color: textColor.withOpacity(0.5)),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTypeCard(String label, String type, IconData icon, bool isDark) {
+    final isSelected = _eventType == type;
+    final accentColor = const Color(0xFF9333EA);
+    
+    return InkWell(
+      onTap: () => setState(() => _eventType = type),
+      borderRadius: BorderRadius.circular(20),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        height: 140,
+        decoration: BoxDecoration(
+          color: isSelected 
+              ? (isDark ? accentColor.withValues(alpha: 0.1) : accentColor.withValues(alpha: 0.05))
+              : (isDark ? const Color(0xFF1E1E2C) : Colors.white),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: isSelected ? accentColor.withValues(alpha: 0.8) : Colors.transparent, width: 2),
+          boxShadow: isSelected ? [
+            BoxShadow(color: accentColor.withValues(alpha: 0.3), blurRadius: 15, offset: const Offset(0, 5))
+          ] : [],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+             Icon(icon, size: 32, color: isSelected ? accentColor : (isDark ? Colors.white38 : Colors.black26)),
+             const SizedBox(height: 12),
+             Text(label, style: TextStyle(
+               color: isSelected ? accentColor : (isDark ? Colors.white38 : Colors.black26),
+               fontWeight: FontWeight.bold,
+               fontSize: 16
+             )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateTimeBox(String text, IconData icon, bool isDark, VoidCallback onTap) {
+    final cardColor = isDark ? const Color(0xFF1E1E2C) : Colors.white;
+    final textColor = isDark ? Colors.white : const Color(0xFF1E1E2C);
+    final accentColor = const Color(0xFF9333EA);
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: textColor.withOpacity(0.1)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: accentColor, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(text, style: TextStyle(color: textColor, fontWeight: FontWeight.w500, fontSize: 13))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField(TextEditingController controller, String hint, IconData icon, bool isDark, {int maxLines = 1}) {
+    final cardColor = isDark ? const Color(0xFF1E1E2C) : Colors.white;
+    final textColor = isDark ? Colors.white : const Color(0xFF1E1E2C);
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: textColor.withOpacity(0.1)),
+      ),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        style: TextStyle(color: textColor),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(color: textColor.withOpacity(0.3)),
+          prefixIcon: Icon(icon, color: textColor.withOpacity(0.4)),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubmitButton(Color accentColor) {
+    return Container(
+      width: double.infinity,
+      height: 60,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(colors: [accentColor, accentColor.withValues(alpha: 0.8)]),
+        boxShadow: [
+          BoxShadow(color: accentColor.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 10))
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: _isSubmitting ? null : _submitAttendance,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        child: _isSubmitting 
+          ? const CircularProgressIndicator(color: Colors.white)
+          : const Text('Submit Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
       ),
     );
   }

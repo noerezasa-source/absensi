@@ -26,7 +26,7 @@ class OfflineDatabaseService {
 
     return await openDatabase(
       path,
-      version: 4, // Increment version for migration
+      version: 5, // Increment version for position columns
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -78,6 +78,8 @@ class OfflineDatabaseService {
         profile_photo_base64 TEXT,
         department_id INTEGER,
         department_name TEXT,
+        position_id INTEGER,
+        position_name TEXT,
         organization_id INTEGER NOT NULL,
         user_id TEXT,
         is_active INTEGER DEFAULT 1,
@@ -160,6 +162,12 @@ class OfflineDatabaseService {
       await db.execute('''
         CREATE INDEX IF NOT EXISTS idx_biometric_type ON biometric_data(biometric_type)
       ''');
+    }
+
+    if (oldVersion < 5) {
+      // Add position columns to cached_members
+      await db.execute('ALTER TABLE cached_members ADD COLUMN position_id INTEGER');
+      await db.execute('ALTER TABLE cached_members ADD COLUMN position_name TEXT');
     }
   }
 
@@ -369,6 +377,13 @@ class OfflineDatabaseService {
       final departmentId = memberInfo['department_id'] as int?;
       final departmentName = department?['name'] as String?;
 
+      // Extract position data
+      final position = memberInfo['positions'] is List ? 
+          (memberInfo['positions'].isNotEmpty ? memberInfo['positions'].first : null) : 
+          memberInfo['positions'];
+      final positionId = position?['id'] as int?;
+      final positionName = position?['title'] ?? position?['name'] as String?;
+
       final dataToCache = {
         'organization_member_id': orgMemberId,
         'card_number': cardNumber,
@@ -379,6 +394,8 @@ class OfflineDatabaseService {
         'profile_photo_base64': profilePhotoBase64,
         'department_id': departmentId,
         'department_name': departmentName,
+        'position_id': positionId,
+        'position_name': positionName,
         'organization_id': memberInfo['organization_id'],
         'user_id': memberInfo['user_id'],
         'is_active': 1,
@@ -501,6 +518,12 @@ class OfflineDatabaseService {
               ? {
                   'id': cachedMember['department_id'],
                   'name': cachedMember['department_name'],
+                }
+              : null,
+          'positions': cachedMember['position_name'] != null
+              ? {
+                  'id': cachedMember['position_id'],
+                  'title': cachedMember['position_name'],
                 }
               : null,
         }
@@ -666,6 +689,25 @@ class OfflineDatabaseService {
     }
   }
 
+  // ✅ NEW: Update specific biometric template data
+  Future<void> updateBiometricTemplate({
+    required int biometricId,
+    required String templateData,
+  }) async {
+    try {
+      final db = await database;
+      await db.update(
+        'biometric_data',
+        {'template_data': templateData},
+        where: 'id = ?',
+        whereArgs: [biometricId],
+      );
+      debugPrint('✅ Updated cached biometric template ID: $biometricId');
+    } catch (e) {
+      debugPrint('❌ Error updating cached biometric data: $e');
+    }
+  }
+
   Future<bool> hasBiometricData({
     required int organizationMemberId,
     required String biometricType,
@@ -763,7 +805,9 @@ class OfflineDatabaseService {
           cm.last_name,
           cm.display_name,
           cm.profile_photo_url,
-          cm.department_name
+          cm.department_name,
+          cm.position_name,
+          cm.position_id
         FROM biometric_data bd
         LEFT JOIN cached_members cm ON bd.organization_member_id = cm.organization_member_id
           AND cm.organization_id = ?
@@ -800,6 +844,10 @@ class OfflineDatabaseService {
                 'id': row['department_id'],
                 'name': row['department_name'],
               } : null,
+              'positions': row['position_name'] != null ? {
+                'id': row['position_id'],
+                'title': row['position_name'],
+              } : null,
             } : {
               'id': row['organization_member_id'],
               'user_id': null,
@@ -823,6 +871,25 @@ class OfflineDatabaseService {
     } catch (e) {
       debugPrint('❌ Error getting biometric data from SQLite: $e');
       return [];
+    }
+  }
+
+  // ✅ NEW: Prune old records (Auto-Cleanup)
+  Future<int> pruneOldRecords({int days = 7}) async {
+    try {
+      final db = await database;
+      final cutoffDate = DateTime.now().toUtc().subtract(Duration(days: days)).toIso8601String();
+      debugPrint('🧹 Pruning records older than $days days (Cutoff: $cutoffDate)');
+      final deletedCount = await db.delete(
+        'offline_attendances',
+        where: 'created_at < ?',
+        whereArgs: [cutoffDate],
+      );
+      if (deletedCount > 0) debugPrint('✅ Auto-Pruning: Deleted $deletedCount old records');
+      return deletedCount;
+    } catch (e) {
+      debugPrint('❌ Error during pruning: $e');
+      return 0;
     }
   }
 }

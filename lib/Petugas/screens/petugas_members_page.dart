@@ -1,0 +1,2724 @@
+import 'dart:io';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../services/attendance_service.dart';
+import '../../auth/services/role_service.dart';
+import '../services/member_performance_service.dart';
+import '../../services/face_recognition_tflite_service.dart';
+import '../../services/biometric_service.dart';
+import '../../services/supabase_storage_service.dart';
+import '../../helpers/timezone_helper.dart';
+import '../widgets/petugas_bottom_nav.dart';
+import 'petugas_dashboard.dart';
+import 'petugas_records_page.dart';
+import 'petugas_profile_page.dart';
+import '../../pages/face_registration_page.dart';
+
+class PetugasMembersPage extends StatefulWidget {
+  final bool isDarkMode;
+  final int organizationMemberId;
+  final Map<String, dynamic> memberData;
+  final Map<String, dynamic>? userProfile;
+
+  const PetugasMembersPage({
+    super.key,
+    required this.organizationMemberId,
+    required this.memberData,
+    this.userProfile,
+    this.isDarkMode = false,
+  });
+
+  @override
+  State<PetugasMembersPage> createState() => _PetugasMembersPageState();
+}
+
+class _PetugasMembersPageState extends State<PetugasMembersPage>
+    with SingleTickerProviderStateMixin {
+  static const Color primaryColor = Color(0xFF4A1E79);
+  static const Color primaryDark = Color(0xFF3B1860);
+  static const Color successColor = Color(0xFF10B981);
+  static const Color warningColor = Color(0xFFF59E0B);
+  static const Color errorColor = Color(0xFFEF4444);
+  static const Color backgroundColor = Color(0xFFF8F9FA);
+
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final AttendanceService _attendanceService = AttendanceService();
+  final RoleService _roleService = RoleService();
+  final MemberPerformanceService _performanceService = MemberPerformanceService();
+
+  bool _isInitialLoading = true;
+  bool _isContentLoading = false;
+  bool _isLoadingPerformance = false;
+  bool _isLoadingActivities = false;
+  String? _errorMessage;
+  int _currentNavIndex = 1;
+  String _organizationTimezone = 'Asia/Jakarta';
+  List<Map<String, dynamic>> _organizationMembers = [];
+  Map<String, dynamic>? _organization;
+  Map<String, dynamic> _memberPerformanceStats = {};
+  List<Map<String, dynamic>> _membersPerformance = [];
+  List<Map<String, dynamic>> _recentActivities = [];
+  final TextEditingController _searchController = TextEditingController();
+  String _selectedDepartment = 'All';
+  List<String> _departments = ['All'];
+
+  // Enhancement features state
+  String _selectedTimePeriod = 'This Month';
+  String _selectedSortBy = 'Score';
+  bool _isLoadingComparison = false;
+
+  // Pagination
+  final ScrollController _scrollController = ScrollController();
+  int _currentPage = 1;
+  static const int _pageSize = 20; // Increased page size for better performance
+  int _totalMembers = 0;
+  int _totalPages = 0;
+  DateTime? _lastLoadTime; // Prevent rapid successive loads
+  bool _isPaginationDisabled = false; // Flag to completely disable pagination
+
+  late TabController _tabController;
+  StreamSubscription? _biometricSubscription;
+
+  @override
+  void initState() {
+    _tabController = TabController(length: 3, vsync: this);
+    _scrollController.addListener(_onScroll);
+    _loadDataOptimized();
+    _setupBiometricRealtimeListener();
+  }
+
+
+  void _onScroll() {
+    // Automatic pagination removed - replaced with Load More button
+  }
+
+  @override
+  void dispose() {
+    _biometricSubscription?.cancel();
+    _tabController.dispose();
+    _scrollController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _setupBiometricRealtimeListener() {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    // Listen to biometric_data table changes
+    _biometricSubscription = _supabase
+        .from('biometric_data')
+        .stream(primaryKey: ['id'])
+        .listen((_) {
+          if (!mounted) return;
+          debugPrint('🔄 Biometric data changed, refreshing member list...');
+          // Refresh list to update Face/No Face badges
+          _loadOrganizationMembersOptimized(page: _currentPage);
+        });
+  }
+
+  Future<void> _loadDataOptimized() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    setState(() => _isInitialLoading = true);
+    
+    try {
+      await Future.wait([
+        _loadOrganizationData(),
+        _loadOrganizationMembersOptimized(page: 1, isInitial: true),
+        _loadPerformanceStatsOptimized(),
+      ]);
+    } finally {
+      if (mounted) setState(() => _isInitialLoading = false);
+    }
+    
+    _loadRecentActivitiesOptimized();
+  }
+
+  Future<void> _loadOrganizationMembersOptimized({int page = 1, bool isInitial = false}) async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    if (!mounted) return;
+    setState(() {
+      if (!isInitial) _isContentLoading = true;
+      _currentPage = page;
+    });
+
+    try {
+      final searchQuery = _searchController.text.trim();
+      
+      // Fetch members and total count in parallel if it's page 1 or total count is 0
+      final futures = <Future>[
+        _performanceService.getOrganizationMembers(
+          organizationId,
+          page: _currentPage,
+          limit: _pageSize,
+          searchQuery: searchQuery.isNotEmpty ? searchQuery : null,
+          departmentFilter: _selectedDepartment != 'All' ? _selectedDepartment : null,
+        )
+      ];
+
+      if (_currentPage == 1 || _totalMembers == 0) {
+        futures.add(_performanceService.getOrganizationMembersCount(
+          organizationId,
+          searchQuery: searchQuery.isNotEmpty ? searchQuery : null,
+          departmentFilter: _selectedDepartment != 'All' ? _selectedDepartment : null,
+        ));
+      }
+
+      final results = await Future.wait(futures);
+      final members = results[0] as List<Map<String, dynamic>>;
+      
+      if (mounted) {
+        setState(() {
+          _organizationMembers = members;
+          
+          if (results.length > 1) {
+            _totalMembers = results[1] as int;
+            _totalPages = (_totalMembers / _pageSize).ceil();
+          }
+          
+          _isPaginationDisabled = false;
+          
+          if (_departments.length <= 1) {
+            final deptSet = <String>{'All'};
+            for (final member in members) {
+              final dept = member['departments'] as Map<String, dynamic>?;
+              if (dept != null && dept['name'] != null) {
+                deptSet.add(dept['name'] as String);
+              }
+            }
+            _departments = deptSet.toList();
+          }
+          
+          if (!isInitial) _isContentLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          if (!isInitial) _isContentLoading = false;
+        });
+      }
+    }
+  }
+
+
+  Future<void> _loadPerformanceStatsOptimized() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    debugPrint('=== LOADING PERFORMANCE STATS (OPTIMIZED) ===');
+
+    setState(() => _isLoadingPerformance = true);
+
+    try {
+      // Get organization performance summary (uses aggregated data, not all members)
+      final summary = await _performanceService.getOrganizationPerformanceSummary(organizationId);
+      
+      final now = DateTime.now();
+      final startOfMonth = DateTime(now.year, now.month, 1);
+      final endOfMonth = DateTime(now.year, now.month + 1, 0);
+
+      // Get top performers only (limit to 20 to get better top/bottom performers)
+      final performers = await _performanceService.getMembersPerformanceData(
+        organizationId,
+        startDate: startOfMonth,
+        endDate: endOfMonth,
+        limit: 20,
+      );
+
+        if (mounted) {
+          setState(() {
+            _memberPerformanceStats = summary;
+            _membersPerformance = performers;
+            _isLoadingPerformance = false;
+          });
+          
+          debugPrint('Performance stats loaded: ${_membersPerformance.length}');
+        }
+    } catch (e) {
+      debugPrint('!!! ERROR loading performance stats: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingPerformance = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadRecentActivitiesOptimized() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    debugPrint('=== LOADING RECENT ACTIVITIES (OPTIMIZED) ===');
+
+    if (!mounted) return;
+    setState(() => _isLoadingActivities = true);
+
+    try {
+      final activities = await _performanceService.getRecentMemberActivities(
+        organizationId,
+        limit: 5, // Limit to 5 for faster loading
+      );
+      
+      debugPrint('Recent activities loaded: ${activities.length}');
+      
+      if (mounted) {
+        setState(() {
+          _recentActivities = activities;
+          _isLoadingActivities = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('!!! ERROR loading recent activities: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingActivities = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadOrganizationData() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      final org = await _supabase
+          .from('organizations')
+          .select('id, name, logo_url, timezone')
+          .eq('id', organizationId)
+          .single();
+
+      if (mounted && org != null) {
+        setState(() {
+          _organization = org;
+          if (org['timezone'] != null) {
+            _organizationTimezone = org['timezone'];
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading organization data: $e');
+    }
+  }
+
+  Future<void> _loadOrganizationMembers() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    debugPrint('=== LOADING ORGANIZATION MEMBERS ===');
+    debugPrint('Organization ID: $organizationId');
+    debugPrint('Member data: ${widget.memberData}');
+
+    setState(() => _isInitialLoading = true);
+
+    try {
+      final members = await _performanceService.getOrganizationMembers(organizationId);
+      
+      debugPrint('Received ${members.length} members from service');
+      
+      if (mounted) {
+        setState(() {
+          _organizationMembers = members;
+          
+          // Extract departments for filtering
+          final deptSet = <String>{'All'};
+          for (final member in members) {
+            final dept = member['departments'] as Map<String, dynamic>?;
+            if (dept != null && dept['name'] != null) {
+              deptSet.add(dept['name'] as String);
+            }
+          }
+          _departments = deptSet.toList();
+          
+          _isInitialLoading = false;
+        });
+        
+        debugPrint('State updated - Members: ${_organizationMembers.length}');
+        debugPrint('Departments: $_departments');
+      }
+    } catch (e) {
+      debugPrint('!!! ERROR loading organization members: $e');
+      if (mounted) {
+        setState(() {
+          _isInitialLoading = false;
+          _errorMessage = 'Failed to load members: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _loadPerformanceStats() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    debugPrint('=== LOADING PERFORMANCE STATS ===');
+    debugPrint('Organization ID: $organizationId');
+
+    setState(() => _isLoadingPerformance = true);
+
+    try {
+      // Get organization performance summary
+      final summary = await _performanceService.getOrganizationPerformanceSummary(organizationId);
+      debugPrint('Performance summary received: $summary');
+      
+      final now = DateTime.now();
+      final startOfMonth = DateTime(now.year, now.month, 1);
+      final endOfMonth = DateTime(now.year, now.month + 1, 0);
+
+      // Get top and low performers
+      final performers = await _performanceService.getMembersPerformanceData(
+        organizationId,
+        startDate: startOfMonth,
+        endDate: endOfMonth,
+        limit: 50,
+      );
+      debugPrint('Performers data count: ${performers.length}');
+
+      if (mounted) {
+        setState(() {
+          _memberPerformanceStats = summary;
+          _membersPerformance = performers;
+          _isLoadingPerformance = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('!!! ERROR loading performance stats: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingPerformance = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadRecentActivities() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    debugPrint('=== LOADING RECENT ACTIVITIES ===');
+    debugPrint('Organization ID: $organizationId');
+
+    try {
+      final activities = await _performanceService.getRecentMemberActivities(
+        organizationId,
+        limit: 10,
+      );
+      
+      debugPrint('Recent activities loaded: ${activities.length}');
+      
+      if (mounted) {
+        setState(() {
+          _recentActivities = activities;
+        });
+      }
+    } catch (e) {
+      debugPrint('!!! ERROR loading recent activities: $e');
+    }
+  }
+
+  Future<void> _testDatabaseConnection() async {
+    final organizationId = widget.memberData['organization_id'] as int?;
+    if (organizationId == null) return;
+
+    try {
+      final testResult = await _performanceService.testDatabaseConnection(organizationId);
+      debugPrint('=== DATABASE TEST RESULT ===');
+      debugPrint('Test result: $testResult');
+      
+      if (testResult['error'] != null) {
+        debugPrint('Database connection error: ${testResult['error']}');
+      } else {
+        debugPrint('Database connection successful!');
+        debugPrint('Organization exists: ${testResult['organization_exists']}');
+        debugPrint('Active members: ${testResult['active_members_count']}');
+        debugPrint('Attendance records: ${testResult['attendance_records_count']}');
+      }
+    } catch (e) {
+      debugPrint('!!! ERROR in database test: $e');
+    }
+  }
+
+
+  void _handleNavigation(int index) {
+    if (index == _currentNavIndex) return;
+
+    setState(() {
+      _currentNavIndex = index;
+    });
+
+    switch (index) {
+      case 0:
+        Navigator.popUntil(context, (route) => route.isFirst);
+        break;
+      case 1:
+        // Members - stay on current page
+        break;
+      case 2:
+        Navigator.push<bool>(
+          context,
+          PageRouteBuilder(
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            pageBuilder: (context, _, __) => Container(
+              color: widget.isDarkMode ? const Color(0xFF1F0B38) : const Color(0xFFF8F9FA),
+              child: PetugasRecordsPage(
+                organizationMemberId: widget.organizationMemberId,
+                memberData: widget.memberData,
+                userProfile: widget.userProfile,
+                isDarkMode: widget.isDarkMode,
+              ),
+            ),
+          ),
+        ).then((_) {
+          setState(() {
+            _currentNavIndex = 1;
+          });
+        });
+        break;
+      case 3:
+        Navigator.push<bool>(
+          context,
+          PageRouteBuilder(
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            pageBuilder: (context, _, __) => Container(
+              color: widget.isDarkMode ? const Color(0xFF1F0B38) : const Color(0xFFF8F9FA),
+              child: PetugasProfilePage(
+                organizationMemberId: widget.organizationMemberId,
+                memberData: widget.memberData,
+                userProfile: widget.userProfile,
+                isDarkMode: widget.isDarkMode,
+              ),
+            ),
+          ),
+        ).then((_) {
+          setState(() {
+            _currentNavIndex = 1;
+          });
+        });
+        break;
+    }
+  }
+
+  String _getMemberName(Map<String, dynamic> member) {
+    final profile = member['user_profiles'] as Map<String, dynamic>?;
+    if (profile == null) return 'Unknown User';
+
+    final displayName = profile['display_name'] as String?;
+    if (displayName != null && displayName.trim().isNotEmpty) {
+      return displayName.trim();
+    }
+
+    final firstName = profile['first_name'] as String? ?? '';
+    final lastName = profile['last_name'] as String? ?? '';
+    final fullName = '$firstName $lastName'.trim();
+    return fullName.isEmpty ? 'Unknown User' : fullName;
+  }
+
+  String? _getMemberPhotoUrl(Map<String, dynamic> member) {
+    final profile = member['user_profiles'] as Map<String, dynamic>?;
+    final photoPath = profile?['profile_photo_url'] as String?;
+
+    if (photoPath == null || photoPath.trim().isEmpty) return null;
+
+    if (photoPath.startsWith('http://') || photoPath.startsWith('https://')) {
+      return photoPath;
+    }
+
+    return _supabase.storage
+        .from('profile-photos')
+        .getPublicUrl('mass-profile/$photoPath');
+  }
+
+  String _formatPercentage(double value) {
+    return '${(value * 100).toStringAsFixed(1)}%';
+  }
+
+
+
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isInitialLoading) {
+      return Scaffold(
+        backgroundColor: widget.isDarkMode ? const Color(0xFF1F0B38) : const Color(0xFFF5F5F5),
+        body: const Center(child: CircularProgressIndicator(color: primaryColor)),
+        bottomNavigationBar: PetugasBottomNav(
+          currentIndex: _currentNavIndex,
+          onNavigationTap: _handleNavigation,
+          isDarkMode: widget.isDarkMode,
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: widget.isDarkMode ? const Color(0xFF1F0B38) : const Color(0xFFF8F9FA),
+      body: NestedScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        headerSliverBuilder: (context, innerBoxIsScrolled) {
+          return [
+            SliverToBoxAdapter(
+              child: Container(
+                padding: const EdgeInsets.only(top: 48, bottom: 32),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: widget.isDarkMode
+                        ? [const Color(0xFF2D1B4E), const Color(0xFF1F0B38)]
+                        : [const Color(0xFF8938DF), const Color(0xFF4A1E79)],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+                child: const Center(
+                  child: Text(
+                    'Members Management',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _SliverTabBarDelegate(
+                height: 56.0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: widget.isDarkMode ? const Color(0xFF1F0B38) : null,
+                    border: Border(
+                      bottom: BorderSide(
+                        color: widget.isDarkMode ? Colors.white.withOpacity(0.08) : Colors.grey.withOpacity(0.15),
+                        width: 1.0,
+                      ),
+                    ),
+                    gradient: widget.isDarkMode 
+                        ? null 
+                        : const LinearGradient(
+                            colors: [Color(0xFF8938DF), Color(0xFF4A1E79)],
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                          ),
+                  ),
+                  child: TabBar(
+                    controller: _tabController,
+                    labelColor: Colors.white,
+                    unselectedLabelColor: Colors.white.withOpacity(0.6),
+                    indicatorColor: Colors.white,
+                    indicatorWeight: 3,
+                    indicatorSize: TabBarIndicatorSize.label,
+                    indicatorPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    dividerColor: Colors.transparent,
+                    dividerHeight: 0,
+                    labelStyle: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    unselectedLabelStyle: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    tabs: const [
+                      Tab(text: 'Overview'),
+                      Tab(text: 'Members'),
+                      Tab(text: 'Performance'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ];
+        },
+        body: Container(
+          color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.grey.shade50,
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildOverviewTab(),
+              _buildMembersTab(),
+              _buildPerformanceTab(),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: PetugasBottomNav(
+        currentIndex: _currentNavIndex,
+        onNavigationTap: _handleNavigation,
+        isDarkMode: widget.isDarkMode,
+      ),
+    );
+  }
+
+
+  Widget _buildDefaultLogo() {
+    return Container(
+      width: 42,
+      height: 42,
+      decoration: BoxDecoration(
+        color: primaryColor,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Icon(Icons.business, color: Colors.white, size: 24),
+    );
+  }
+
+  Widget _buildOverviewTab() {
+    return Container(
+      color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.grey.shade50,
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+          // Stats Row: Total Members & Active Members
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatCardModern(
+                  'TOTAL MEMBERS',
+                  '${_memberPerformanceStats['total_members'] ?? 0}',
+                  Icons.groups_rounded,
+                  widget.isDarkMode ? Colors.white.withOpacity(0.1) : const Color(0xFFF3E8FF),
+                  widget.isDarkMode ? Colors.white : const Color(0xFF9333EA),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildStatCardModern(
+                  'ACTIVE MEMBERS',
+                  '${_memberPerformanceStats['active_members'] ?? 0}',
+                  Icons.group_add_rounded,
+                  widget.isDarkMode ? Colors.white.withOpacity(0.1) : const Color(0xFFF3E8FF),
+                  widget.isDarkMode ? Colors.white : const Color(0xFF9333EA),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // Overall Attendance Card
+          _buildOverallAttendanceCard(),
+          const SizedBox(height: 32),
+
+          // Recent Activity Section
+          _buildRecentActivityHeader(),
+          const SizedBox(height: 16),
+          _buildRecentActivityList(),
+          const SizedBox(height: 32),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCardModern(String title, String value, IconData icon, Color bgColor, Color iconColor) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: widget.isDarkMode ? Colors.white10 : const Color(0xFFE9D5FF),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF9333EA).withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: bgColor,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: iconColor, size: 24),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: widget.isDarkMode ? Colors.white54 : const Color(0xFF4B5563),
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: widget.isDarkMode ? Colors.white : const Color(0xFF111827),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverallAttendanceCard() {
+    final attendanceRate = _memberPerformanceStats['avg_attendance_rate'] ?? 0.0;
+    final percentage = (attendanceRate * 100).toStringAsFixed(1);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF6B21A8), Color(0xFF9333EA)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(32),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF9333EA).withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'OVERALL ATTENDANCE',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF34D399),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'LIVE',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '$percentage%',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 48,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Avatar Stack
+              SizedBox(
+                height: 40,
+                width: 120,
+                child: Stack(
+                  children: List.generate(
+                    _organizationMembers.length > 3 ? 4 : _organizationMembers.length,
+                    (index) {
+                      if (index == 3 && _organizationMembers.length > 3) {
+                        return Positioned(
+                          left: index * 26.0,
+                          child: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE9D5FF),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xFF6B21A8), width: 2),
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${_organizationMembers.length - 3}+',
+                                style: const TextStyle(
+                                  color: Color(0xFF6B21A8),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      
+                      final member = _organizationMembers[index];
+                      final photoUrl = _getMemberPhotoUrl(member);
+                      
+                      return Positioned(
+                        left: index * 26.0,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: CircleAvatar(
+                            radius: 17,
+                            backgroundColor: Colors.grey.shade200,
+                            backgroundImage: photoUrl != null 
+                                ? CachedNetworkImageProvider(photoUrl) 
+                                : null,
+                            child: photoUrl == null 
+                                ? const Icon(Icons.person, size: 20, color: Colors.grey) 
+                                : null,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              // Manage Button
+              ElevatedButton(
+                onPressed: () {
+                  _tabController.animateTo(1);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF6B21A8),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+                child: const Text(
+                  'Manage',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecentActivityHeader() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          'Recent Activity',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: widget.isDarkMode ? Colors.white : const Color(0xFF111827),
+          ),
+        ),
+        GestureDetector(
+          onTap: () {
+            // Navigate to full records or something
+          },
+          child: const Text(
+            'View All',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF6B21A8),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRecentActivityList() {
+    if (_isLoadingActivities) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: CircularProgressIndicator(color: primaryColor),
+        ),
+      );
+    }
+
+    if (_recentActivities.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(32),
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100),
+        ),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(
+                Icons.history,
+                size: 48,
+                color: widget.isDarkMode ? Colors.white24 : Colors.grey.shade300,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No activities today',
+                style: TextStyle(
+                  color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade500,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _recentActivities.length,
+      itemBuilder: (context, index) {
+        final activity = _recentActivities[index];
+        final memberName = activity['member_name'] as String? ?? 'Unknown';
+        final eventType = activity['event_type'] as String? ?? 'Unknown';
+        final timeAgo = activity['time_ago'] as String? ?? 'Just now';
+        final method = activity['method'] as String? ?? '';
+        final memberInfo = activity['member_info'] as Map<String, dynamic>? ?? {};
+        
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(widget.isDarkMode ? 0.3 : 0.02),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFE9D5FF), width: 1.5),
+                ),
+                child: CircleAvatar(
+                  radius: 28,
+                  backgroundColor: Colors.grey.shade100,
+                  backgroundImage: _getMemberPhotoUrl(memberInfo) != null
+                      ? CachedNetworkImageProvider(_getMemberPhotoUrl(memberInfo)!)
+                      : null,
+                  child: _getMemberPhotoUrl(memberInfo) == null
+                      ? const Icon(Icons.person, color: Colors.grey, size: 28)
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      memberName,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: widget.isDarkMode ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _buildActivityBadgeModern(eventType),
+                        if (method.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            'via ${method.replaceAll('_', ' ')}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade500,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                timeAgo,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade500,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildActivityBadgeModern(String eventType) {
+    Color color;
+    String label;
+    
+    switch (eventType.toLowerCase()) {
+      case 'check_in':
+        color = const Color(0xFF10B981);
+        label = 'Check In';
+        break;
+      case 'check_out':
+        color = const Color(0xFFEF4444);
+        label = 'Check Out';
+        break;
+      case 'break_start':
+        color = const Color(0xFFF59E0B);
+        label = 'Break Start';
+        break;
+      case 'break_end':
+        color = const Color(0xFF3B82F6);
+        label = 'Break End';
+        break;
+      default:
+        color = Colors.grey;
+        label = eventType.replaceAll('_', ' ');
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActivityBadge(String eventType) {
+    Color color;
+    String label;
+    
+    switch (eventType.toLowerCase()) {
+      case 'check_in':
+        color = const Color(0xFF10B981);
+        label = 'Check In';
+        break;
+      case 'check_out':
+        color = const Color(0xFFEF4444);
+        label = 'Check Out';
+        break;
+      case 'break_start':
+        color = const Color(0xFFF59E0B);
+        label = 'Break Start';
+        break;
+      case 'break_end':
+        color = const Color(0xFF3B82F6);
+        label = 'Break End';
+        break;
+      default:
+        color = Colors.grey;
+        label = eventType.replaceAll('_', ' ');
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+
+
+  Widget _buildMembersTab() {
+    return Container(
+      color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.grey.shade50,
+      child: Column(
+        children: [
+          _buildSummaryCard(),
+          Expanded(
+            child: _buildMembersList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(widget.isDarkMode ? 0.2 : 0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'TOTAL',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade500,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '$_totalMembers Anggota',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF8938DF),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.search, size: 16, color: widget.isDarkMode ? Colors.white54 : Colors.grey),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: widget.isDarkMode ? Colors.white : Colors.black87,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Search...',
+                        hintStyle: TextStyle(
+                          fontSize: 12,
+                          color: widget.isDarkMode ? Colors.white38 : Colors.grey,
+                        ),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      onChanged: (value) {
+                        Future.delayed(const Duration(milliseconds: 600), () {
+                          if (value == _searchController.text) {
+                            _loadOrganizationMembersOptimized();
+                          }
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: widget.isDarkMode ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _selectedDepartment,
+                isDense: true,
+                icon: Icon(Icons.filter_list, size: 16, color: widget.isDarkMode ? Colors.white70 : Colors.grey),
+                style: TextStyle(fontSize: 12, color: widget.isDarkMode ? Colors.white : Colors.black87),
+                dropdownColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+                items: _departments.map((dept) {
+                  return DropdownMenuItem(
+                    value: dept,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 60),
+                      child: Text(dept, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                    ),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _selectedDepartment = value);
+                    _loadOrganizationMembersOptimized();
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  Widget _buildMembersList() {
+    final filteredMembers = _organizationMembers;
+    final isFiltering = _searchController.text.isNotEmpty || _selectedDepartment != 'All';
+    
+    if (_isContentLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(40.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(strokeWidth: 3),
+              SizedBox(height: 16),
+              Text('Searching...', style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (filteredMembers.isEmpty) {
+      return _buildEmptyState(isFiltering);
+    }
+
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+            itemCount: filteredMembers.length,
+            itemBuilder: (context, index) {
+              return _buildMemberCard(filteredMembers[index]);
+            },
+          ),
+        ),
+        _buildPaginationControls(),
+      ],
+    );
+  }
+
+  Widget _buildEmptyState(bool isFiltering) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.people_outline, size: 64, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text(
+              isFiltering ? 'No members found' : 'No members available',
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaginationControls() {
+    if (_totalMembers == 0 && !_isContentLoading) return const SizedBox.shrink();
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.white,
+        border: Border(top: BorderSide(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Previous Button
+          SizedBox(
+            width: 100,
+            child: OutlinedButton(
+              onPressed: _currentPage > 1 ? () => _loadOrganizationMembersOptimized(page: _currentPage - 1) : null,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                side: BorderSide(color: _currentPage > 1 
+                    ? (widget.isDarkMode ? const Color(0xFF8938DF) : primaryColor) 
+                    : (widget.isDarkMode ? Colors.white12 : Colors.grey.shade200)),
+                backgroundColor: _currentPage > 1 && widget.isDarkMode ? const Color(0xFF8938DF).withOpacity(0.05) : null,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.chevron_left, size: 18, color: _currentPage > 1 
+                      ? (widget.isDarkMode ? const Color(0xFFA855F7) : primaryColor) 
+                      : Colors.grey),
+                  const SizedBox(width: 4),
+                  Text('Prev', style: TextStyle(
+                    color: _currentPage > 1 
+                        ? (widget.isDarkMode ? const Color(0xFFA855F7) : primaryColor) 
+                        : Colors.grey, 
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  )),
+                ],
+              ),
+            ),
+          ),
+          
+          // Page Info (Centered)
+          Expanded(
+            child: InkWell(
+              onTap: _showJumpToPageDialog,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Page $_currentPage of $_totalPages',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: widget.isDarkMode ? const Color(0xFFD8B4FE) : Colors.black87,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      '$_totalMembers Total Members',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: widget.isDarkMode ? Colors.white38 : Colors.grey.shade500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          
+          // Next Button
+          SizedBox(
+            width: 100,
+            child: OutlinedButton(
+              onPressed: _currentPage < _totalPages ? () => _loadOrganizationMembersOptimized(page: _currentPage + 1) : null,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                side: BorderSide(color: _currentPage < _totalPages 
+                    ? (widget.isDarkMode ? const Color(0xFF8938DF) : primaryColor) 
+                    : (widget.isDarkMode ? Colors.white12 : Colors.grey.shade200)),
+                backgroundColor: _currentPage < _totalPages && widget.isDarkMode ? const Color(0xFF8938DF).withOpacity(0.05) : null,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Next', style: TextStyle(
+                    color: _currentPage < _totalPages 
+                        ? (widget.isDarkMode ? const Color(0xFFA855F7) : primaryColor) 
+                        : Colors.grey, 
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  )),
+                  const SizedBox(width: 4),
+                  Icon(Icons.chevron_right, size: 18, color: _currentPage < _totalPages 
+                      ? (widget.isDarkMode ? const Color(0xFFA855F7) : primaryColor) 
+                      : Colors.grey),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showJumpToPageDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        title: Text(
+          'Go to Page',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: widget.isDarkMode ? Colors.white : Colors.black87,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Enter page number (1-$_totalPages):',
+              style: TextStyle(color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade600, fontSize: 14),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              style: TextStyle(color: widget.isDarkMode ? Colors.white : Colors.black87),
+              decoration: InputDecoration(
+                hintText: 'e.g. 49',
+                hintStyle: TextStyle(color: widget.isDarkMode ? Colors.white30 : Colors.grey),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade300),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade300),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final page = int.tryParse(controller.text);
+              if (page != null && page >= 1 && page <= _totalPages) {
+                Navigator.pop(context);
+                _loadOrganizationMembersOptimized(page: page);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Please enter a valid page between 1 and $_totalPages')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Go'),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  Widget _buildMemberCard(Map<String, dynamic> member) {
+    final department = member['departments'] as Map<String, dynamic>?;
+    final position = member['positions'] as Map<String, dynamic>?;
+    
+    String roleName = 'Member';
+    final posTitle = position?['title'] ?? position?['name'];
+    if (department != null && posTitle != null) {
+      roleName = '${department['name']} • $posTitle';
+    } else {
+      roleName = posTitle ?? department?['name'] ?? 'Member';
+    }
+    
+    final photoUrl = _getMemberPhotoUrl(member);
+    final accentColor = const Color(0xFF8938DF);
+    final softAccent = accentColor.withValues(alpha: 0.1);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: widget.isDarkMode ? 0.2 : 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: () => _showMemberDetail(member),
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              // Circular Profile Photo
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.grey.shade100,
+                  border: Border.all(
+                    color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade50,
+                    width: 2,
+                  ),
+                ),
+                child: ClipOval(
+                  child: photoUrl != null
+                      ? CachedNetworkImage(
+                          imageUrl: photoUrl,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => Container(color: Colors.grey.shade50),
+                          errorWidget: (context, url, error) => Icon(
+                            Icons.person,
+                            color: Colors.grey.shade400,
+                            size: 30,
+                          ),
+                        )
+                      : Icon(
+                          Icons.person,
+                          color: Colors.grey.shade400,
+                          size: 30,
+                        ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              // Member Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _getMemberName(member),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: widget.isDarkMode ? Colors.white : Colors.black87,
+                        letterSpacing: -0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      roleName,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: widget.isDarkMode ? Colors.white54 : const Color(0xFF8938DF).withValues(alpha: 0.7),
+                        fontWeight: FontWeight.w500,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              // Action Buttons
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildMemberActionIcon(
+                    Icons.chat_bubble_outline_rounded,
+                    softAccent,
+                    accentColor,
+                    () {
+                      // Handle chat
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  _buildMemberActionIcon(
+                    Icons.phone_outlined,
+                    softAccent,
+                    accentColor,
+                    () {
+                      // Handle phone
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMemberActionIcon(
+    IconData icon,
+    Color bgColor,
+    Color iconColor,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? Colors.white.withValues(alpha: 0.05) : bgColor,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          icon,
+          size: 18,
+          color: widget.isDarkMode ? Colors.white70 : iconColor,
+        ),
+      ),
+    );
+  }
+
+  void _showMemberDetail(Map<String, dynamic> member) {
+    final department = member['departments'] as Map<String, dynamic>?;
+    final position = member['positions'] as Map<String, dynamic>?;
+    
+    String deptName = 'No Department';
+    final posTitle = position?['title'] ?? position?['name'];
+    if (department != null && posTitle != null) {
+      deptName = '${department['name']} • $posTitle';
+    } else {
+      deptName = posTitle ?? department?['name'] ?? 'No Department';
+    }
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.white24 : Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 24),
+            CircleAvatar(
+              radius: 40,
+              backgroundColor: Colors.grey.shade200,
+              backgroundImage: _getMemberPhotoUrl(member) != null
+                  ? CachedNetworkImageProvider(_getMemberPhotoUrl(member)!)
+                  : null,
+              child: _getMemberPhotoUrl(member) == null
+                  ? const Icon(Icons.person, size: 40, color: Colors.grey)
+                  : null,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _getMemberName(member),
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: widget.isDarkMode ? Colors.white : Colors.black87,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                deptName,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: widget.isDarkMode ? Colors.white70 : Colors.grey.shade700,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            const SizedBox(height: 32),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildDetailStat(
+                    'Attendance',
+                    _formatPercentage(member['performance_stats']?['attendance_rate'] ?? 0.0),
+                    Icons.calendar_today,
+                    const Color(0xFFF59E0B),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildDetailStat(
+                    'Punctuality',
+                    _formatPercentage(member['performance_stats']?['punctuality_rate'] ?? 0.0),
+                    Icons.schedule,
+                    const Color(0xFF8B5CF6),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _showRegistrationOptions(member),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8938DF),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  elevation: 4,
+                  shadowColor: const Color(0xFF8938DF).withOpacity(0.4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                icon: const Icon(Icons.face_retouching_natural, size: 24),
+                label: const Text(
+                  'Register Face',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    letterSpacing: 0.5,
+                  ),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: widget.isDarkMode ? Colors.white : primaryColor,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  side: BorderSide(color: widget.isDarkMode ? Colors.white38 : primaryColor, width: widget.isDarkMode ? 1.5 : 1),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: const Text(
+                  'Close',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRegistrationOptions(Map<String, dynamic> member) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Face Registration',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: widget.isDarkMode ? Colors.white : Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Pilih metode registrasi wajah sesuai kebutuhan.',
+              style: TextStyle(fontSize: 13, color: widget.isDarkMode ? Colors.white54 : Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.blue.withOpacity(0.15) : Colors.blue.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: widget.isDarkMode ? Colors.blue.withOpacity(0.3) : Colors.blue.withOpacity(0.2)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                   Row(
+                    children: [
+                      Icon(Icons.check_circle, size: 14, color: Color(0xFF10B981)),
+                      SizedBox(width: 6),
+                      Text('Live Camera: 5 Sudut (Akurasi Tinggi)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: widget.isDarkMode ? Colors.white70 : Colors.black87)),
+                    ],
+                   ),
+                   SizedBox(height: 4),
+                   Row(
+                    children: [
+                      Icon(Icons.check_circle, size: 14, color: primaryColor),
+                      SizedBox(width: 6),
+                      Text('Upload Photo: 1 Foto Depan (Praktis)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: widget.isDarkMode ? Colors.white70 : Colors.black87)),
+                    ],
+                   ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildOptionCard(
+                    'Live Camera',
+                    Icons.face_retouching_natural,
+                    const Color(0xFF10B981),
+                    () {
+                      Navigator.pop(context); // Close options
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => FaceRegistrationPage(
+                            organizationMemberId: member['id'],
+                          ),
+                        ),
+                      ).then((refresh) {
+                        if (refresh == true) _loadOrganizationMembersOptimized();
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildOptionCard(
+                    'Upload Photos',
+                    Icons.photo_library_rounded,
+                    primaryColor,
+                    () {
+                      Navigator.pop(context);
+                      _registerFaceFromSinglePhoto(member);
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptionCard(String label, IconData icon, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        decoration: BoxDecoration(
+          color: color.withOpacity(widget.isDarkMode ? 0.15 : 0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withOpacity(widget.isDarkMode ? 0.3 : 0.1)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 32),
+            const SizedBox(height: 12),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _registerFaceFromSinglePhoto(Map<String, dynamic> member) async {
+    final faceService = FaceRecognitionTFLiteService();
+    final organizationMemberId = member['id'] as int?;
+    
+    if (organizationMemberId == null) return;
+
+    try {
+      await faceService.initialize();
+      final ImagePicker picker = ImagePicker();
+
+      // Single photo picker
+      final XFile? image = await showDialog<XFile?>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          backgroundColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          title: Text(
+            'Pilih Foto Wajah Depan',
+            style: TextStyle(color: widget.isDarkMode ? Colors.white : Colors.black87),
+          ),
+          content: Text(
+            'Pastikan foto:\n'
+            '1. Wajah menghadap lurus ke depan\n'
+            '2. Pencahayaan terang & jelas\n'
+            '3. Tidak memakai masker/kacamata gelap',
+            style: TextStyle(
+              fontSize: 14,
+              color: widget.isDarkMode ? Colors.white70 : Colors.black87,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context), 
+              child: const Text('Batal')
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 100);
+                if (mounted) Navigator.pop(context, img);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8938DF),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Buka Galeri'),
+            ),
+          ],
+        ),
+      );
+
+      if (image == null) return; // User cancelled
+
+      if (!mounted) return;
+      _showProcessingOverlay(context, 'Memproses foto & Menyimpan data...');
+
+      try {
+        final faceTemplate = await faceService.extractFaceFeatures(
+          image.path,
+          allowSidePose: false, // Strict check for single upload
+        );
+
+        // Quality check
+        double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+        if (qualityScore < 0.65) {
+            throw Exception('Kualitas foto kurang baik (Score: ${(qualityScore*100).toInt()}%). Gunakan foto yang lebih jelas.');
+        }
+
+        final biometricService = BiometricService();
+        final storageService = SupabaseStorageService();
+
+        // 1. Upload Photo
+        final processedFile = File(image.path); // Or add compression if needed
+        await storageService.uploadFaceTemplate(processedFile, organizationMemberId);
+        
+        // 2. Register Template to DB (Version 5 - Single)
+        await biometricService.registerFaceTemplate(
+          organizationMemberId: organizationMemberId,
+          faceTemplate: faceTemplate,
+        );
+
+        if (mounted) {
+          Navigator.of(context).pop(); // Close processing overlay safely
+          _showSuccessSnackBar('Wajah ${_getMemberName(member)} berhasil didaftarkan (Single Mode)!');
+          _loadOrganizationMembersOptimized();
+        }
+
+      } catch (e) {
+        if (mounted) Navigator.of(context).pop(); // Close processing overlay on error
+        _showErrorDialog('Gagal: $e');
+      }
+
+    } catch (e) {
+      debugPrint('Single-photo reg error: $e');
+      // If overlay was shown, ensure it's popped (though the inner catch handles most)
+       // Check if we are still in a dialog context if needed, but safest is to rely on user report or inner catch.
+      if (mounted) _showErrorDialog('Terjadi kesalahan sistem: $e');
+    } finally {
+      faceService.dispose();
+    }
+  }
+
+
+
+  void _showProcessingOverlay(BuildContext context, String message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Card(
+          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
+                Text(
+                  message,
+                  style: TextStyle(color: widget.isDarkMode ? Colors.white70 : Colors.black87),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        title: Text(
+          'Gagal',
+          style: TextStyle(color: widget.isDarkMode ? Colors.white : Colors.black87),
+        ),
+        content: Text(
+          message,
+          style: TextStyle(color: widget.isDarkMode ? Colors.white70 : Colors.black87),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          )
+        ],
+      ),
+    );
+  }
+
+  // Legacy kept for now but unused in flow
+  Future<void> _registerFaceFromPhoto(Map<String, dynamic> member, {required ImageSource source}) async {}
+
+  void _showSuccessSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: const Color(0xFF10B981),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+
+  Widget _buildDetailStat(String label, String value, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.1)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: color,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade600,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+  Widget _buildPerformanceTab() {
+    return Container(
+      color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.grey.shade50,
+      child: RefreshIndicator(
+        onRefresh: () async {
+          await _loadOrganizationMembersOptimized();
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 24),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: _buildFilterSection(),
+              ),
+              
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(widget.isDarkMode ? 0.2 : 0.05),
+                        blurRadius: 15,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Unified Ranked List
+                      ..._buildPerformersList(),
+                      
+                      const SizedBox(height: 12),
+                      
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildPerformersList() {
+    final sortedList = List<Map<String, dynamic>>.from(_membersPerformance)
+      ..sort((a, b) {
+        final aStats = a['performance_stats'] as Map<String, dynamic>;
+        final bStats = b['performance_stats'] as Map<String, dynamic>;
+        if (_selectedSortBy == 'Score') {
+          return (bStats['productivity_score'] as num).compareTo(aStats['productivity_score'] as num);
+        } else {
+          return (bStats['present_days'] as num).compareTo(aStats['present_days'] as num);
+        }
+      });
+
+    final displayList = sortedList.take(10).toList();
+
+    if (displayList.isEmpty) {
+      return [
+        const Center(
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 40),
+            child: Text('No performance data available'),
+          ),
+        )
+      ];
+    }
+
+    return List.generate(displayList.length, (index) {
+      final performer = displayList[index];
+      final performance = performer['performance_stats'] as Map<String, dynamic>;
+      
+      return _buildPerformerListItem(
+        performer, // performer map contains member details
+        performance,
+        index + 1,
+        index < 3,
+      );
+    });
+  }
+
+  Widget _buildFilterSection() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          // Period Picker
+          Expanded(
+            child: Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.white.withOpacity(0.03) : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    'PERIOD',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: widget.isDarkMode ? Colors.white38 : Colors.grey.shade500,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _selectedTimePeriod,
+                        isExpanded: true,
+                        isDense: true,
+                        icon: Icon(Icons.keyboard_arrow_down, size: 18, color: widget.isDarkMode ? Colors.white38 : Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: widget.isDarkMode ? Colors.white70 : Colors.black87,
+                        ),
+                        dropdownColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+                        items: ['Today', 'This Week', 'This Month', 'Last Month']
+                            .map((period) => DropdownMenuItem(
+                                  value: period,
+                                  child: Text(period, overflow: TextOverflow.ellipsis),
+                                ))
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _selectedTimePeriod = value);
+                            _applyFilters();
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Sort Picker
+          Expanded(
+            child: Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.white.withOpacity(0.03) : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    'SORT',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: widget.isDarkMode ? Colors.white38 : Colors.grey.shade500,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _selectedSortBy, // Use the value directly
+                        isExpanded: true,
+                        isDense: true,
+                        icon: Icon(Icons.sort_rounded, size: 18, color: widget.isDarkMode ? Colors.white38 : Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: widget.isDarkMode ? Colors.white70 : Colors.black87,
+                        ),
+                        dropdownColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+                        items: ['Score', 'Logs']
+                            .map((sort) => DropdownMenuItem(
+                                  value: sort,
+                                  child: Text(sort, overflow: TextOverflow.ellipsis),
+                                ))
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _selectedSortBy = value);
+                            _applyFilters();
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+  Future<void> _applyFilters() async {
+    setState(() => _isLoadingPerformance = true);
+    
+    try {
+      final organizationId = widget.memberData['organization_id'] as int;
+      
+      // Map time period to service parameter
+      String timePeriod;
+      switch (_selectedTimePeriod) {
+        case 'Today':
+          timePeriod = 'today';
+          break;
+        case 'This Week':
+          timePeriod = 'week';
+          break;
+        case 'This Month':
+          timePeriod = 'month';
+          break;
+        case 'Last Month':
+          timePeriod = 'custom';
+          break;
+        default:
+          timePeriod = 'month';
+      }
+      
+      // Map sort by to service parameter
+      String sortBy;
+      if (_selectedSortBy == 'Score') {
+        sortBy = 'productivity';
+      } else {
+        sortBy = 'attendance';
+      }
+      
+      final filteredData = await _performanceService.getFilteredPerformance(
+        organizationId,
+        timePeriod: timePeriod,
+        sortBy: sortBy,
+      );
+      
+      setState(() {
+        _membersPerformance = filteredData;
+        _isLoadingPerformance = false;
+      });
+      
+    } catch (e) {
+      debugPrint('Error applying filters: $e');
+      setState(() => _isLoadingPerformance = false);
+    }
+  }
+
+
+
+
+
+  Widget _buildPerformerListItem(
+    Map<String, dynamic> member,
+    Map<String, dynamic> performance,
+    int rank,
+    bool isTopPerformer,
+  ) {
+    // New metrics variables
+    final totalAttendance = performance['present_days'] as num? ?? 0;
+    final totalWorkMinutes = performance['total_work_minutes'] as num? ?? 0;
+    final workHours = (totalWorkMinutes.toDouble() / 60).toStringAsFixed(1);
+    final productivityScore = performance['productivity_score'] as double? ?? 0.0;
+    
+    // Choose ranking circle color
+    final rankColors = [
+      const Color(0xFF8B5CF6), // 1st
+      const Color(0xFF9333EA), // 2nd
+      const Color(0xFFA855F7), // 3rd
+    ];
+    final circleColor = rank <= 3 ? rankColors[rank - 1] : (widget.isDarkMode ? Colors.white12 : Colors.grey.shade100);
+    final textColor = rank <= 3 ? Colors.white : (widget.isDarkMode ? Colors.white70 : Colors.black87);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 1), // Thin line between items
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: widget.isDarkMode ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+            width: 1,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Rank Circle
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: circleColor,
+              shape: BoxShape.circle,
+              boxShadow: rank <= 3 ? [
+                BoxShadow(
+                  color: circleColor.withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                )
+              ] : null,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$rank',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          // Member Info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _getMemberName(member),
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.calendar_today_outlined, size: 12, color: const Color(0xFFA855F7)),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$totalAttendance Logs',
+                      style: TextStyle(fontSize: 11, color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade600),
+                    ),
+                    const SizedBox(width: 12),
+                    Icon(Icons.access_time, size: 12, color: const Color(0xFFA855F7)),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${workHours}h',
+                      style: TextStyle(fontSize: 11, color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // Score Badge
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B5CF6).withOpacity(widget.isDarkMode ? 0.2 : 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  _formatPercentage(productivityScore),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF8938DF),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'SCORE',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                  color: widget.isDarkMode ? Colors.white24 : Colors.grey.shade400,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricBar(String label, double value, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            Text(
+              _formatPercentage(value),
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade800,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: value,
+            backgroundColor: Colors.grey.shade200,
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+            minHeight: 6,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMiniBadge(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        '$label: $value',
+        style: TextStyle(
+          fontSize: 9,
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1,
+      ),
+    );
+  }
+}
+
+class _SliverTabBarDelegate extends SliverPersistentHeaderDelegate {
+  final Widget child;
+  final double height;
+
+  _SliverTabBarDelegate({required this.child, required this.height});
+
+  @override
+  double get minExtent => height;
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return child;
+  }
+
+  @override
+  bool shouldRebuild(_SliverTabBarDelegate oldDelegate) {
+    return false;
+  }
+}

@@ -104,7 +104,6 @@ class AttendanceSyncService {
     }
 
     _isSyncing = true;
-    // Always broadcast start so UI can refresh pending badge without manual action
     _syncStatusController.add(SyncStatus(
       isLoading: true,
       message: 'Syncing pending attendances...',
@@ -136,19 +135,16 @@ class AttendanceSyncService {
         );
       }
 
-      // Clean up duplicate records first (records marked as synced with duplicate error)
+      // ✅ Auto-Cleanup: Prune old records (older than 7 days)
+      await _offlineDb.pruneOldRecords(days: 7);
+      
+      // Clean up duplicate records first
       await cleanupDuplicateRecords();
       
       // Get unsynced records
       final unsyncedRecords = await _offlineDb.getUnsyncedAttendances();
       
       debugPrint('📊 Found ${unsyncedRecords.length} unsynced records');
-      if (unsyncedRecords.isNotEmpty) {
-        debugPrint('📋 Records to sync:');
-        for (var record in unsyncedRecords) {
-          debugPrint('   - ID: ${record.id}, Method: ${record.method}, Member: ${record.userName ?? record.cardNumber}, Event: ${record.eventType}');
-        }
-      }
       
       if (unsyncedRecords.isEmpty) {
         if (showProgress) {
@@ -181,23 +177,19 @@ class AttendanceSyncService {
       for (int i = 0; i < unsyncedRecords.length; i++) {
         final record = unsyncedRecords[i];
         
-        debugPrint('🔄 [${i + 1}/${unsyncedRecords.length}] Syncing record ID: ${record.id}, Method: ${record.method}, Member: ${record.userName ?? record.cardNumber}');
+        debugPrint('🔄 [${i + 1}/${unsyncedRecords.length}] Syncing record ID: ${record.id}, Method: ${record.method}');
         
         try {
           await _syncSingleRecord(record);
           syncedCount++;
-          debugPrint('✅ [${i + 1}/${unsyncedRecords.length}] Successfully synced record ID: ${record.id}');
           
-          // Mark as synced then remove from queue so antrean langsung kosong setelah terkirim
           await _offlineDb.updateSyncStatus(
             id: record.id!,
             isSynced: true,
             syncError: null,
           );
-          final deleted = await _offlineDb.deleteAttendance(record.id!);
-          if (deleted == 0) {
-            debugPrint('⚠️ Failed to delete synced record ${record.id} (will be cleaned later)');
-          }
+          
+          await _offlineDb.deleteAttendance(record.id!);
           
           if (showProgress) {
             _syncStatusController.add(SyncStatus(
@@ -209,94 +201,91 @@ class AttendanceSyncService {
           }
         } catch (e) {
           final errorMessage = e.toString();
+          
+          // ⚠️ Logika Penanganan Error:
+          // 1. Duplicate: Data sudah ada di server (hapus dari HP)
+          // 2. Fatal: Kesalahan logika seperti "No check-in found" (tandai sukses tapi simpan error, agar tidak di-retry)
+          
           final isDuplicate = errorMessage.contains('Already checked') || 
                              errorMessage.contains('already') ||
                              errorMessage.toLowerCase().contains('duplicate');
-          
-          if (isDuplicate) {
-            // If duplicate, delete the record since data already exists in server
-            // No need to keep it as it's already synced
-            debugPrint('⚠️ Duplicate attendance detected during sync for record ${record.id}: $errorMessage');
-            debugPrint('🗑️ Deleting duplicate record ${record.id} since data already exists in server');
+                             
+          final isFatal = errorMessage.contains('No check-in record found') ||
+                         errorMessage.contains('No-Check-In');
+
+          if (isDuplicate || isFatal) {
+            debugPrint('⚠️ ${isFatal ? "FATAL" : "DUPLICATE"} record ${record.id}: $errorMessage');
             try {
-              await _offlineDb.deleteAttendance(record.id!);
-              debugPrint('✅ Duplicate record ${record.id} deleted successfully');
-            } catch (deleteError) {
-              debugPrint('❌ Failed to delete duplicate record ${record.id}: $deleteError');
-              // If delete fails, mark as synced so it won't be retried
+              // Jika fatal/duplicate, kita tandai is_synced=1 agar SELESAI (tidak di-retry)
               await _offlineDb.updateSyncStatus(
                 id: record.id!,
                 isSynced: true,
-                syncError: 'Duplicate: Data already exists in server',
+                syncError: '${isFatal ? "FATAL: " : "Duplicate: "}$errorMessage',
               );
+              
+              if (isDuplicate) {
+                await _offlineDb.deleteAttendance(record.id!);
+              }
+            } catch (updateError) {
+              debugPrint('❌ Update failed: $updateError');
             }
-            syncedCount++; // Count as synced since data is already on server
+            syncedCount++;
           } else {
+            // Error Jaringan/Server: Keep in DB for retry
             failedCount++;
-            final error = 'Failed: ${record.userName ?? record.cardNumber} - $e';
-            errors.add(error);
-            debugPrint('❌ [${i + 1}/${unsyncedRecords.length}] Sync failed for record ${record.id}: $e');
-            debugPrint('   Method: ${record.method}');
-            debugPrint('   Member ID: ${record.organizationMemberId}');
-            debugPrint('   Event Type: ${record.eventType}');
-            debugPrint('   Error details: ${e.toString()}');
+            errors.add('Failed: ${record.userName ?? record.cardNumber} - $e');
+            debugPrint('❌ Sync failed for record ${record.id}: $e');
             
-            // Update with error - keep record for retry
             await _offlineDb.updateSyncStatus(
               id: record.id!,
               isSynced: false,
-              syncError: e.toString(),
+              syncError: errorMessage,
             );
           }
         }
       }
 
-      // Delete only successfully synced records (not failed or duplicate)
-      // Only delete records that were actually synced in this batch
-      // Don't delete records that failed or were marked as duplicate
+      // Cleanup batch sync
       if (syncedCount > 0) {
-        // Only delete records that are marked as synced AND don't have sync errors
-        // This ensures failed records are kept for retry
         await _offlineDb.deleteSuccessfullySyncedAttendances();
       }
 
-      final message = syncedCount > 0
+      final summaryMessage = syncedCount > 0
           ? 'Synced: $syncedCount${failedCount > 0 ? ", Failed: $failedCount" : ""}'
           : 'All syncs failed';
 
       if (showProgress) {
         _syncStatusController.add(SyncStatus(
           isLoading: false,
-          message: message,
+          message: summaryMessage,
           isError: failedCount > 0,
         ));
       }
 
       return SyncResult(
         success: syncedCount > 0,
-        message: message,
+        message: summaryMessage,
         syncedCount: syncedCount,
         failedCount: failedCount,
         errors: errors.isEmpty ? null : errors,
       );
     } catch (e) {
-      debugPrint('Sync error: $e');
+      debugPrint('General sync error: $e');
       if (showProgress) {
         _syncStatusController.add(SyncStatus(
           isLoading: false,
-          message: 'Sync error: $e',
+          message: 'Error: $e',
           isError: true,
         ));
       }
       return SyncResult(
         success: false,
-        message: 'Sync error: $e',
+        message: 'Error: $e',
         syncedCount: 0,
         failedCount: 0,
       );
     } finally {
       _isSyncing = false;
-      // Broadcast completion so UI updates pending counter immediately
       _syncStatusController.add(SyncStatus(
         isLoading: false,
         message: 'Sync finished',

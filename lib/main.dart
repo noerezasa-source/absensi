@@ -1,9 +1,9 @@
 import 'package:absensimassal/helpers/language_helper.dart';
-import 'package:absensimassal/pages/login.dart';
-import 'package:absensimassal/pages/join_organization_screen.dart';
-import 'package:absensimassal/pages/petugas_dashboard.dart';
-import 'package:absensimassal/pages/user_dashboard.dart';
-import 'package:absensimassal/services/role_service.dart';
+import 'package:absensimassal/auth/screens/login.dart';
+import 'package:absensimassal/auth/screens/join_organization_screen.dart';
+import 'package:absensimassal/Petugas/screens/petugas_dashboard.dart';
+import 'package:absensimassal/User/screens/user_dashboard.dart';
+import 'package:absensimassal/auth/services/role_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -184,28 +184,28 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             children: [
               ScaleTransition(
                 scale: _scaleAnimation,
-                child: Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF6366F1), // Primary color box
-                    borderRadius: BorderRadius.circular(24), // Rounded corners yang modern
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF6366F1).withOpacity(0.3),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
+                  child: Container(
+                    padding: const EdgeInsets.all(20), // Add padding for the image
+                    width: 120,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      color: Colors.white, // White background for the transparent logo
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF6366F1).withOpacity(0.3),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Image.asset(
+                        'assets/logo/app_icon_new.png',
+                        fit: BoxFit.contain,
                       ),
-                    ],
-                  ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.how_to_reg_rounded, // Icon presensi/absensi (orang + centang)
-                      size: 64,
-                      color: Colors.white,
                     ),
                   ),
-                ),
               ),
               
               const SizedBox(height: 32),

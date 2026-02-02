@@ -52,29 +52,29 @@ class LanguageHelper {
       'id': 'Selamat Datang',
       'en': 'Welcome',
     },
-    'to_facegate': {
-      'id': 'Di WeFace',
-      'en': 'To WeFace',
+    'welcome_back': {
+      'id': 'Selamat Datang Kembali',
+      'en': 'Welcome Back',
     },
     'email_address': {
-      'id': 'Alamat Email',
-      'en': 'Email Address',
+      'id': 'ALAMAT EMAIL',
+      'en': 'EMAIL ADDRESS',
     },
     'email_hint': {
       'id': 'Masukkan email anda',
       'en': 'Enter your email',
     },
     'password': {
-      'id': 'Kata Sandi',
-      'en': 'Password',
+      'id': 'KATA SANDI',
+      'en': 'PASSWORD',
     },
-    'password_hint': {
-      'id': 'Masukkan password anda',
-      'en': 'Enter your password',
+    'forgot_password': {
+      'id': 'Lupa Kata Sandi?',
+      'en': 'Forgot Password?',
     },
     'login': {
-      'id': 'Masuk',
-      'en': 'Login',
+      'id': 'Sign In',
+      'en': 'Sign In',
     },
     'or': {
       'id': 'Atau',
@@ -94,17 +94,13 @@ class LanguageHelper {
     },
     
     // Signup Screen
-    'create_your': {
+    'create_account_title': {
       'id': 'Buat Akun',
-      'en': 'Create Your',
-    },
-    'facegate_account': {
-      'id': 'WeFace Anda',
-      'en': 'WeFace Account',
+      'en': 'Create Account',
     },
     'full_name': {
-      'id': 'Nama Lengkap',
-      'en': 'Full Name',
+      'id': 'NAMA LENGKAP',
+      'en': 'FULL NAME',
     },
     'full_name_hint': {
       'id': 'Masukkan nama lengkap',

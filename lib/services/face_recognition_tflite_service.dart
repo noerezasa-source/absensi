@@ -30,7 +30,7 @@ class FaceRecognitionTFLiteService {
         enableClassification: true, // Needed for eye open prob
         enableTracking: true, // ✅ ENABLED: For persistent ID tracking
         performanceMode: FaceDetectorMode.fast, // ✅ REVERTED: Accurate mode caused GPU timeouts (Black Screen)
-        minFaceSize: 0.08, // ✅ REVERTED: 0.08 for wider detection range
+        minFaceSize: 0.05, // ✅ OPTIMIZED: 0.05 to detect distant faces (approx 3-4 meters)
       ),
     );
   }
@@ -116,10 +116,24 @@ class FaceRecognitionTFLiteService {
       }
     }
     
-    // Check face size
+    // Check face size (Smart Distance Filtering)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    if (faceArea < 4000) { // ✅ RELAXED: Allow smaller faces at distance (was 8000)
-      debugPrint('❌ Face rejected: Face too small');
+    // RELAXED FOR PHASE 6: Lowered to 1800 to allow recognition from further away
+    if (faceArea < 1800) { 
+      debugPrint('❌ Face REJECTED: Too far (Area: ${faceArea.toInt()} < 1800)');
+      return false;
+    }
+
+    if (!allowSidePose) {
+      if ((face.headEulerAngleY?.abs() ?? 0) > 20 || (face.headEulerAngleX?.abs() ?? 0) > 20) {
+        debugPrint('❌ Face REJECTED: Tilted/Side pose (Y: ${face.headEulerAngleY?.toStringAsFixed(1)}, X: ${face.headEulerAngleX?.toStringAsFixed(1)})');
+        return false;
+      }
+    }
+
+    final quality = calculateFaceQuality(face);
+    if (quality < 0.35) {
+      debugPrint('❌ Face REJECTED: Low quality (${(quality * 100).toInt()}%)');
       return false;
     }
     
@@ -219,8 +233,18 @@ class FaceRecognitionTFLiteService {
       throw Exception('Failed to generate embedding');
     }
 
+    final depthScore = _calculate3DDepthScore(response.landmarks3d);
+    debugPrint('💎 Isolate Inference Complete: DepthScore=${depthScore.toStringAsFixed(3)}');
+
     // We pass "stream_capture" as pseudo-path
-    return _buildTemplate(face, response.embedding!, landmarks, "stream_capture");
+    return _buildTemplate(
+      face, 
+      response.embedding!, 
+      landmarks, 
+      "stream_capture",
+      landmarks3d: response.landmarks3d,
+      depthScore: depthScore,
+    );
   }
 
   Future<Map<String, dynamic>> buildTemplateFromFace(
@@ -293,7 +317,16 @@ class FaceRecognitionTFLiteService {
       throw Exception('Failed to generate embedding');
     }
 
-    return _buildTemplate(face, response.embedding!, landmarks, imagePath);
+    final depthScore = _calculate3DDepthScore(response.landmarks3d);
+
+    return _buildTemplate(
+      face, 
+      response.embedding!, 
+      landmarks, 
+      imagePath,
+      landmarks3d: response.landmarks3d,
+      depthScore: depthScore,
+    );
   }
 
   // ✅ NEW: Calculate Inter-Pupillary Distance (IPD) - ISO/IEC 19794-5
@@ -310,6 +343,34 @@ class FaceRecognitionTFLiteService {
     return 0.0;
   }
 
+  /// ✅ NEW: Calculate 3D Depth Score from landmarks (Z-axis variance)
+  /// Real faces have significant depth (nose vs eyes), screens are flat.
+  double _calculate3DDepthScore(List<List<double>>? landmarks3d) {
+    if (landmarks3d == null || landmarks3d.length < 68) return 0.0;
+    
+    // Extract Z coordinates
+    final zs = landmarks3d.map((p) => p[2]).toList();
+    
+    // Calculate Mean
+    double sum = 0;
+    for (var z in zs) sum += z;
+    final mean = sum / zs.length;
+    
+    // Calculate Variance
+    double varianceSum = 0;
+    for (var z in zs) {
+      varianceSum += (z - mean) * (z - mean);
+    }
+    final stdDev = sqrt(varianceSum / zs.length);
+    
+    debugPrint('📏 Raw 3D Z-StdDev: ${stdDev.toStringAsFixed(4)}');
+
+    // Normalize score. 
+    // Buffalo_S Dense Mesh (3309) Z-StdDev for real face is ~0.05 - 0.15.
+    // Flat surfaces (Screens/Photos) are < 0.01 usually.
+    return (stdDev).clamp(0.0, 1.0); // Use raw stdDev as score directly
+  }
+
   // ✅ NEW: Calculate biometric metrics - ISO/IEC 19794-5
   Map<String, dynamic> _calculateBiometricMetrics(
     Rect boundingBox,
@@ -318,12 +379,48 @@ class FaceRecognitionTFLiteService {
     final ipd = _calculateIPD(landmarks);
     final faceWidth = boundingBox.width;
     final faceHeight = boundingBox.height;
+    final aspectRatio = faceHeight > 0 ? faceWidth / faceHeight : 0.0;
     
     return {
       'interPupillaryDistance': ipd,
       'faceWidth': faceWidth,
       'faceHeight': faceHeight,
-      'faceAspectRatio': faceHeight > 0 ? faceWidth / faceHeight : 0.0,
+      'faceAspectRatio': aspectRatio,
+      'faceShape': _estimateFaceShape(aspectRatio),
+    };
+  }
+
+  /// ✅ NEW: Estimate Coarse Face Shape (ISO/IEC 19794-5 style)
+  String _estimateFaceShape(double aspectRatio) {
+    if (aspectRatio > 0.85) return 'round';
+    if (aspectRatio < 0.75) return 'long/oval';
+    return 'oval'; // Default/Average
+  }
+
+  /// ✅ NEW: Detect if face is partially covered (Occlusion)
+  Map<String, dynamic> _detectOcclusion(Face face) {
+    final leftEye = face.leftEyeOpenProbability ?? 0.0;
+    final rightEye = face.rightEyeOpenProbability ?? 0.0;
+    final smiling = face.smilingProbability ?? 0.0;
+    
+    // If landmarks are missing or probabilities are extremely low, it might be occluded
+    bool isOccluded = false;
+    List<String> occludedParts = [];
+    
+    if (leftEye < 0.05 && rightEye < 0.05) {
+      isOccluded = true;
+      occludedParts.add('eyes (possible sunglasses/mask)');
+    }
+    
+    if (smiling < 0.01) {
+      // Very low smiling prob can just be neutral, but if combined with low landmarks, 
+      // it could be a mask. For now, keep it simple.
+    }
+
+    return {
+      'isOccluded': isOccluded,
+      'parts': occludedParts,
+      'confidence': isOccluded ? 0.8 : 0.1,
     };
   }
 
@@ -384,16 +481,19 @@ class FaceRecognitionTFLiteService {
     Face face, 
     List<double> embedding,
     Map<String, dynamic> landmarks,
-    String imagePath,
-  ) {
+    String imagePath, {
+    List<List<double>>? landmarks3d,
+    double? depthScore,
+  }) {
     final qualityScore = calculateFaceQuality(face);
     final biometricMetrics = _calculateBiometricMetrics(face.boundingBox, landmarks);
     final livenessDetection = _detectPassiveLiveness(face);
     final qualityMetrics = _calculateImageQualityMetrics(face, face.boundingBox);
+    final occlusion = _detectOcclusion(face);
     
     // ✅ ISO/IEC 19794-5 Compliant Template Structure
     return {
-      'version': 5.0, // Updated version for W600K model (incompatible with v3)
+      'version': 7.0, // Updated version: Robust Aggregate + Advanced Attributes
       'embedding': embedding,
       'embeddingSize': embedding.length,
       'qualityScore': qualityScore,
@@ -433,6 +533,15 @@ class FaceRecognitionTFLiteService {
         'pitch': face.headEulerAngleX ?? 0.0, // Up/down
         'isNeutralPose': (face.headEulerAngleY?.abs() ?? 0.0) < 15.0 &&
                          (face.headEulerAngleZ?.abs() ?? 0.0) < 15.0,
+      },
+      
+      // ✅ NEW: Advanced Detection Status
+      'advancedAttributes': {
+        'faceShape': biometricMetrics['faceShape'],
+        'occlusion': occlusion,
+        'landmarks3d': landmarks3d,
+        'depthScore': depthScore ?? 0.0,
+        'is3DReal': (depthScore ?? 0.0) > 0.25, // Basic depth threshold
       },
       
       // ✅ NEW: Capture Metadata (ISO/IEC 19794-5)
@@ -484,6 +593,27 @@ class FaceRecognitionTFLiteService {
     final similarity = (cosineSimilarity + 1.0) / 2.0;
     
     return similarity;
+  }
+
+  /// ✅ NEW: Calculate similarity between two raw embeddings (0..1)
+  double calculateSimilarity(List<double> e1, List<double> e2) {
+    if (e1.isEmpty || e2.isEmpty || e1.length != e2.length) return 0.0;
+    
+    double dotProduct = 0.0;
+    double norm1 = 0.0;
+    double norm2 = 0.0;
+
+    for (int i = 0; i < e1.length; i++) {
+        dotProduct += e1[i] * e2[i];
+        norm1 += e1[i] * e1[i];
+        norm2 += e2[i] * e2[i];
+    }
+    
+    final mag = sqrt(norm1) * sqrt(norm2);
+    if (mag == 0) return 0.0;
+    
+    final cosineSim = (dotProduct / mag).clamp(-1.0, 1.0);
+    return (cosineSim + 1.0) / 2.0;
   }
 
   Future<bool> validatePhotoQuality(String imagePath) async {
