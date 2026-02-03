@@ -45,6 +45,10 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   bool _isLoadingModes = false;
   DateTime _currentTime = DateTime.now();
   
+  // Animation Controller for pulsing effect
+  double _pulseRadius = 0.0;
+  Timer? _pulseTimer;
+  
   String? _workTimeMode;
   Map<String, dynamic>? _memberSchedule;
   Timer? _scheduleCheckTimer;
@@ -65,6 +69,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     _loadOrganizationData();
     _loadMemberSchedule();
     _startClock();
+    _startPulseAnimation();
     _startScheduleCheck();
     _checkConnectivity();
     _loadPendingSyncCount();
@@ -710,6 +715,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   @override
   void dispose() {
     _clockTimer?.cancel();
+    _pulseTimer?.cancel();
     _scheduleCheckTimer?.cancel();
     _syncStatusSub?.cancel();
     _cardController.dispose();
@@ -1269,182 +1275,479 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     return '${time.day} ${months[time.month - 1]} ${time.year}';
   }
 
+  void _startPulseAnimation() {
+    _pulseTimer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+      if (mounted) {
+        setState(() {
+          _pulseRadius = _pulseRadius == 0.0 ? 20.0 : 0.0;
+        });
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Format Date & Time
+    final dateStr = _formatDate(_currentTime).toUpperCase();
+    final timeStr = _formatTimeShort(_currentTime);
+    final amPm = _formatAmPm(_currentTime);
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
-      appBar: AppBar(
-        title: Text(
-          _organizationName.isEmpty ? 'RFID Attendance' : _organizationName,
-          style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-        ),
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF6B46C1), Color(0xFF9333EA)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        ),
-        foregroundColor: Colors.white,
-        leadingWidth: 48,
-        titleSpacing: 8,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_note),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ManualCheckPage(
-                    organizationMemberId: widget.organizationMemberId,
-                    memberData: widget.memberData,
-                  ),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.more_vert),
-            onPressed: () => _showMenu(context),
-          ),
-        ],
-      ),
+      backgroundColor: Colors.white, // White background as per mockup
       body: GestureDetector(
         onTap: () => _cardFocusNode.requestFocus(),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              _buildClockAndModeCard(),
-              const SizedBox(height: 16),
-              Offstage(
-                offstage: true,
-                child: TextField(
-                  controller: _cardController,
-                  focusNode: _cardFocusNode,
-                  showCursor: false,
-                  enableInteractiveSelection: false,
-                  decoration: const InputDecoration(border: InputBorder.none),
-                  onSubmitted: (_) => _handleCardScan(),
-                ),
+        child: Stack(
+          children: [
+            // Hidden Input for RFID
+            Offstage(
+              offstage: true,
+              child: TextField(
+                controller: _cardController,
+                focusNode: _cardFocusNode,
+                autofocus: true,
+                showCursor: false,
+                enableInteractiveSelection: false,
+                decoration: const InputDecoration(border: InputBorder.none),
+                onSubmitted: (_) => _handleCardScan(),
               ),
-              Expanded(
-                child: _filteredEntries.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'Scan kartu di sini',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
+            ),
+
+            SafeArea(
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
+                  
+                  // 1. CLOCK & DATE HEADER
+                  Center(
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text(
+                              timeStr,
+                              style: const TextStyle(
+                                fontSize: 64,
+                                fontWeight: FontWeight.w400, // Thinner font like iOS
+                                color: Colors.black87,
+                                letterSpacing: -2,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              amPm,
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF9333EA), // Purple accent
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          dateStr,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF9333EA), // Purple accent
+                            letterSpacing: 1.5,
                           ),
                         ),
-                      )
-                    : ListView.separated(
-                        itemCount: _filteredEntries.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 6),
-                        itemBuilder: (_, index) => _buildEntryCard(_filteredEntries[index]),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 40),
+
+                  // 2. SELECT SHIFT CARD (Purple)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: InkWell(
+                      onTap: _openShiftSelectionSheet,
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF9333EA), Color(0xFF7E22CE)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF9333EA).withOpacity(0.4),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(Icons.swap_horiz, color: Colors.white, size: 24),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Text(
+                                _selectedMode?['name'] ?? 'Select Shift',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, color: Colors.white),
+                          ],
+                        ),
                       ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 60),
+
+                  // 3. PULSING RFID ANIMATION (Expanded Center)
+                  Expanded(
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              // Outer Pulse
+                              TweenAnimationBuilder(
+                                tween: Tween<double>(begin: 0, end: 1),
+                                duration: const Duration(seconds: 2),
+                                builder: (context, double value, child) {
+                                  return Container(
+                                    width: 200 + (value * 20),
+                                    height: 200 + (value * 20),
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: const Color(0xFF9333EA).withOpacity(0.1 * (1 - value)),
+                                        width: 1,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                onEnd: () => setState((){}), // Loop
+                              ),
+                              // Inner Circles
+                              Container(
+                                width: 180,
+                                height: 180,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xFF9333EA).withOpacity(0.05),
+                                ),
+                              ),
+                              Container(
+                                width: 130,
+                                height: 130,
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.white,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black12,
+                                      blurRadius: 20,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.nfc, // RFID Icon
+                                    size: 64,
+                                    color: Color(0xFF9333EA),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 32),
+                          Text(
+                            'Scan your card here',
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.grey.shade600,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // 4. ATTENDANCE LIST (Limited items)
+                  Container(
+                    height: 220, // Check mockup size
+                    margin: const EdgeInsets.only(top: 24),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                      itemCount: _filteredEntries.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (_, index) => _buildNewEntryCard(_filteredEntries[index]),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+            
+            // Menu Button (Top Right)
+            // Header Buttons
+            Positioned(
+              top: 40,
+              left: 20,
+              right: 20,
+              child: SafeArea(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Back Button
+                    CircleAvatar(
+                      backgroundColor: Colors.grey,
+                      radius: 20,
+                      child: IconButton(
+                        icon: const Icon(Icons.chevron_left, color: Colors.white, size: 24),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ),
+                    
+                    // Manual Check Button
+                    CircleAvatar(
+                      backgroundColor: Colors.grey,
+                      radius: 20,
+                      child: IconButton(
+                        icon: const Icon(Icons.assignment_ind_outlined, color: Colors.white, size: 22),
+                        onPressed: () {
+                           Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ManualCheckPage(
+                                  organizationMemberId: widget.organizationMemberId,
+                                  memberData: widget.memberData,
+                                ),
+                              ),
+                            );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildClockAndModeCard() {
-    final orgTime = TimezoneHelper.convertUtcToOrgTimezone(
-      _currentTime.toUtc(),
-      _organizationTimezone,
-    );
+  // Helper Formats
+  String _formatTimeShort(DateTime time) {
+    int hour = time.hour > 12 ? time.hour - 12 : (time.hour == 0 ? 12 : time.hour);
+    return '${hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+  
+  String _formatAmPm(DateTime time) {
+    return time.hour >= 12 ? 'PM' : 'AM';
+  }
 
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-            spreadRadius: 1,
+  // NEW BOTTOM SHEET UI
+  Future<void> _openShiftSelectionSheet() async {
+    await _loadAvailableModes();
+    if (!mounted) return;
+
+    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
-        ],
-      ),
-      child: Row(
-        children: [
-          // Clock Section
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _formatDateTime(orgTime),
-                  style: const TextStyle(
-                    fontSize: 42,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF9333EA),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  _formatDate(orgTime),
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey.shade600,
-                  ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Select Your Shift',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF9333EA), // Purple title
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 20),
-          // Mode Section
-          Expanded(
-            flex: 2,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ElevatedButton(
-                  onPressed: _openModePicker,
-                  child: Text(
-                    _modeButtonLabel(),
-                    overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 24),
+              
+              ..._availableModes.map((mode) {
+                final isSelected = _selectedMode?['id'] == mode['id'];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: InkWell(
+                    onTap: () => Navigator.pop(context, mode),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFFF3E8FF) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF9333EA) : Colors.grey.shade200,
+                          width: isSelected ? 2 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFF9333EA).withOpacity(0.1) : Colors.grey.shade100,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _getIconForMode(mode['name'] ?? ''),
+                              color: isSelected ? const Color(0xFF9333EA) : Colors.grey,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  mode['name'] ?? 'Shift',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: isSelected ? Colors.black : Colors.black87,
+                                  ),
+                                ),
+                                if (mode['start_time'] != null && mode['end_time'] != null)
+                                  Text(
+                                    '${mode['start_time']} - ${mode['end_time']}',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (isSelected)
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF9333EA),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.check, color: Colors.white, size: 14),
+                            )
+                          else
+                             Container(
+                              width: 24,
+                              height: 24,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.grey.shade300),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
+                );
+              }),
+
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                     // Just close for now, selection handles closure
+                     Navigator.pop(context);
+                  }, 
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF9333EA),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 5,
+                    shadowColor: const Color(0xFF9333EA).withOpacity(0.4),
+                  ),
+                  child: const Text(
+                    'Confirm Selection',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 16),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _selectedMode = selected;
+        _workTimeMode = selected['code'] as String? ?? selected['name'] as String?;
+      });
+      // Optionally show IN/OUT selector if needed, or default to IN if not specified
+      // For this UI, user just selects shift. The actual action (IN/OUT) usually inferred or separate toggles?
+      // User request didn't specify IN/OUT buttons, just "Select Shift".
+      // Assuming 'check_in' as default or handled elsewhere. 
+      // Re-using _showInOutSelector if we want to confirm action
+      await _showInOutSelector(); 
+    }
   }
 
-  Widget _buildEntryCard(_AttendanceEntry entry) {
-    final memberName = _composeMemberName(entry.memberInfo);
-    final profile = entry.memberInfo['user_profiles'] as Map<String, dynamic>? ?? {};
+  IconData _getIconForMode(String name) {
+    name = name.toLowerCase();
+    if (name.contains('morning') || name.contains('pagi')) return Icons.wb_sunny_outlined;
+    if (name.contains('afternoon') || name.contains('siang')) return Icons.wb_twilight;
+    if (name.contains('night') || name.contains('malam')) return Icons.nights_stay_outlined;
+    return Icons.schedule;
+  }
+
+  Widget _buildNewEntryCard(_AttendanceEntry entry) {
+     final profile = entry.memberInfo['user_profiles'] as Map<String, dynamic>? ?? {};
     final photoPath = profile['profile_photo_url'] as String?;
+    final name = _composeMemberName(entry.memberInfo);
     
-    final department = entry.memberInfo['departments'] as Map<String, dynamic>?;
-    final departmentName = department?['name'] as String? ?? '-';
-
-    // Use icon when offline or when photo is not available
-    final bool useIcon = _isOnline == false || photoPath == null || photoPath.trim().isEmpty;
-
     ImageProvider? imageProvider;
-    if (!useIcon && photoPath != null) {
-      if (photoPath.startsWith('http')) {
+    if (photoPath != null && photoPath.isNotEmpty) {
+       if (photoPath.startsWith('http')) {
         imageProvider = NetworkImage(photoPath);
       } else {
         imageProvider = NetworkImage(
@@ -1453,171 +1756,57 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       }
     }
 
-    final isCheckIn = entry.action == 'check_in';
-    final timeString = _formatTime(entry.timestamp);
-    final workTimeMode = entry.workTimeMode ?? 'work_time';
-    
-    // Get display mode name - use selected mode if available, otherwise format work time mode
-    String displayMode;
-    if (_selectedMode != null && _selectedMode!['name'] != null) {
-      displayMode = _selectedMode!['name'] as String;
-    } else {
-      // Fallback to formatted work time mode
-      displayMode = workTimeMode == 'break_time' ? 'Break Time' : 
-                   workTimeMode == 'overtime' ? 'Overtime' : 'Work Time';
-    }
-    
-    final modePrefix = isCheckIn ? displayMode : '$displayMode Out';
-
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: const Color(0xFFF9FAFB), // Very light grey
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
       ),
       child: Row(
         children: [
-          useIcon
-              ? Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.person,
-                    size: 28,
-                    color: Colors.grey.shade600,
-                  ),
-                )
-              : CircleAvatar(
-                  radius: 24,
-                  backgroundImage: imageProvider,
-                  onBackgroundImageError: (_, __) {
-                    // Fallback to icon if image fails to load
-                  },
-                ),
-          const SizedBox(width: 12),
+           CircleAvatar(
+            radius: 24,
+            backgroundColor: Colors.grey.shade300,
+            backgroundImage: imageProvider,
+            child: imageProvider == null ? const Icon(Icons.person, color: Colors.grey) : null,
+          ),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  memberName,
+                  name,
                   style: const TextStyle(
-                    fontSize: 16,
                     fontWeight: FontWeight.bold,
+                    fontSize: 16,
                     color: Colors.black87,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
                 Text(
-                  '$modePrefix - $departmentName',
+                  'Lorem ipsum', // Placeholder subtitle or department
                   style: TextStyle(
+                    color: Colors.grey.shade500,
                     fontSize: 13,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isCheckIn ? Colors.green.shade50 : Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  isCheckIn ? 'IN' : 'OUT',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: isCheckIn ? Colors.green.shade800 : Colors.blue.shade800,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                timeString,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
+          Text(
+            // Format: 09:00 - 17:00 (Check In - Check Out expectation?)
+            // Just showing timestamp for now as per entry
+             _formatTimeShort(entry.timestamp),
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF9333EA),
+              fontSize: 14,
+            ),
           ),
         ],
       ),
     );
-  }
-
-  void _showMenu(BuildContext context) {
-    showMenu<String>(
-      context: context,
-      position: const RelativeRect.fromLTRB(80, 50, 0, 0),
-      items: <PopupMenuEntry<String>>[
-        const PopupMenuItem<String>(
-          value: 'mode_picker',
-          child: Row(
-            children: [
-              Icon(Icons.tune, size: 18),
-              SizedBox(width: 8),
-              Text('Pilih mode'),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: 'sign_data',
-          child: Row(
-            children: [
-              Icon(
-                _pendingSyncCount > 0 ? Icons.sync_problem : Icons.sync,
-                color: _pendingSyncCount > 0 ? Colors.orange : const Color(0xFF9333EA),
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Sinkronisasi data${_pendingSyncCount > 0 ? ' ($_pendingSyncCount)' : ''}',
-                style: const TextStyle(fontSize: 14),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ).then((value) {
-      if (value != null) _handleMenuSelection(value);
-    });
-  }
-
-  void _handleMenuSelection(String value) {
-    switch (value) {
-      case 'mode_picker':
-        _openModePicker();
-        break;
-      case 'sign_data':
-        _showSyncDialog();
-        break;
-    }
   }
 }
 

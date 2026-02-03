@@ -568,7 +568,12 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           return [
             SliverToBoxAdapter(
               child: Container(
-                padding: const EdgeInsets.only(top: 48, bottom: 32),
+                padding: EdgeInsets.only(
+                  top: MediaQuery.of(context).padding.top + 16, // Add safe area padding
+                  bottom: 16, 
+                  left: 16, 
+                  right: 16
+                ), 
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: widget.isDarkMode
@@ -583,7 +588,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     'Members Management',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 24,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold,
                       letterSpacing: -0.5,
                     ),
@@ -594,7 +599,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             SliverPersistentHeader(
               pinned: true,
               delegate: _SliverTabBarDelegate(
-                height: 56.0,
+                height: 48.0, // Reduced height slightly
                 child: Container(
                   decoration: BoxDecoration(
                     color: widget.isDarkMode ? const Color(0xFF1F0B38) : null,
@@ -614,20 +619,22 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                   ),
                   child: TabBar(
                     controller: _tabController,
+                    isScrollable: false, // Keep fixed tabs if they fit, using smaller font
                     labelColor: Colors.white,
                     unselectedLabelColor: Colors.white.withOpacity(0.6),
                     indicatorColor: Colors.white,
                     indicatorWeight: 3,
                     indicatorSize: TabBarIndicatorSize.label,
-                    indicatorPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    indicatorPadding: const EdgeInsets.symmetric(horizontal: 12),
                     dividerColor: Colors.transparent,
                     dividerHeight: 0,
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 4), // Reduce label padding
                     labelStyle: const TextStyle(
-                      fontSize: 18,
+                      fontSize: 14, // Reduced from 18 to fit
                       fontWeight: FontWeight.bold,
                     ),
                     unselectedLabelStyle: const TextStyle(
-                      fontSize: 18,
+                      fontSize: 14, // Reduced from 18 to fit
                       fontWeight: FontWeight.w500,
                     ),
                     tabs: const [
@@ -1600,38 +1607,38 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final softAccent = accentColor.withValues(alpha: 0.1);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 8), // Reduced margin
       decoration: BoxDecoration(
         color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16), // Reduced radius slightly
         border: Border.all(
           color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: widget.isDarkMode ? 0.2 : 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withOpacity(widget.isDarkMode ? 0.2 : 0.03),
+            blurRadius: 8, // Reduced blur
+            offset: const Offset(0, 2),
           ),
         ],
       ),
       child: InkWell(
         onTap: () => _showMemberDetail(member),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(12), // Reduced padding (was 16)
           child: Row(
             children: [
               // Circular Profile Photo
               Container(
-                width: 60,
-                height: 60,
+                width: 48, // Reduced from 60
+                height: 48, // Reduced from 60
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: Colors.grey.shade100,
                   border: Border.all(
                     color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade50,
-                    width: 2,
+                    width: 1.5,
                   ),
                 ),
                 child: ClipOval(
@@ -1643,17 +1650,17 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                           errorWidget: (context, url, error) => Icon(
                             Icons.person,
                             color: Colors.grey.shade400,
-                            size: 30,
+                            size: 26, // Reduced icon size
                           ),
                         )
                       : Icon(
                           Icons.person,
                           color: Colors.grey.shade400,
-                          size: 30,
+                          size: 26, // Reduced icon size
                         ),
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12), // Reduced spacing
               // Member Info
               Expanded(
                 child: Column(
@@ -1663,19 +1670,19 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     Text(
                       _getMemberName(member),
                       style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 16, // Reduced from 18
                         fontWeight: FontWeight.bold,
                         color: widget.isDarkMode ? Colors.white : Colors.black87,
-                        letterSpacing: -0.5,
+                        letterSpacing: -0.3,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2), // Reduced spacing
                     Text(
                       roleName,
                       style: TextStyle(
-                        fontSize: 14,
-                        color: widget.isDarkMode ? Colors.white54 : const Color(0xFF8938DF).withValues(alpha: 0.7),
+                        fontSize: 13, // Reduced from 14
+                        color: widget.isDarkMode ? Colors.white54 : const Color(0xFF8938DF).withOpacity(0.7),
                         fontWeight: FontWeight.w500,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -1695,7 +1702,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                       // Handle chat
                     },
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8), // Reduced spacing
                   _buildMemberActionIcon(
                     Icons.phone_outlined,
                     softAccent,
@@ -1721,17 +1728,17 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   ) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(12), // Reduced radius
       child: Container(
-        width: 40,
-        height: 40,
+        width: 36, // Reduced from 40
+        height: 36, // Reduced from 40
         decoration: BoxDecoration(
-          color: widget.isDarkMode ? Colors.white.withValues(alpha: 0.05) : bgColor,
+          color: widget.isDarkMode ? Colors.white.withOpacity(0.05) : bgColor,
           shape: BoxShape.circle,
         ),
         child: Icon(
           icon,
-          size: 18,
+          size: 16, // Reduced from 18
           color: widget.isDarkMode ? Colors.white70 : iconColor,
         ),
       ),
@@ -1742,142 +1749,368 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final department = member['departments'] as Map<String, dynamic>?;
     final position = member['positions'] as Map<String, dynamic>?;
     
+    // Determine Face Data Status
+    bool hasFaceData = false;
+    final bioData = member['biometric_data'];
+    if (bioData is List) {
+      hasFaceData = bioData.any((b) => (b['biometric_type'] == 'face' || b['biometric_type'] == 'face_recognition') && b['is_active'] == true);
+    } else if (bioData is Map) {
+      // Handle single object case if standard supabase behavior differs
+      hasFaceData = (bioData['biometric_type'] == 'face' || bioData['biometric_type'] == 'face_recognition') && bioData['is_active'] == true;
+    }
+
     String deptName = 'No Department';
     final posTitle = position?['title'] ?? position?['name'];
     if (department != null && posTitle != null) {
-      deptName = '${department['name']} • $posTitle';
+      deptName = department['name']; // Just Dept name as per image "Department Creative Team"
     } else {
-      deptName = posTitle ?? department?['name'] ?? 'No Department';
+      deptName = department?['name'] ?? 'No Department';
     }
     
+    // Employee ID
+    final empId = member['employee_id'] ?? '#----';
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         decoration: BoxDecoration(
-          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          color: const Color(0xFF5B259F), // Deep Purple Background
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+          boxShadow: [
+             BoxShadow(
+              color: Colors.black.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, -5),
+            ),
+          ],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // Drag Handle
             Container(
-              width: 40,
-              height: 4,
+              width: 50,
+              height: 5,
               decoration: BoxDecoration(
-                color: widget.isDarkMode ? Colors.white24 : Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 24),
-            CircleAvatar(
-              radius: 40,
-              backgroundColor: Colors.grey.shade200,
-              backgroundImage: _getMemberPhotoUrl(member) != null
-                  ? CachedNetworkImageProvider(_getMemberPhotoUrl(member)!)
-                  : null,
-              child: _getMemberPhotoUrl(member) == null
-                  ? const Icon(Icons.person, size: 40, color: Colors.grey)
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _getMemberName(member),
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: widget.isDarkMode ? Colors.white : Colors.black87,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: widget.isDarkMode ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                deptName,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: widget.isDarkMode ? Colors.white70 : Colors.grey.shade700,
-                  fontWeight: FontWeight.w500,
-                ),
+                color: Colors.white.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(2.5),
               ),
             ),
             const SizedBox(height: 32),
+            
+            // Profile & Info Row
             Row(
               children: [
-                Expanded(
-                  child: _buildDetailStat(
-                    'Attendance',
-                    _formatPercentage(member['performance_stats']?['attendance_rate'] ?? 0.0),
-                    Icons.calendar_today,
-                    const Color(0xFFF59E0B),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _buildDetailStat(
-                    'Punctuality',
-                    _formatPercentage(member['performance_stats']?['punctuality_rate'] ?? 0.0),
-                    Icons.schedule,
-                    const Color(0xFF8B5CF6),
-                  ),
-                ),
+                 // Profile Photo with Green Dot
+                 Stack(
+                   children: [
+                     Container(
+                       padding: const EdgeInsets.all(3),
+                       decoration: const BoxDecoration(
+                         color: Colors.white,
+                         shape: BoxShape.circle,
+                       ),
+                       child: CircleAvatar(
+                          radius: 45,
+                          backgroundColor: Colors.grey.shade200,
+                          backgroundImage: _getMemberPhotoUrl(member) != null
+                              ? CachedNetworkImageProvider(_getMemberPhotoUrl(member)!)
+                              : null,
+                          child: _getMemberPhotoUrl(member) == null
+                              ? const Icon(Icons.person, size: 45, color: Colors.grey)
+                              : null,
+                        ),
+                     ),
+                     Positioned(
+                       bottom: 5,
+                       right: 5,
+                       child: Container(
+                         width: 20,
+                         height: 20,
+                         decoration: BoxDecoration(
+                           color: const Color(0xFF10B981), // Green active
+                           shape: BoxShape.circle,
+                           border: Border.all(color: Colors.white, width: 2),
+                         ),
+                       ),
+                     ),
+                   ],
+                 ),
+                 const SizedBox(width: 20),
+                 
+                 // Text Info
+                 Expanded(
+                   child: Column(
+                     crossAxisAlignment: CrossAxisAlignment.start,
+                     children: [
+                       Text(
+                          _getMemberName(member),
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        
+                        // Department
+                        Row(
+                          children: [
+                            const Icon(Icons.business, color: Colors.white70, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Department $deptName',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        
+                        // Employee ID
+                        Row(
+                          children: [
+                            const Icon(Icons.badge_outlined, color: Colors.white70, size: 16),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Employee ID',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              '$empId',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        )
+                     ],
+                   ),
+                 ),
               ],
             ),
+            
             const SizedBox(height: 32),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _showRegistrationOptions(member),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF8938DF),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  elevation: 4,
-                  shadowColor: const Color(0xFF8938DF).withOpacity(0.4),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+            
+            // Conditional Card
+            if (!hasFaceData) ...[
+              // WARNING CARD (Yellow/Cream)
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF9E6), // Cream/Light Yellow
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                icon: const Icon(Icons.face_retouching_natural, size: 24),
-                label: const Text(
-                  'Register Face',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
-                    letterSpacing: 0.5,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline, color: Color(0xFFF59E0B), size: 28),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'Your face has not been registered yet.',
+                            style: TextStyle(
+                              color: Color(0xFF92400E), // Brownish text
+                              fontSize: 16,
+                              height: 1.4,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Please register your face for seamless attendance tracking.',
+                            style: TextStyle(
+                              color: Color(0xFF92400E),
+                              fontSize: 14,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              // SUCCESS STATE - STATS DASHBOARD (As per new image)
+              Row(
+                children: [
+                  // Punctuality Card
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xFF8B5CF6), width: 2),
+                            ),
+                            child: const Icon(Icons.access_time_filled_rounded, color: Color(0xFF8B5CF6), size: 28),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            _formatPercentage(member['performance_stats']?['punctuality_rate'] ?? 0.0),
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1F2937),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'PUNCTUALITY',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF9CA3AF),
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
+                  const SizedBox(width: 16),
+                  
+                  // Attendance Card
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                           Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xFF8B5CF6), width: 2),
+                            ),
+                            child: const Icon(Icons.calendar_today_rounded, color: Color(0xFF8B5CF6), size: 24),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            _formatPercentage(member['performance_stats']?['attendance_rate'] ?? 0.0),
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1F2937),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'ATTENDANCE',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF9CA3AF),
+                              letterSpacing: 1.0,
+                             ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            
+            const SizedBox(height: 32),
+            
+            // Back Button (Only button needed for this state, or maybe Keep Register for updates?)
+            // The image only shows "Back to Profile". But logically we might still want "Update Face".
+            // However, following the image strictly first. 
+            // If hasFaceData, maybe we hide the big purple "Register" button or move it?
+            // The previous code had a purple button + creamy back button.
+            // The new image ONLY shows "Back to Profile" (Creamy button).
+            
+            // Let's keep the Update button but maybe make it less prominent or remove it if strictly following image?
+            // The image implies this is a "View Mode" when registered.
+            // I will HIDE the Register/Update button when hasFaceData is true to match the image,
+            // OR checks if I should keep it. The user said "ini tampilan jika user sudah memiliki data...".
+            // It shows NO purple button. So I will ONLY show the Back button in this state.
+            
+            if (!hasFaceData)
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                     Navigator.pop(context);
+                     _showRegistrationOptions(member);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFA855F7),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    elevation: 0,
+                  ),
+                  icon: const Icon(Icons.face, size: 24),
+                  label: const Text(
+                    'Register Face ID',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
-            const SizedBox(height: 12),
+
+            if (!hasFaceData) const SizedBox(height: 16),
+            
+            // Back Button
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton(
+              child: ElevatedButton(
                 onPressed: () => Navigator.pop(context),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: widget.isDarkMode ? Colors.white : primaryColor,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  side: BorderSide(color: widget.isDarkMode ? Colors.white38 : primaryColor, width: widget.isDarkMode ? 1.5 : 1),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFFF9E6), // Cream/White Button
+                  foregroundColor: const Color(0xFF4B5563), // Dark text
+                  padding: const EdgeInsets.symmetric(vertical: 18),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(24),
                   ),
+                  elevation: 0,
                 ),
                 child: const Text(
-                  'Close',
+                  'Back to Profile',
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
                     fontSize: 16,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
             ),
+            
             const SizedBox(height: 16),
           ],
         ),

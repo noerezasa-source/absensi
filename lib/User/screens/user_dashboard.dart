@@ -517,10 +517,10 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.05),
+                        color: const Color(0xFF4A90E2).withOpacity(0.05),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: const Color(0xFF6C63FF).withOpacity(0.1),
+                          color: const Color(0xFF4A90E2).withOpacity(0.1),
                           width: 1,
                         ),
                       ),
@@ -607,7 +607,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 16, color: const Color(0xFF6C63FF)),
+          Icon(icon, size: 16, color: const Color(0xFF4A90E2)),
           const SizedBox(width: 10),
           Expanded(
             child: RichText(
@@ -649,7 +649,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xFF6C63FF), Color(0xFF8B84FF)],
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA3F5)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
@@ -730,7 +730,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: const Color(0xFF6C63FF),
+                                      color: const Color(0xFF4A90E2),
                                       width: 2,
                                     ),
                                     color: Colors.grey.shade100,
@@ -788,14 +788,14 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
                                           vertical: 4,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFE8E5FF),
+                                          color: const Color(0xFFD6EAFF),
                                           borderRadius: BorderRadius.circular(12),
                                         ),
                                         child: Text(
                                           _roleService.getRoleName(widget.memberData),
                                           style: const TextStyle(
                                             fontSize: 12,
-                                            color: Color(0xFF6C63FF),
+                                            color: Color(0xFF4A90E2),
                                             fontWeight: FontWeight.w500,
                                           ),
                                         ),
@@ -861,7 +861,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
                               children: [
                                 const Icon(
                                   Icons.face,
-                                  color: Color(0xFF6C63FF),
+                                  color: Color(0xFF4A90E2),
                                 ),
                                 const SizedBox(width: 12),
                                 const Text(
@@ -963,9 +963,9 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
                             ),
                             child: TabBar(
                               controller: _tabController,
-                              labelColor: const Color(0xFF6C63FF),
+                              labelColor: const Color(0xFF4A90E2),
                               unselectedLabelColor: Colors.grey,
-                              indicatorColor: const Color(0xFF6C63FF),
+                              indicatorColor: const Color(0xFF4A90E2),
                               indicatorWeight: 3,
                               labelStyle: const TextStyle(
                                 fontSize: 15,
@@ -1022,7 +1022,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
   Widget _buildStatisticsTab() {
     return SingleChildScrollView(
       child: Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
@@ -1041,7 +1041,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
               children: [
                 const Icon(
                   Icons.bar_chart_rounded,
-                  color: Color(0xFF6C63FF),
+                  color: Color(0xFF4A90E2),
                 ),
                 const SizedBox(width: 12),
                 const Text(
@@ -1155,11 +1155,11 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
             calendarStyle: CalendarStyle(
               outsideDaysVisible: false,
               selectedDecoration: const BoxDecoration(
-                color: Color(0xFF6C63FF),
+                color: Color(0xFF4A90E2),
                 shape: BoxShape.circle,
               ),
               todayDecoration: BoxDecoration(
-                color: const Color(0xFF6C63FF).withOpacity(0.6),
+                color: const Color(0xFF4A90E2).withOpacity(0.6),
                 shape: BoxShape.circle,
               ),
               markersMaxCount: 3,
@@ -1173,7 +1173,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
               formatButtonVisible: true,
               titleCentered: true,
               formatButtonDecoration: BoxDecoration(
-                color: const Color(0xFF6C63FF),
+                color: const Color(0xFF4A90E2),
                 borderRadius: BorderRadius.circular(8),
               ),
               formatButtonTextStyle: const TextStyle(

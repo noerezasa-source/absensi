@@ -573,7 +573,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
       width: double.infinity,
       padding: EdgeInsets.only(
         top: MediaQuery.of(context).padding.top + 16,
-        bottom: 32,
+        bottom: 16, // Reduced from 32
         left: 16,
         right: 16,
       ),
@@ -592,7 +592,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
           Text(
             'Records',
             style: const TextStyle(
-              fontSize: 24,
+              fontSize: 20, // Reduced from 24
               fontWeight: FontWeight.bold,
               color: Colors.white,
               letterSpacing: -0.5,

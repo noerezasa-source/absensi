@@ -46,7 +46,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   String _selectedGender = 'male';
   DateTime? _selectedDateOfBirth;
 
-  static const Color primaryColor = Color(0xFF6C63FF);
+  static const Color primaryColor = Color(0xFF4A90E2);
 
   @override
   void initState() {
@@ -453,7 +453,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     width: double.infinity,
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFF6C63FF), Color(0xFF8B84FF)],
+                        colors: [Color(0xFF4A90E2), Color(0xFF5BA3F5)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
@@ -608,226 +608,306 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Column(
                       children: [
-                        _buildSectionCard(
-                          title: 'Personal Information',
-                          icon: Icons.person_outline,
-                          needsForm: true,
-                          children: [
-                            if (_isEditMode) ...[
-                              // Save & Cancel Buttons
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        onPressed: _isSaving ? null : _toggleEditMode,
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: Colors.grey[600],
-                                          side: BorderSide(color: Colors.grey[300]!),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          padding: const EdgeInsets.symmetric(vertical: 12),
-                                        ),
-                                        child: const Text('Cancel'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: ElevatedButton(
-                                        onPressed: _isSaving ? null : _saveProfile,
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: primaryColor,
-                                          foregroundColor: Colors.white,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          padding: const EdgeInsets.symmetric(vertical: 12),
-                                          elevation: 0,
-                                        ),
-                                        child: _isSaving
-                                            ? const SizedBox(
-                                                width: 16,
-                                                height: 16,
-                                                child: CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                                ),
-                                              )
-                                            : const Text('Save'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                        // Security Status Card
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
                               ),
-                              // Editable Fields
-                              _buildEditableField(
-                                label: 'Display Name',
-                                controller: _displayNameController,
-                                validator: (value) {
-                                  if (value == null || value.trim().isEmpty) {
-                                    return 'Display name is required';
-                                  }
-                                  return null;
-                                },
-                              ),
-                              _buildEditableField(
-                                label: 'Phone Number',
-                                controller: _phoneController,
-                                keyboardType: TextInputType.phone,
-                              ),
-                              _buildGenderField(),
-                              _buildDateOfBirthField(),
-                            ] else ...[
-                              // View Mode with Edit Button
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    OutlinedButton.icon(
-                                      onPressed: _toggleEditMode,
-                                      icon: const Icon(Icons.edit, size: 16),
-                                      label: const Text('Edit'),
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: primaryColor,
-                                        side: const BorderSide(color: primaryColor),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(20),
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 8,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              _buildInfoRow('Display Name', _userProfile?['display_name'] ?? 'Not set'),
-                              _buildInfoRow('Phone Number', _userProfile?['phone'] ?? 'Not set'),
-                              _buildInfoRow('Gender', _userProfile?['jenis_kelamin'] != null 
-                                  ? '${_userProfile!['jenis_kelamin'].toString()[0].toUpperCase()}${_userProfile!['jenis_kelamin'].toString().substring(1)}'
-                                  : 'Not set'),
-                              _buildInfoRow('Date of Birth', _formatDate(_userProfile?['date_of_birth'])),
                             ],
-                            const Divider(height: 24),
-                            _buildInfoRow('Employee Code', _userProfile?['employee_code'] ?? 'Not set'),
-                            _buildInfoRow('Position', widget.memberData['position']?['title'] ?? 'Not specified'),
-                            _buildInfoRow('Department', widget.memberData['department']?['name'] ?? 'Not specified'),
-                          ],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: _hasRegisteredFace 
+                                      ? Colors.green.shade50 
+                                      : Colors.orange.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(
+                                  _hasRegisteredFace 
+                                      ? Icons.verified_user 
+                                      : Icons.warning_amber_rounded,
+                                  color: _hasRegisteredFace 
+                                      ? Colors.green.shade700 
+                                      : Colors.orange.shade700,
+                                  size: 24,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Security Status',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _hasRegisteredFace 
+                                          ? 'Face Registered' 
+                                          : 'Not Registered',
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (_hasRegisteredFace)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade100,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    'Verified',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.green.shade700,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                )
+                              else
+                                GestureDetector(
+                                  onTap: _navigateToFaceRegistration,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: primaryColor,
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: const Text(
+                                      'Register',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
 
                         const SizedBox(height: 16),
 
-                        // Face Registration Card
-                        _buildSectionCard(
-                          title: 'Face Recognition',
-                          icon: Icons.face,
-                          children: [
-                            if (_isCheckingFace)
-                              const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(20.0),
-                                  child: CircularProgressIndicator(),
-                                ),
-                              )
-                            else
-                              Column(
+                        // Employment Section
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: _hasRegisteredFace
-                                          ? Colors.green.shade50
-                                          : Colors.orange.shade50,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: _hasRegisteredFace
-                                            ? Colors.green.shade200
-                                            : Colors.orange.shade200,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          _hasRegisteredFace
-                                              ? Icons.check_circle
-                                              : Icons.warning_amber_rounded,
-                                          color: _hasRegisteredFace
-                                              ? Colors.green.shade700
-                                              : Colors.orange.shade700,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Text(
-                                            _hasRegisteredFace
-                                                ? 'Face registered successfully'
-                                                : 'Face not registered yet',
-                                            style: TextStyle(
-                                              color: _hasRegisteredFace
-                                                  ? Colors.green.shade900
-                                                  : Colors.orange.shade900,
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
+                                  const Text(
+                                    'Employment',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
                                     ),
                                   ),
-                                  const SizedBox(height: 16),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    height: 50,
-                                    child: ElevatedButton.icon(
-                                      onPressed: _navigateToFaceRegistration,
-                                      icon: Icon(_hasRegisteredFace ? Icons.refresh : Icons.face),
-                                      label: Text(
-                                        _hasRegisteredFace ? 'Re-register Face' : 'Register Face',
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: primaryColor,
-                                        foregroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                      ),
+                                  GestureDetector(
+                                    onTap: _toggleEditMode,
+                                    child: Icon(
+                                      Icons.edit,
+                                      size: 18,
+                                      color: primaryColor,
                                     ),
                                   ),
                                 ],
                               ),
-                          ],
+                              const SizedBox(height: 16),
+                              
+                              // Grid: Gender & DOB
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildCompactInfoItem(
+                                      Icons.person_outline,
+                                      'Gender',
+                                      _userProfile?['jenis_kelamin'] != null 
+                                          ? '${_userProfile!['jenis_kelamin'].toString()[0].toUpperCase()}${_userProfile!['jenis_kelamin'].toString().substring(1)}'
+                                          : 'Not set',
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _buildCompactInfoItem(
+                                      Icons.cake_outlined,
+                                      'DOB',
+                                      _formatDate(_userProfile?['date_of_birth']),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              
+                              // Phone
+                              _buildCompactInfoItem(
+                                Icons.phone_outlined,
+                                'Phone',
+                                _userProfile?['phone'] ?? 'Not set',
+                              ),
+                              
+                              const Divider(height: 24),
+                              
+                              // Employee Info
+                              _buildCompactInfoItem(
+                                Icons.badge_outlined,
+                                'Employee Code',
+                                _userProfile?['employee_code'] ?? 'Not set',
+                              ),
+                              const SizedBox(height: 12),
+                              _buildCompactInfoItem(
+                                Icons.work_outline,
+                                'Position',
+                                widget.memberData['position']?['title'] ?? 'Not specified',
+                              ),
+                              const SizedBox(height: 12),
+                              _buildCompactInfoItem(
+                                Icons.business_outlined,
+                                'Department',
+                                widget.memberData['department']?['name'] ?? 'Not specified',
+                              ),
+                            ],
+                          ),
                         ),
 
                         const SizedBox(height: 16),
 
-                        // Logout Button
-                        SizedBox(
-                          width: double.infinity,
-                          height: 50,
-                          child: ElevatedButton.icon(
-                            onPressed: _handleLogout,
-                            icon: const Icon(Icons.logout),
-                            label: const Text(
-                              'Logout',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                        // Tracking Mode Section
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
                               ),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Tracking Mode',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
-                            ),
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: primaryColor.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(
+                                      Icons.fingerprint,
+                                      color: primaryColor,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text(
+                                    'Face Recognition',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Menu Items
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              _buildMenuItem(
+                                Icons.notifications_outlined,
+                                'Notifications',
+                                () {
+                                  // TODO: Navigate to notifications
+                                },
+                              ),
+                              Divider(height: 1, color: Colors.grey.shade200),
+                              _buildMenuItem(
+                                Icons.lock_outline,
+                                'Privacy & Security',
+                                () {
+                                  // TODO: Navigate to privacy settings
+                                },
+                              ),
+                              Divider(height: 1, color: Colors.grey.shade200),
+                              _buildMenuItem(
+                                Icons.logout,
+                                'Sign Out',
+                                _handleLogout,
+                                isDestructive: true,
+                              ),
+                            ],
                           ),
                         ),
 
@@ -1070,6 +1150,83 @@ class _UserProfilePageState extends State<UserProfilePage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCompactInfoItem(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          icon,
+          size: 18,
+          color: primaryColor,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Colors.black87,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMenuItem(
+    IconData icon,
+    String title,
+    VoidCallback onTap, {
+    bool isDestructive = false,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: isDestructive ? Colors.red : Colors.grey.shade700,
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: isDestructive ? Colors.red : Colors.black87,
+                ),
+              ),
+            ),
+            Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: Colors.grey.shade400,
+            ),
+          ],
+        ),
       ),
     );
   }

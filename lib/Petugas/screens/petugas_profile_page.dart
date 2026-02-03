@@ -680,7 +680,7 @@ void _handleNavigation(int index) {
       width: double.infinity,
       padding: EdgeInsets.only(
         top: MediaQuery.of(context).padding.top + 16,
-        bottom: 32,
+        bottom: 16, // Reduced from 32
       ),
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -695,7 +695,7 @@ void _handleNavigation(int index) {
         'Profiles',
         textAlign: TextAlign.center,
         style: TextStyle(
-          fontSize: 24,
+          fontSize: 20, // Reduced from 24
           fontWeight: FontWeight.bold,
           color: Colors.white,
         ),
