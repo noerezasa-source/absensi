@@ -1,6 +1,8 @@
 // lib/services/face_recognition_service.dart
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 
