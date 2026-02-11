@@ -392,10 +392,11 @@ class MemberPerformanceService {
     int organizationId, {
     DateTime? startDate,
     DateTime? endDate,
+    String organizationTimezone = 'Asia/Jakarta',
   }) async {
     try {
       debugPrint('=== GETTING ORGANIZATION PERFORMANCE SUMMARY (FAST REAL) ===');
-      debugPrint('Organization ID: $organizationId');
+      debugPrint('Organization ID: $organizationId | Timezone: $organizationTimezone');
       
       // Get real member count
       final allMembersCount = await getOrganizationMembersCount(organizationId, includeInactive: true);
@@ -417,17 +418,17 @@ class MemberPerformanceService {
         };
       }
 
-      // Get today's attendance for real stats
-      final today = DateTime.now().toUtc().toIso8601String().split('T')[0];
-      final memberIds = members.map((m) => m['id'] as int).toList();
+      // Get today's attendance for real stats - querying ALL members in organization via join
+      // Use organization's local "today" instead of UTC today
+      final today = TimezoneHelper.getCurrentDateInOrgTimezone(organizationTimezone);
       
       final todayAttendance = await _supabase
           .from('attendance_records')
-          .select('organization_member_id, status')
-          .filter('organization_member_id', 'in', memberIds)
+          .select('organization_member_id, status, organization_members!inner(organization_id)')
+          .eq('organization_members.organization_id', organizationId)
           .eq('attendance_date', today);
 
-      debugPrint('Today attendance records: ${todayAttendance?.length ?? 0}');
+      debugPrint('Today global organization attendance records: ${todayAttendance?.length ?? 0}');
 
       // Calculate real stats from today's data
       final totalMembers = allMembersCount;
@@ -451,7 +452,7 @@ class MemberPerformanceService {
         'avg_punctuality_rate': punctualityRate,
         'avg_productivity_score': (attendanceRate + punctualityRate) / 2,
         'avg_work_hours': 8.0,
-        'top_performer': members.isNotEmpty ? members.first : null,
+        'top_performer': null, // Removed limited top performer here
         'needs_attention_count': 0,
       };
 
@@ -615,27 +616,18 @@ class MemberPerformanceService {
   Future<List<Map<String, dynamic>>> getRecentMemberActivities(
     int organizationId, {
     int limit = 10,
+    String organizationTimezone = 'Asia/Jakarta',
   }) async {
     try {
       debugPrint('=== GETTING RECENT TODAY ACTIVITIES ===');
-      debugPrint('Organization ID: $organizationId');
+      debugPrint('Organization ID: $organizationId | Timezone: $organizationTimezone');
       
       // Get today's date in the organization's timezone
-      final now = DateTime.now().toUtc();
-      final todayStr = now.toIso8601String().split('T')[0];
-      debugPrint('Today date: $todayStr');
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(organizationTimezone);
+      debugPrint('Today date in org TZ: $todayStr');
       
-      // Get all member IDs for this organization first
-      final members = await getOrganizationMembers(organizationId);
-      final memberIds = members.map((m) => m['id'] as int).toList();
-      
-      if (memberIds.isEmpty) {
-        debugPrint('No members found for recent activities');
-        return [];
-      }
-
-      // Get today's attendance records for these members
-      // Fetch more records initially to ensure we get the most recent after sorting
+      // Query attendance records for THIS organization directly via join
+      // This ensures we get the most recent activities across ALL members
       final recordsResponse = await _supabase
           .from('attendance_records')
           .select('''
@@ -648,30 +640,35 @@ class MemberPerformanceService {
             status,
             late_minutes,
             work_duration_minutes,
-            updated_at
+            updated_at,
+            organization_members!inner(
+              id,
+              organization_id,
+              user_profiles(
+                id,
+                display_name,
+                first_name,
+                last_name,
+                profile_photo_url
+              )
+            )
           ''')
-          .filter('organization_member_id', 'in', memberIds)
+          .eq('organization_members.organization_id', organizationId)
           .eq('attendance_date', todayStr)
-          .limit(limit * 2); // Fetch more to ensure we have enough after sorting
+          .order('updated_at', ascending: false)
+          .limit(limit);
 
-      debugPrint('Found ${recordsResponse?.length ?? 0} today attendance records');
+      debugPrint('Found ${recordsResponse?.length ?? 0} today attendance records organization-wide');
 
       if (recordsResponse == null || recordsResponse.isEmpty) {
         return [];
       }
 
-      // Enrich records with member information and determine event times
+      // Enrich records and determine event times
       final activities = <Map<String, dynamic>>[];
       
       for (final record in recordsResponse) {
-        final memberId = record['organization_member_id'] as int?;
-        if (memberId == null) continue;
-        
-        // Find member info
-        final member = members.firstWhere(
-          (m) => m['id'] == memberId,
-          orElse: () => <String, dynamic>{},
-        );
+        final member = record['organization_members'] as Map<String, dynamic>? ?? {};
         
         if (member.isNotEmpty) {
           // Determine the most recent activity
@@ -1147,11 +1144,35 @@ class MemberPerformanceService {
         case 'today':
           startDate = DateTime(endDate.year, endDate.month, endDate.day);
           break;
+        case 'yesterday':
+          startDate = endDate.subtract(const Duration(days: 1));
+          startDate = DateTime(startDate.year, startDate.month, startDate.day);
+          endDate = startDate.add(const Duration(hours: 23, minutes: 59, seconds: 59));
+          break;
         case 'week':
-          startDate = endDate.subtract(const Duration(days: 7));
+        case 'this_week':
+          startDate = endDate.subtract(Duration(days: endDate.weekday - 1));
+          startDate = DateTime(startDate.year, startDate.month, startDate.day);
+          break;
+        case 'last_week':
+          startDate = endDate.subtract(Duration(days: endDate.weekday + 6));
+          startDate = DateTime(startDate.year, startDate.month, startDate.day);
+          endDate = startDate.add(const Duration(days: 6, hours: 23, minutes: 59, seconds: 59));
           break;
         case 'month':
+        case 'this_month':
           startDate = DateTime(endDate.year, endDate.month, 1);
+          break;
+        case 'last_month':
+          startDate = DateTime(endDate.year, endDate.month - 1, 1);
+          endDate = DateTime(endDate.year, endDate.month, 0, 23, 59, 59);
+          break;
+        case 'this_year':
+          startDate = DateTime(endDate.year, 1, 1);
+          break;
+        case 'last_year':
+          startDate = DateTime(endDate.year - 1, 1, 1);
+          endDate = DateTime(endDate.year - 1, 12, 31, 23, 59, 59);
           break;
         case 'custom':
           startDate = customStart ?? DateTime(endDate.year, endDate.month, 1);

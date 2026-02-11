@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -214,13 +215,13 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
       initData.recognitionModelBytes,
       options: InterpreterOptions()..threads = 4,
     );
-    print('ISOLATE: Recognition Model loaded successfully');
+    // print('ISOLATE: Recognition Model loaded successfully');
     
     landmarkInterpreter = Interpreter.fromBuffer(
       initData.landmarkModelBytes,
       options: InterpreterOptions()..threads = 2,
     );
-    print('ISOLATE: Landmark Model loaded successfully');
+    // print('ISOLATE: Landmark Model loaded successfully');
 
     // Configure Recognition Model
     final recInTensor = recognitionInterpreter.getInputTensor(0);
@@ -232,10 +233,10 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
     final lanInTensor = landmarkInterpreter.getInputTensor(0);
     if (lanInTensor.shape.length >= 3) landmarkInputSize = lanInTensor.shape[1];
 
-    print('ISOLATE: Models Configured. RecInput=$recognitionInputSize, LanInput=$landmarkInputSize, Emb=$embeddingSize');
+    // print('ISOLATE: Models Configured. RecInput=$recognitionInputSize, LanInput=$landmarkInputSize, Emb=$embeddingSize');
     
   } catch (e) {
-    print('ISOLATE: Failed to load models: $e');
+    debugPrint('ISOLATE: Failed to load models: $e');
   }
 
   receivePort.listen((message) async {
@@ -268,6 +269,9 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
         if (faceImage == null) {
           throw Exception('Failed to decode or process image');
         }
+        
+        // ✅ NEW: Enhance image clarity (Sharpen + Normalize)
+        faceImage = _enhanceImage(faceImage);
         
         // 1. Run Recognition Model (W600K)
         // Resize if base image is larger than needed
@@ -358,59 +362,80 @@ img.Image _convertYUVRegionToImage(Uint8List yuvBytes, int frameWidth, int frame
      startX = 0; startY = 0; cropW = min(frameWidth, 200); cropH = min(frameHeight, 200);
   }
 
-  // 3. One-Pass Turbo Loop: Crop + Scale + Convert YUV
+  // 3. One-Pass Turbo Loop: Crop + Scale + Convert YUV + Rotate
   final image = img.Image(width: targetSize, height: targetSize);
   final int frameSize = frameWidth * frameHeight;
   
   final double scaleX = cropW / targetSize;
   final double scaleY = cropH / targetSize;
 
+  // Optimized constants for YUV -> RGB
+  const int c1 = 1403; // 1.370705 * 1024
+  const int c2 = 346;  // 0.337633 * 1024
+  const int c3 = 715;  // 0.698001 * 1024
+  const int c4 = 1774; // 1.732446 * 1024
+
   for (int y = 0; y < targetSize; y++) {
     final int sourceY = startY + (y * scaleY).toInt();
+    if (sourceY < 0 || sourceY >= frameHeight) continue;
+    
     final int yOffset = sourceY * frameWidth;
     final int uvY = sourceY >> 1;
     final int uvRowStart = frameSize + (uvY * frameWidth);
 
     for (int x = 0; x < targetSize; x++) {
       final int sourceX = startX + (x * scaleX).toInt();
+      if (sourceX < 0 || sourceX >= frameWidth) continue;
+      
       final int yIndex = yOffset + sourceX;
-      
       if (yIndex >= frameSize) continue;
-      final int yVal = yuvBytes[yIndex] & 0xFF;
       
+      final int yVal = yuvBytes[yIndex];
       final int uvX = sourceX & ~1;
       final int uvIndex = uvRowStart + uvX;
       
       int uVal = 128;
       int vVal = 128;
       if (uvIndex + 1 < yuvBytes.length) {
-        vVal = yuvBytes[uvIndex] & 0xFF;
-        uVal = yuvBytes[uvIndex + 1] & 0xFF;
+        vVal = yuvBytes[uvIndex];
+        uVal = yuvBytes[uvIndex + 1];
       }
       
-      // Integer-only YUV conversion for speed
-      int r = (yVal + (1.370705 * (vVal - 128)).toInt());
-      int g = (yVal - (0.337633 * (uVal - 128)).toInt() - (0.698001 * (vVal - 128)).toInt());
-      int b = (yVal + (1.732446 * (uVal - 128)).toInt());
+      final int r8 = vVal - 128;
+      final int u8 = uVal - 128;
+
+      // Fixed point conversion
+      int r = yVal + ((c1 * r8) >> 10);
+      int g = yVal - ((c2 * u8 + c3 * r8) >> 10);
+      int b = yVal + ((c4 * u8) >> 10);
       
       // Fast Clamp
       r = r < 0 ? 0 : (r > 255 ? 255 : r);
       g = g < 0 ? 0 : (g > 255 ? 255 : g);
       b = b < 0 ? 0 : (b > 255 ? 255 : b);
       
-      image.setPixelRgb(x, y, r, g, b);
+      // Handle Rotation during Pixel Set (Avoid cost of img.copyRotate later)
+      // Destination calculation based on rotation
+      int dx, dy;
+      if (rotation == 90) {
+        dx = targetSize - 1 - y;
+        dy = x;
+      } else if (rotation == 270) {
+        dx = y;
+        dy = targetSize - 1 - x;
+      } else if (rotation == 180) {
+        dx = targetSize - 1 - x;
+        dy = targetSize - 1 - y;
+      } else {
+        dx = x;
+        dy = y;
+      }
+      
+      image.setPixelRgb(dx, dy, r, g, b);
     }
   }
 
-  // 4. Final Processing (Rotation)
-  var faceImage = image;
-  if (rotation != 0) {
-    faceImage = img.copyRotate(faceImage, angle: rotation);
-  }
-
-  // lighting normalization removed here to preserve speed on low-end.
-  // We rely on TFLite model's own normalization if possible.
-  return faceImage;
+  return image;
 }
 
 // ✅ NEW: Robust Lighting Normalization (CLAHE-lite)
@@ -444,8 +469,12 @@ img.Image _normalizeLighting(img.Image image) {
 }
 
 img.Image _enhanceImage(img.Image image) {
-  // ✅ Deprecated: Replaced by _normalizeLighting
-  return image;
+  // ✅ IMPROVED: Apply sharpening using convolution filter for 720p clarity
+  // Sharpen kernel: [[0, -1, 0], [-1, 5, -1], [0, -1, 0]]
+  final sharpened = img.convolution(image, filter: [0, -1, 0, -1, 5, -1, 0, -1, 0]);
+  
+  // Apply lighting normalization
+  return _normalizeLighting(sharpened);
 }
 
 img.Image _cropAndAlignFace(img.Image image, Map<String, dynamic> faceData, int inputSize) {
@@ -522,7 +551,7 @@ List<double> _dequantize(Tensor tensor, dynamic output) {
     scale = params.scale;
     zeroPoint = params.zeroPoint;
   } catch (e) {
-    print('ISOLATE: Warning - could not read quantization params: $e');
+    // debugPrint('ISOLATE: Warning - could not read quantization params: $e');
   }
 
   final List<dynamic> rawList = (output is List && output.isNotEmpty && output[0] is List) 

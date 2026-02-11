@@ -97,45 +97,23 @@ class FaceRecognitionService {
   }
 
   // Membandingkan dua template wajah
+  // ❌ DEPRECATED: Do not use for Identity Verification
+  // This method relied on geometric landmarks which are insufficient for security.
+  // Use FaceRecognitionTFLiteService.compareFaces() with embeddings instead.
   double compareFaces(
     Map<String, dynamic> template1,
     Map<String, dynamic> template2,
   ) {
-    double totalScore = 0.0;
-    int comparisonCount = 0;
+    debugPrint('⚠️ WARNING: Deprecated compareFaces called. Use TFLite Embeddings.');
+    return 0.0; 
+  }
 
-    // Bandingkan landmarks
-    final landmarks1 = _normalizeTemplateLandmarks(template1);
-    final landmarks2 = _normalizeTemplateLandmarks(template2);
-
-    for (var key in landmarks1.keys) {
-      if (landmarks2.containsKey(key)) {
-        final point1 = landmarks1[key] as Map<String, dynamic>;
-        final point2 = landmarks2[key] as Map<String, dynamic>;
-
-        final dx = (point1['x'] as num) - (point2['x'] as num);
-        final dy = (point1['y'] as num) - (point2['y'] as num);
-        final distance = (dx * dx + dy * dy).toDouble();
-
-        // Normalisasi jarak (semakin kecil semakin mirip)
-        final similarity = 1.0 / (1.0 + distance / 10000.0);
-        totalScore += similarity;
-        comparisonCount++;
-      }
-    }
-
-    // Bandingkan head angles
-    final angles1 = template1['headAngles'] as Map<String, dynamic>;
-    final angles2 = template2['headAngles'] as Map<String, dynamic>;
-
-    final angleDiffY = ((angles1['eulerY'] as num) - (angles2['eulerY'] as num)).abs();
-    final angleDiffZ = ((angles1['eulerZ'] as num) - (angles2['eulerZ'] as num)).abs();
-    
-    final angleSimilarity = 1.0 - ((angleDiffY + angleDiffZ) / 180.0).clamp(0.0, 1.0);
-    totalScore += angleSimilarity;
-    comparisonCount++;
-
-    return comparisonCount > 0 ? totalScore / comparisonCount : 0.0;
+  // Calculate Euclidean distance between two points
+  double _calculateDistance(Map<String, dynamic> point1, Map<String, dynamic> point2) {
+     // Kept only if needed for other non-identity calculations, else could be removed.
+    double dx = (point1['x'] as double) - (point2['x'] as double);
+    double dy = (point1['y'] as double) - (point2['y'] as double);
+    return math.sqrt(dx * dx + dy * dy);
   }
 
   // Validasi kualitas foto untuk pendaftaran

@@ -104,7 +104,7 @@ class _FaceAttendanceMultiUserPageState
   final Map<int, DateTime> _cooldowns = {};
   
   // Configuration
-  static const int _requiredStableFrames = 1; // ⚡ REDUCED: Was 2 (Requires 3 frames total). Now 1 (Requires 2 frames total).
+  static const int _requiredStableFrames = 0; // ⚡ INSTANT: Recognition triggers immediately upon detection.
   static const double _stabilityThreshold = 300.0; // 🚀 INCREASED: More tolerant of motion (was 200.0)
   static const Duration _recognitionCooldown = Duration(seconds: 2); // ✅ FASTER: 2s cooldown for quicker re-recognition
   
@@ -121,7 +121,7 @@ class _FaceAttendanceMultiUserPageState
   String? _debugExternalDir; // Cache for debug path
   DateTime _lastDebugSave = DateTime.fromMillisecondsSinceEpoch(0); // For throttling debug saves
   DateTime _lastCameraProcess = DateTime.fromMillisecondsSinceEpoch(0); // ✅ NEW: Throttle detection loop
-  static const Duration _cameraThrottle = Duration(milliseconds: 85); // ✅ 85ms = ~12 FPS processing (Smooth & Efficient)
+  static const Duration _cameraThrottle = Duration(milliseconds: 60); // ✅ 60ms = ~16 FPS processing (Faster responsiveness)
 
   @override
   void initState() {
@@ -517,11 +517,11 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.veryHigh, // ✅ UPGRADED: Full HD for maximum clarity
-        // ✅ FIXED: Stream requires YUV420 on Android, BGRA8888 on iOS
-      imageFormatGroup: Platform.isAndroid 
-          ? ImageFormatGroup.yuv420 
-          : ImageFormatGroup.bgra8888,
+        ResolutionPreset.high, // ✅ OPTIMIZED: 720p is much faster and sharp enough
+        enableAudio: false,
+        imageFormatGroup: Platform.isAndroid 
+            ? ImageFormatGroup.nv21 // Android standard
+            : ImageFormatGroup.bgra8888, // iOS standard
       );
 
       await _cameraController!.initialize().timeout(
@@ -635,7 +635,7 @@ class _FaceAttendanceMultiUserPageState
       // ✅ Mode Switching Logic (Hysteresis)
       if (faces.isEmpty) {
         _consecutiveNoFaceFrames++;
-        if (_consecutiveNoFaceFrames >= 10 && !_isIdleMode) {
+        if (_consecutiveNoFaceFrames >= 5 && !_isIdleMode) {
           if (mounted) setState(() => _isIdleMode = true);
           debugPrint('📴 Entering idle mode (no faces)');
         }
@@ -828,7 +828,7 @@ class _FaceAttendanceMultiUserPageState
           // ✅ INSTANT RECOGNITION: Bypass Tracking, go straight to LOCKED/INFERENCE
           _faceStates[id] = FaceTrackingState.locked;
           _stabilityCounters[id] = 0;
-          _lastFaceRects[id] = face.boundingBox;
+          _lastFaceRects[id] = face.boundingBox; 
            // Trigger Inference Immediately
           _triggerRecognition(face, imageSize);
           displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.locked));
@@ -862,6 +862,12 @@ class _FaceAttendanceMultiUserPageState
           displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.locked));
           break;
 
+        case FaceTrackingState.livenessCheck:
+          // ✅ Running anti-spoofing liveness detection
+          // Show processing UI while checking
+          displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.livenessCheck));
+          break;
+
         case FaceTrackingState.cooldown:
           displayFaces.add(_buildFaceDisplayData(face, FaceTrackingState.cooldown));
           break;
@@ -884,26 +890,36 @@ class _FaceAttendanceMultiUserPageState
        case FaceTrackingState.idle:
        case FaceTrackingState.tracking:
          boxColor = Colors.yellow;
-         statusText = null; // Clean UI
+         statusText = null; 
          break;
        case FaceTrackingState.locked:
          boxColor = Colors.blue; 
-         statusText = null; // Clean UI
+         statusText = null; 
+         break;
+       case FaceTrackingState.livenessCheck:
+         boxColor = Colors.orange;
+         statusText = 'Checking...';
          break;
        case FaceTrackingState.cooldown:
-         // Look up result from persistent tracker
          final trackedData = _persistentFaceTracker[face.trackingId];
          if (trackedData != null) {
             final name = trackedData['name'] as String;
+            final similarity = trackedData['similarity'] as double?;
+            
             if (name == 'Unknown') {
                boxColor = Colors.red;
-               statusText = null; // Clean UI
+               statusText = 'Unknown'; 
             } else if (name == 'Error') {
                boxColor = Colors.red.withOpacity(0.5);
                statusText = 'Error';
             } else {
                boxColor = Colors.green;
-               statusText = name;
+               // ✅ SHOW PERCENTAGE: "Name (85%)"
+               if (similarity != null) {
+                 statusText = '$name (${similarity.toStringAsFixed(0)}%)';
+               } else {
+                 statusText = name;
+               }
             }
          } else {
             boxColor = Colors.grey;
@@ -979,20 +995,21 @@ class _FaceAttendanceMultiUserPageState
             // --- TURBO FAST-ACCEPT LOGIC (Phase 7/11) ---
             if (i == 0) {
                final liveness = _checkBehavioralLiveness([embedding.map((e) => (e as num).toDouble()).toList()], [template]);
-               final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
-                  capturedTemplate: template, 
-                  organizationId: widget.organizationId,
-                  threshold: 0.70,
-                  strict: true,
-               );
-               
-               if (liveness['isLive'] && bestMatch != null) {
-                  final similarity = bestMatch['similarity'] as double? ?? 0.0;
-                  final secondSim = bestMatch['second_similarity'] as double? ?? 0.0;
-                  final gap = similarity - secondSim;
-                  
-                  // --- TURBO FAST-ACCEPT CRITERIA ---
-                  bool isClearMatch = similarity > 0.85 || (similarity > 0.72 && gap > 0.05);
+                final bestMatch = await _biometricService.identifyBestMatchWithUserInfo(
+                   capturedTemplate: template, 
+                   organizationId: widget.organizationId,
+                   threshold: 0.45, // ✅ ALIGNED: Raw Cosine 0.45 (Normal Range)
+                   strict: false,   
+                );
+                
+                if (liveness['isLive'] && bestMatch != null) {
+                   final similarity = bestMatch['similarity'] as double? ?? 0.0;
+                   final secondSim = bestMatch['second_similarity'] as double? ?? 0.0;
+                   final gap = similarity - secondSim;
+                   
+                   // --- TURBO FAST-ACCEPT CRITERIA (Balanced) ---
+                   // Raw Cosine 0.55 is VERY strong match. Gap 0.08 is solid.
+                   bool isClearMatch = similarity > 0.55 || (similarity > 0.48 && gap > 0.08);
 
                   if (isClearMatch) {
                     debugPrint('⚡ TURBO: Immediate Accept (Sim: ${similarity.toStringAsFixed(3)}, Gap: ${gap.toStringAsFixed(3)})');
@@ -1062,8 +1079,10 @@ class _FaceAttendanceMultiUserPageState
        // Single frame "Turbo" mode assumes liveness if similarity is very high
        // or relies on 3D depth from isolate
        final depth = (templates.first['advancedAttributes']?['depthScore'] ?? 0.0) as double;
+       final is3DReal = (templates.first['advancedAttributes']?['is3DReal'] ?? false) as bool;
+       
        return {
-         'isLive': depth > 0.010, // Base depth check
+         'isLive': is3DReal, // Use strict depth check from service
          'reason': 'turbo_depth_check',
          'depthScore': depth,
        };
@@ -1081,15 +1100,27 @@ class _FaceAttendanceMultiUserPageState
     }
     final eyeVariation = maxEyeOpen - minEyeOpen;
 
-    // 2. Check for Pixel-Perfect Identity (Static Image Detection)
-    // If landmarks are EXACTLY the same across frames, it's a photo, not a human.
-    bool pixelPerfectIdentity = true;
+    // 2. Check for Static Image Detection with TOLERANCE
+    // Instead of pixel-perfect, allow small natural micro-movements (jitter/breathing)
+    bool likelyStaticImage = true;
+    const double movementTolerance = 5.0; // 5 pixels tolerance for natural micro-movements
+    
     for (int i = 0; i < templates.length - 1; i++) {
         final l1 = templates[i]['landmarks'] as Map?;
         final l2 = templates[i+1]['landmarks'] as Map?;
         if (l1 != null && l2 != null) {
-          if (l1['noseBase']?['x'] != l2['noseBase']?['x']) {
-            pixelPerfectIdentity = false;
+          // Check multiple landmarks for movement
+          final nose1X = l1['noseBase']?['x'] as double? ?? 0.0;
+          final nose2X = l2['noseBase']?['x'] as double? ?? 0.0;
+          final nose1Y = l1['noseBase']?['y'] as double? ?? 0.0;
+          final nose2Y = l2['noseBase']?['y'] as double? ?? 0.0;
+          
+          final noseDiff = ((nose1X - nose2X).abs() + (nose1Y - nose2Y).abs());
+          
+          // If ANY movement detected beyond tolerance, it's likely real
+          if (noseDiff > movementTolerance) {
+            likelyStaticImage = false;
+            break;
           }
         }
     }
@@ -1105,14 +1136,16 @@ class _FaceAttendanceMultiUserPageState
     avgDepth /= templates.length;
     avgArea /= templates.length;
 
-    final double adaptiveThreshold = avgArea > 8000 ? 0.015 : 0.010;
+    // ✅ RELAXED: Lower threshold for real faces (0.010 -> 0.005)
+    final double adaptiveThreshold = avgArea > 8000 ? 0.010 : 0.005;
 
     if (avgDepth < adaptiveThreshold) {
       return {'isLive': false, 'reason': 'flat_surface_detected', 'depthScore': avgDepth};
     }
 
-    if (pixelPerfectIdentity) {
-      return {'isLive': false, 'reason': 'static_image_detected'};
+    // ✅ RELAXED: Only reject if BOTH static AND low depth
+    if (likelyStaticImage && avgDepth < 0.020) {
+      return {'isLive': false, 'reason': 'static_image_detected', 'depthScore': avgDepth};
     }
 
     return {
@@ -1204,16 +1237,15 @@ class _FaceAttendanceMultiUserPageState
         final frameCount = template['frame_count'] ?? 1;
         debugPrint('✅ Using ${frameCount}-frame averaged embedding for matching');
 
-        // Capture current bytes for attendance photo
-        final bytes = Uint8List.fromList(_lastStreamBytes!);
-
         final matchStart = stopwatch.elapsedMilliseconds;
-        final result = await _biometricService.identifyBestMatchWithUserInfo(
-           capturedTemplate: template,
-           organizationId: widget.organizationId,
-           strict: true, // Enforce strict matching
-           threshold: 0.70, // ✅ Phase 11 tuned
-        );
+        final result = template.containsKey('matched_user') 
+            ? template['matched_user'] as Map<String, dynamic>?
+            : await _biometricService.identifyBestMatchWithUserInfo(
+                capturedTemplate: template,
+                organizationId: widget.organizationId,
+                strict: true,
+                threshold: 0.45, // ✅ ALIGNED: Raw Cosine 0.45
+              );
         final matchEnd = stopwatch.elapsedMilliseconds;
         debugPrint('🔍 [BENCH] Matching against database took: ${matchEnd - matchStart}ms');
         debugPrint('🚀 [BENCH] TOTAL Recognition Cycle: ${stopwatch.elapsedMilliseconds}ms');
@@ -1221,7 +1253,16 @@ class _FaceAttendanceMultiUserPageState
         if (result != null) {
            final name = result['user_name'];
            final memberId = result['organization_member_id'];
-           final similarity = (result['similarity'] as double) * 100;
+           final similarityRaw = (result['similarity'] as double? ?? 0.0);
+           // Display as Percentage
+           final similarity = similarityRaw * 100;
+           
+           // ✅ INSTANT FEEDBACK: Sound + UI First
+           if (mounted) {
+              SoundHelper.playSuccessSound(); 
+           }
+
+           _handleAttendance(result, template); // Fire and forget
            
            // Update Persistent Tracker for UI
            _persistentFaceTracker[id] = {
@@ -1230,20 +1271,14 @@ class _FaceAttendanceMultiUserPageState
              'similarity': similarity,
              'timestamp': DateTime.now(),
            };
-           
-           _handleAttendance(result, bytes, template); // Fire and forget
-            
-            if (mounted) {
-               SoundHelper.playSuccessSound(); 
-            }
             // ✅ SUCCESS: Cooldown to prevent spam
             _cooldowns[id] = DateTime.now().add(_recognitionCooldown);
 
-            // ✅ NEW: Adaptive Learning (Evolution)
+            // ✅ NEW: Adaptive Learning (Evolution-Only on High Confidence)
             final matchedBiometricId = result['biometric_id'] as int?;
             final currentSim = result['similarity'] as double? ?? 0.0;
             
-            if (matchedBiometricId != null && currentSim >= 0.90) {
+            if (matchedBiometricId != null && currentSim >= 0.55) { // 0.55 Raw Cosine is Very High
                final originalTemplate = _biometricService.getParsedTemplateFromCache(matchedBiometricId);
                if (originalTemplate != null) {
                   _biometricService.evolveTemplate(
@@ -1295,7 +1330,6 @@ class _FaceAttendanceMultiUserPageState
   // ✅ OPTIMIZED: Direct Attendance Handling (No Queue)
   Future<void> _handleAttendance(
     Map<String, dynamic> result,
-    Uint8List imageBytes,
     Map<String, dynamic> template,
   ) async {
     // Process directly without queue - run async in background
@@ -1331,26 +1365,23 @@ class _FaceAttendanceMultiUserPageState
       _lastAttendanceTime[cooldownKey] = DateTime.now();
       debugPrint('🔒 LOCKED Cooldown for $userName ($attendanceType) immediately.');
 
-      // 🚀 OPTIMIZATION: HAPPY PATH - UPDATE UI IMMEDIATELY (Phase 9)
+      // 🚀 OPTIMIZATION: HAPPY PATH - UPDATE UI IMMEDIATELY
       _showMessage(
           'Sukses: $userName (${isCheckIn ? "MASUK" : "KELUAR"})',
           MessageType.success,
           seconds: 2,
       );
 
-      debugPrint('Step 1: UI Update Start');
       if (mounted) {
-          debugPrint('📋 TOP-LEVEL UI UPDATE: $userName, Dept=${user['department_name']}');
           setState(() {
             _totalProcessedToday++;
             final now = DateTime.now();
             final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
             
-            // We use the last downloaded photo if available, otherwise fetch in background
             _recentAttendanceList.insert(0, {
               'name': userName,
-              'department': user['department_name'] ?? '-',
-              'photo_base64': null, // Will be updated if fetched
+              'department': user['department_name'], // ✅ Removed fallback to '-'
+              'photo_base64': null, 
               'time': timeStr,
               'type': attendanceType,
               'timestamp': now,
@@ -1358,28 +1389,9 @@ class _FaceAttendanceMultiUserPageState
             if (_recentAttendanceList.length > 10) _recentAttendanceList.removeLast();
           });
       }
-      debugPrint('Step 2: UI Update End');
 
-      // Check duplicates (offline DB) - Now safe to await in background
-      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
-      debugPrint('Step 3: Duplicate Check Start ($todayStr)');
-      
-      final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
-          organizationMemberId: memberId,
-          eventType: attendanceType,
-          attendanceDate: todayStr,
-      );
-      debugPrint('Step 4: Duplicate Check End ($alreadyRecorded)');
-      
-      if (alreadyRecorded) {
-          debugPrint('⏭️ USER $userName: Already recorded in offline DB, skipping database write');
-          return;
-      }
-
-      // 📥 BACKGROUND TASKS: Non-blocking
-      debugPrint('Step 5: Background Tasks Start');
+      // 📥 BACKGROUND TASKS: Non-blocking (Duplicate check & Database Save)
       _processBackgroundAttendance(user, template, attendanceType, memberId, userName, biometricId, profilePhotoUrl);
-      debugPrint('Step 6: HandleAttendance Finished');
 
     } catch(e) {
        debugPrint('Error in handleAttendance: $e');
@@ -1413,7 +1425,19 @@ class _FaceAttendanceMultiUserPageState
               });
           }
 
-          // 2. Database Save
+          // 2. Duplicate Check & Database Save
+          final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+          final alreadyRecorded = await _offlineDb.hasDuplicateAttendance(
+              organizationMemberId: memberId,
+              eventType: attendanceType,
+              attendanceDate: todayStr,
+          );
+          
+          if (alreadyRecorded) {
+              debugPrint('⏭️ Background: $userName already recorded, skipping DB write');
+              return;
+          }
+
           final offlineId = await _saveOfflineAttendance(
               memberId: memberId,
               userName: userName,
@@ -1943,7 +1967,10 @@ class _FaceAttendanceMultiUserPageState
                   left: left,
                   top: top,
                   child: CustomPaint(
-                    painter: _FaceBracketPainter(color: boxColor),
+                    // ✅ PASS NAME TO PAINTER
+                    painter: _FaceBracketPainter(
+                      color: boxColor,
+                    ),
                     child: Container(
                       width: width,
                       height: height,
@@ -2239,7 +2266,7 @@ class _FaceAttendanceMultiUserPageState
                                                 overflow: TextOverflow.ellipsis,
                                               ),
                                               Text(
-                                                '${item['department'] ?? '-'} • ${item['type'] == 'check_in' ? 'Masuk' : 'Keluar'} • ${item['time']}',
+                                                '${item['department'] != null ? "${item['department']} • " : ""}${item['type'] == 'check_in' ? 'Masuk' : 'Keluar'} • ${item['time']}',
                                                 style: const TextStyle(
                                                   color: Color(0xFF8E44AD),
                                                   fontSize: 10.5,
@@ -2411,7 +2438,7 @@ class _FaceBracketPainter extends CustomPainter {
   final Color color;
   final double bracketSize = 25.0;
   final double bracketWidth = 4.0;
-  final double borderRadius = 30.0;
+  final double borderRadius = 12.0; // Reduced for tighter fit
 
   _FaceBracketPainter({required this.color});
 
@@ -2421,6 +2448,10 @@ class _FaceBracketPainter extends CustomPainter {
     Color drawColor = color;
     if (color == Colors.green || color == Colors.red || color == Colors.blue) {
        drawColor = const Color(0xFF8E44AD); // Matches image
+    }
+    // Override: Use Green for success
+    if (color == Colors.green) {
+       drawColor = const Color(0xFF2ECC71); 
     }
 
     final paint = Paint()
@@ -2458,7 +2489,9 @@ class _FaceBracketPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _FaceBracketPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
 }
 
 

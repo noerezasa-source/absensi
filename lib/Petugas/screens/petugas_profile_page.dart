@@ -670,6 +670,7 @@ void _handleNavigation(int index) {
           currentIndex: _currentNavIndex,
           onNavigationTap: _handleNavigation,
           isDarkMode: widget.isDarkMode,
+          attendanceMode: _attendanceMode,
         ),
       ),
     );
@@ -1284,14 +1285,14 @@ void _handleNavigation(int index) {
               id: 'face',
               title: 'Face Recognition',
               subtitle: 'Scan face to take attendance',
-              icon: Icons.face_rounded,
+              icon: Icons.face_retouching_natural_rounded,
             ),
             const SizedBox(height: 12),
             _buildModeOption(
               id: 'rfid',
               title: 'RFID Card',
               subtitle: 'Tap RFID card on scanner',
-              icon: Icons.nfc_rounded,
+              icon: Icons.copy_all_rounded,
             ),
             const SizedBox(height: 12),
             _buildModeOption(

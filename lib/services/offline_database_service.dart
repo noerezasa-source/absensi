@@ -24,12 +24,66 @@ class OfflineDatabaseService {
     final databasePath = await getDatabasesPath();
     final path = join(databasePath, 'offline_attendance.db');
 
-    return await openDatabase(
+    final db = await openDatabase(
       path,
-      version: 5, // Increment version for position columns
+      version: 6, // Increment to version 6 to fix missing biometric_data table
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+
+    // ✅ SELF-HEALING V2: Deep Schema Verification
+    // Verify critical tables and columns exist. If not, DROP and RECREATE.
+    try {
+      // 1. Check biometric_data table
+      final bioTable = await db.rawQuery("PRAGMA table_info(biometric_data)");
+      final hasBioTable = bioTable.isNotEmpty;
+      final hasTemplateData = bioTable.any((col) => col['name'] == 'template_data');
+      
+      if (!hasBioTable || !hasTemplateData) {
+        debugPrint('🛠️ REPAIR: biometric_data table invalid (Missing or bad schema). Recreating...');
+        await db.execute('DROP TABLE IF EXISTS biometric_data');
+        await db.execute('''
+          CREATE TABLE biometric_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            organization_member_id INTEGER NOT NULL,
+            biometric_type TEXT NOT NULL,
+            template_data TEXT NOT NULL,
+            device_id INTEGER,
+            enrollment_date TEXT NOT NULL,
+            last_used_at TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(organization_member_id, biometric_type)
+          )
+        ''');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_biometric_member ON biometric_data(organization_member_id)');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_biometric_type ON biometric_data(biometric_type)');
+        debugPrint('✅ REPAIR: biometric_data table repaired successfully.');
+      }
+
+      // 2. Check offline_attendances (ensure sync with server schema)
+      final attTable = await db.rawQuery("PRAGMA table_info(offline_attendances)");
+      final hasPhotoUrl = attTable.any((col) => col['name'] == 'check_in_photo_url');
+      
+      if (!hasPhotoUrl) {
+         debugPrint('🛠️ UPGRADE: Adding missing columns to offline_attendances...');
+         try {
+           await db.execute('ALTER TABLE offline_attendances ADD COLUMN check_in_photo_url TEXT');
+           await db.execute('ALTER TABLE offline_attendances ADD COLUMN check_out_photo_url TEXT');
+           await db.execute('ALTER TABLE offline_attendances ADD COLUMN late_minutes INTEGER');
+           await db.execute('ALTER TABLE offline_attendances ADD COLUMN work_duration_minutes INTEGER');
+         } catch (e) {
+           // Ignore if columns already exist (though check said no)
+         }
+         debugPrint('✅ UPGRADE: offline_attendances columns added.');
+      }
+      
+    } catch (e) {
+      debugPrint('⚠️ Error during self-healing check: $e');
+    }
+
+    return db;
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -95,6 +149,31 @@ class OfflineDatabaseService {
     
     await db.execute('''
       CREATE INDEX idx_org_member ON cached_members(organization_member_id)
+    ''');
+    
+    // ✅ NEW: Create biometric data table (was missing in onCreate)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS biometric_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization_member_id INTEGER NOT NULL,
+        biometric_type TEXT NOT NULL,
+        template_data TEXT NOT NULL,
+        device_id INTEGER,
+        enrollment_date TEXT NOT NULL,
+        last_used_at TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(organization_member_id, biometric_type)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_biometric_member ON biometric_data(organization_member_id)
+    ''');
+    
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_biometric_type ON biometric_data(biometric_type)
     ''');
   }
 
@@ -164,10 +243,31 @@ class OfflineDatabaseService {
       ''');
     }
 
-    if (oldVersion < 5) {
-      // Add position columns to cached_members
-      await db.execute('ALTER TABLE cached_members ADD COLUMN position_id INTEGER');
-      await db.execute('ALTER TABLE cached_members ADD COLUMN position_name TEXT');
+    if (oldVersion < 6) {
+      // ✅ REPAIR: Ensure biometric_data exists (might be missing if installed at version 5)
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS biometric_data (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          organization_member_id INTEGER NOT NULL,
+          biometric_type TEXT NOT NULL,
+          template_data TEXT NOT NULL,
+          device_id INTEGER,
+          enrollment_date TEXT NOT NULL,
+          last_used_at TEXT,
+          is_active INTEGER DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(organization_member_id, biometric_type)
+        )
+      ''');
+
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_biometric_member ON biometric_data(organization_member_id)
+      ''');
+      
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_biometric_type ON biometric_data(biometric_type)
+      ''');
     }
   }
 
@@ -176,15 +276,17 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       final map = attendance.toMap();
-      debugPrint('📝 Inserting attendance: method=${attendance.method}, memberId=${attendance.organizationMemberId}, eventType=${attendance.eventType}');
+      // debugPrint('📝 Inserting attendance: method=${attendance.method}, memberId=${attendance.organizationMemberId}, eventType=${attendance.eventType}');
       final id = await db.insert('offline_attendances', map);
-      debugPrint('✅ Attendance inserted with ID: $id');
+      // debugPrint('✅ Attendance inserted with ID: $id');
       return id;
     } catch (e) {
       debugPrint('❌ Error inserting offline attendance: $e');
+      /*
       debugPrint('   Method: ${attendance.method}');
       debugPrint('   Member ID: ${attendance.organizationMemberId}');
       debugPrint('   Event Type: ${attendance.eventType}');
+      */
       rethrow;
     }
   }
@@ -408,9 +510,44 @@ class OfflineDatabaseService {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
 
-      debugPrint('✅ Cached member: ${displayName ?? '$firstName $lastName'} (Card: $cardNumber)');
+      // debugPrint('✅ Cached member: ${displayName ?? '$firstName $lastName'} (Card: $cardNumber)');
     } catch (e) {
       debugPrint('❌ Error caching member data: $e');
+    }
+  }
+
+  // ✅ SYNC Biometric Data (Batch)
+  Future<void> syncBiometricData(List<Map<String, dynamic>> templates) async {
+    final db = await database;
+    final batch = db.batch();
+
+    try {
+      // debugPrint('🔄 Syncing ${templates.length} biometric templates to SQLite...');
+      
+      for (var template in templates) {
+        // Prepare data for SQLite
+        final data = {
+          'organization_member_id': template['organization_member_id'],
+          'biometric_type': 'face_recognition', // Hardcoded as we filter by this
+          'template_data': template['template_data'],
+          'enrollment_date': template['enrollment_date'] ?? TimezoneHelper.formatUtcForSupabase(DateTime.now()),
+          'is_active': (template['is_active'] == true || template['is_active'] == 1) ? 1 : 0, // ✅ Ensure boolean/int is 1/0
+          'created_at': template['created_at'] ?? TimezoneHelper.formatUtcForSupabase(DateTime.now()),
+          'updated_at': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
+        };
+
+        // Upsert logic: INSERT OR REPLACE
+        batch.insert(
+          'biometric_data',
+          data,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+
+      await batch.commit(noResult: true);
+      debugPrint('✅ Synced ${templates.length} face templates to offline DB');
+    } catch (e) {
+      debugPrint('❌ Error syncing biometric data: $e');
     }
   }
 
@@ -430,7 +567,7 @@ class OfflineDatabaseService {
 
       // If not found, try case-insensitive search
       if (results.isEmpty) {
-        debugPrint('🔍 Trying case-insensitive search in cache...');
+        // debugPrint('🔍 Trying case-insensitive search in cache...');
         final allCached = await db.query(
           'cached_members',
           where: 'organization_id = ? AND is_active = 1',
@@ -444,13 +581,13 @@ class OfflineDatabaseService {
       }
 
       if (results.isEmpty) {
-        debugPrint('❌ Card "$normalizedCardNumber" not found in cache');
+        // debugPrint('❌ Card "$normalizedCardNumber" not found in cache');
         return null;
       }
 
       final cachedMember = results.first;
       
-      debugPrint('✅ Found cached member: ${cachedMember['display_name'] ?? '${cachedMember['first_name']} ${cachedMember['last_name']}'}');
+      // debugPrint('✅ Found cached member: ${cachedMember['display_name'] ?? '${cachedMember['first_name']} ${cachedMember['last_name']}'}');
       
       // Return in same format as Supabase query
       return {
@@ -560,7 +697,7 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       await db.delete('cached_members');
-      debugPrint('✅ Cleared all cached members');
+      // debugPrint('✅ Cleared all cached members');
     } catch (e) {
       debugPrint('❌ Error clearing cached members: $e');
     }
@@ -575,7 +712,7 @@ class OfflineDatabaseService {
         where: 'card_number = ?',
         whereArgs: [cardNumber],
       );
-      debugPrint('✅ Deleted member from cache: $cardNumber');
+      // debugPrint('✅ Deleted member from cache: $cardNumber');
     } catch (e) {
       debugPrint('❌ Error deleting member from cache: $e');
     }
@@ -683,7 +820,7 @@ class OfflineDatabaseService {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
       
-      debugPrint('✅ Cached biometric data for member $organizationMemberId, type: $biometricType');
+      // debugPrint('✅ Cached biometric data for member $organizationMemberId, type: $biometricType');
     } catch (e) {
       debugPrint('❌ Error caching biometric data: $e');
     }
@@ -702,7 +839,7 @@ class OfflineDatabaseService {
         where: 'id = ?',
         whereArgs: [biometricId],
       );
-      debugPrint('✅ Updated cached biometric template ID: $biometricId');
+      // debugPrint('✅ Updated cached biometric template ID: $biometricId');
     } catch (e) {
       debugPrint('❌ Error updating cached biometric data: $e');
     }
@@ -775,7 +912,7 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       await db.delete('biometric_data');
-      debugPrint('✅ Cleared all biometric data');
+      // debugPrint('✅ Cleared all biometric data');
     } catch (e) {
       debugPrint('Error clearing biometric data: $e');
     }
@@ -866,7 +1003,7 @@ class OfflineDatabaseService {
         }
       }
       
-      debugPrint('✅ Retrieved ${results.length} biometric templates from SQLite for offline use');
+      // debugPrint('✅ Retrieved ${results.length} biometric templates from SQLite for offline use');
       return results;
     } catch (e) {
       debugPrint('❌ Error getting biometric data from SQLite: $e');
@@ -879,13 +1016,13 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       final cutoffDate = DateTime.now().toUtc().subtract(Duration(days: days)).toIso8601String();
-      debugPrint('🧹 Pruning records older than $days days (Cutoff: $cutoffDate)');
+      // debugPrint('🧹 Pruning records older than $days days (Cutoff: $cutoffDate)');
       final deletedCount = await db.delete(
         'offline_attendances',
         where: 'created_at < ?',
         whereArgs: [cutoffDate],
       );
-      if (deletedCount > 0) debugPrint('✅ Auto-Pruning: Deleted $deletedCount old records');
+      // if (deletedCount > 0) debugPrint('✅ Auto-Pruning: Deleted $deletedCount old records');
       return deletedCount;
     } catch (e) {
       debugPrint('❌ Error during pruning: $e');

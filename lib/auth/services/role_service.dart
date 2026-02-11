@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class RoleService {
@@ -8,8 +9,8 @@ class RoleService {
     String userId,
   ) async {
     try {
-      print('=== FETCHING ORGANIZATION MEMBER WITH ROLE ===');
-      print('User ID: $userId');
+      // print('=== FETCHING ORGANIZATION MEMBER WITH ROLE ===');
+      // print('User ID: $userId');
 
       final response = await _supabase
           .from('organization_members')
@@ -33,10 +34,11 @@ class RoleService {
           .maybeSingle();
 
       if (response == null) {
-        print('❌ No organization member found');
+        // print('❌ No organization member found');
         return null;
       }
 
+      /*
       print('✅ Organization Member found:');
       print('  - ID: ${response['id']}');
       print('  - Employee ID: ${response['employee_id']}');
@@ -48,10 +50,11 @@ class RoleService {
       } else {
         print('  ⚠️ WARNING: system_roles is NULL!');
       }
+      */
 
       return response;
     } catch (e) {
-      print('!!! ERROR fetching organization member: $e');
+      debugPrint('!!! ERROR fetching organization member: $e');
       rethrow;
     }
   }
@@ -59,63 +62,63 @@ class RoleService {
   /// Check if user has admin role
   bool isAdmin(Map<String, dynamic>? memberData) {
     if (memberData == null) {
-      print('❌ isAdmin: memberData is null');
+      // print('❌ isAdmin: memberData is null');
       return false;
     }
     
     if (memberData['system_roles'] == null) {
-      print('❌ isAdmin: system_roles is null');
+      // print('❌ isAdmin: system_roles is null');
       return false;
     }
 
     final roleCode = memberData['system_roles']['code'] as String?;
-    print('🔍 isAdmin check: roleCode = $roleCode');
+    // print('🔍 isAdmin check: roleCode = $roleCode');
     
     // Admin role codes: A001 (Admin), SA001 (Super Admin)
     final result = roleCode == 'A001' || roleCode == 'SA001';
-    print('   Result: $result');
+    // print('   Result: $result');
     return result;
   }
 
   /// Check if user has petugas role
   bool isPetugas(Map<String, dynamic>? memberData) {
     if (memberData == null) {
-      print('❌ isPetugas: memberData is null');
+      // print('❌ isPetugas: memberData is null');
       return false;
     }
     
     if (memberData['system_roles'] == null) {
-      print('❌ isPetugas: system_roles is null');
+      // print('❌ isPetugas: system_roles is null');
       return false;
     }
 
     final roleCode = memberData['system_roles']['code'] as String?;
-    print('🔍 isPetugas check: roleCode = $roleCode');
+    // print('🔍 isPetugas check: roleCode = $roleCode');
     
     // Petugas role code: P001
     final result = roleCode == 'P001';
-    print('   Result: $result');
+    // print('   Result: $result');
     return result;
   }
 
   /// Check if user has user role
   bool isUser(Map<String, dynamic>? memberData) {
     if (memberData == null) {
-      print('❌ isUser: memberData is null');
+      // print('❌ isUser: memberData is null');
       return false;
     }
     
     if (memberData['system_roles'] == null) {
-      print('❌ isUser: system_roles is null');
+      // print('❌ isUser: system_roles is null');
       return false;
     }
 
     final roleCode = memberData['system_roles']['code'] as String?;
-    print('🔍 isUser check: roleCode = $roleCode');
+    // print('🔍 isUser check: roleCode = $roleCode');
     
     // User role code: US001
     final result = roleCode == 'US001';
-    print('   Result: $result');
+    // print('   Result: $result');
     return result;
   }
 
@@ -147,7 +150,7 @@ class RoleService {
 
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
-      print('!!! ERROR fetching roles: $e');
+      debugPrint('!!! ERROR fetching roles: $e');
       return [];
     }
   }

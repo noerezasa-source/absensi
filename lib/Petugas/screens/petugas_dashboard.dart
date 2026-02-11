@@ -1388,6 +1388,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         onNavigationTap: _handleNavigation,
         onAttendanceTap: _handleCameraButtonPress,
         isDarkMode: _isDarkMode,
+        attendanceMode: _attendanceMode,
       ),
     );
   }

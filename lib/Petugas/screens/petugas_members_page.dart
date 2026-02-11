@@ -12,6 +12,7 @@ import '../../services/face_recognition_tflite_service.dart';
 import '../../services/biometric_service.dart';
 import '../../services/supabase_storage_service.dart';
 import '../../helpers/timezone_helper.dart';
+import '../../helpers/rfid_mode_helper.dart';
 import '../widgets/petugas_bottom_nav.dart';
 import 'petugas_dashboard.dart';
 import 'petugas_records_page.dart';
@@ -56,6 +57,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   bool _isLoadingActivities = false;
   String? _errorMessage;
   int _currentNavIndex = 1;
+  String _attendanceMode = 'face';
   String _organizationTimezone = 'Asia/Jakarta';
   List<Map<String, dynamic>> _organizationMembers = [];
   Map<String, dynamic>? _organization;
@@ -128,6 +130,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     setState(() => _isInitialLoading = true);
     
     try {
+      // Load attendance mode
+      _attendanceMode = await RfidModeHelper.getAttendanceMode(organizationId);
+
       await Future.wait([
         _loadOrganizationData(),
         _loadOrganizationMembersOptimized(page: 1, isInitial: true),
@@ -219,8 +224,11 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     setState(() => _isLoadingPerformance = true);
 
     try {
-      // Get organization performance summary (uses aggregated data, not all members)
-      final summary = await _performanceService.getOrganizationPerformanceSummary(organizationId);
+      // Get organization performance summary (uses global data, includes all members)
+      final summary = await _performanceService.getOrganizationPerformanceSummary(
+        organizationId,
+        organizationTimezone: _organizationTimezone,
+      );
       
       final now = DateTime.now();
       final startOfMonth = DateTime(now.year, now.month, 1);
@@ -266,6 +274,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final activities = await _performanceService.getRecentMemberActivities(
         organizationId,
         limit: 5, // Limit to 5 for faster loading
+        organizationTimezone: _organizationTimezone,
       );
       
       debugPrint('Recent activities loaded: ${activities.length}');
@@ -556,6 +565,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           currentIndex: _currentNavIndex,
           onNavigationTap: _handleNavigation,
           isDarkMode: widget.isDarkMode,
+          attendanceMode: _attendanceMode,
         ),
       );
     }
@@ -566,14 +576,10 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         physics: const AlwaysScrollableScrollPhysics(),
         headerSliverBuilder: (context, innerBoxIsScrolled) {
           return [
+
             SliverToBoxAdapter(
               child: Container(
-                padding: EdgeInsets.only(
-                  top: MediaQuery.of(context).padding.top + 16, // Add safe area padding
-                  bottom: 16, 
-                  left: 16, 
-                  right: 16
-                ), 
+                height: MediaQuery.of(context).padding.top,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: widget.isDarkMode
@@ -581,17 +587,6 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                         : [const Color(0xFF8938DF), const Color(0xFF4A1E79)],
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                  ),
-                ),
-                child: const Center(
-                  child: Text(
-                    'Members Management',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: -0.5,
-                    ),
                   ),
                 ),
               ),
@@ -664,6 +659,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         currentIndex: _currentNavIndex,
         onNavigationTap: _handleNavigation,
         isDarkMode: widget.isDarkMode,
+        attendanceMode: _attendanceMode,
       ),
     );
   }
@@ -1237,31 +1233,6 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'TOTAL',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade500,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '$_totalMembers Anggota',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF8938DF),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(width: 8),
           Expanded(
             child: Container(
               height: 40,
@@ -2309,8 +2280,8 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
         // Quality check
         double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-        if (qualityScore < 0.65) {
-            throw Exception('Kualitas foto kurang baik (Score: ${(qualityScore*100).toInt()}%). Gunakan foto yang lebih jelas.');
+        if (qualityScore < 0.85) { // ✅ STRICT: Increased to 85% per user request
+            throw Exception('Kualitas foto kurang baik (Score: ${(qualityScore*100).toInt()}%). Gunakan foto yang lebih jelas (Min. 85%).');
         }
 
         final biometricService = BiometricService();
@@ -2562,122 +2533,109 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     });
   }
 
-  Widget _buildFilterSection() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          // Period Picker
-          Expanded(
-            child: Container(
-              height: 48,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                color: widget.isDarkMode ? Colors.white.withOpacity(0.03) : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    'PERIOD',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      color: widget.isDarkMode ? Colors.white38 : Colors.grey.shade500,
-                      letterSpacing: 1.0,
+   Widget _buildFilterSection() {
+    final periods = ['Today', 'Yesterday', 'This Week', 'Last Week', 'This Month', 'Last Month', 'This Year', 'Last Year'];
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Horizontal Scrollable Period Chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: Row(
+            children: [
+              ...periods.map((period) {
+                final isSelected = _selectedTimePeriod == period;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: FilterChip(
+                    label: Text(period),
+                    labelStyle: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected 
+                        ? Colors.white 
+                        : (widget.isDarkMode ? Colors.white70 : Colors.black87),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _selectedTimePeriod,
-                        isExpanded: true,
-                        isDense: true,
-                        icon: Icon(Icons.keyboard_arrow_down, size: 18, color: widget.isDarkMode ? Colors.white38 : Colors.grey),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isDarkMode ? Colors.white70 : Colors.black87,
-                        ),
-                        dropdownColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-                        items: ['Today', 'This Week', 'This Month', 'Last Month']
-                            .map((period) => DropdownMenuItem(
-                                  value: period,
-                                  child: Text(period, overflow: TextOverflow.ellipsis),
-                                ))
-                            .toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => _selectedTimePeriod = value);
-                            _applyFilters();
-                          }
-                        },
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      if (selected) {
+                        setState(() => _selectedTimePeriod = period);
+                        _applyFilters();
+                      }
+                    },
+                    backgroundColor: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100,
+                    selectedColor: const Color(0xFF8938DF),
+                    checkmarkColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(
+                        color: isSelected ? Colors.transparent : (widget.isDarkMode ? Colors.white10 : Colors.grey.shade200),
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
+                );
+              }),
+            ],
           ),
-          const SizedBox(width: 12),
-          // Sort Picker
-          Expanded(
-            child: Container(
-              height: 48,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                color: widget.isDarkMode ? Colors.white.withOpacity(0.03) : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100),
+        ),
+        
+        const SizedBox(height: 12),
+        
+        // Sort Option (keep it clean)
+        Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: widget.isDarkMode ? Colors.white.withOpacity(0.03) : Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100),
+          ),
+          child: Row(
+            children: [
+              Text(
+                'SORT BY',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  color: widget.isDarkMode ? Colors.white38 : Colors.grey.shade500,
+                  letterSpacing: 1.0,
+                ),
               ),
-              child: Row(
-                children: [
-                  Text(
-                    'SORT',
+              const SizedBox(width: 12),
+              Expanded(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedSortBy,
+                    isExpanded: true,
+                    isDense: true,
+                    icon: Icon(Icons.sort_rounded, size: 16, color: widget.isDarkMode ? Colors.white38 : Colors.grey),
                     style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      color: widget.isDarkMode ? Colors.white38 : Colors.grey.shade500,
-                      letterSpacing: 1.0,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: widget.isDarkMode ? Colors.white70 : Colors.black87,
                     ),
+                    dropdownColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+                    items: ['Score', 'Logs']
+                        .map((sort) => DropdownMenuItem(
+                              value: sort,
+                              child: Text(sort),
+                            ))
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _selectedSortBy = value);
+                        _applyFilters();
+                      }
+                    },
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _selectedSortBy, // Use the value directly
-                        isExpanded: true,
-                        isDense: true,
-                        icon: Icon(Icons.sort_rounded, size: 18, color: widget.isDarkMode ? Colors.white38 : Colors.grey),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isDarkMode ? Colors.white70 : Colors.black87,
-                        ),
-                        dropdownColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-                        items: ['Score', 'Logs']
-                            .map((sort) => DropdownMenuItem(
-                                  value: sort,
-                                  child: Text(sort, overflow: TextOverflow.ellipsis),
-                                ))
-                            .toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => _selectedSortBy = value);
-                            _applyFilters();
-                          }
-                        },
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -2695,17 +2653,29 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         case 'Today':
           timePeriod = 'today';
           break;
+        case 'Yesterday':
+          timePeriod = 'yesterday';
+          break;
         case 'This Week':
-          timePeriod = 'week';
+          timePeriod = 'this_week';
+          break;
+        case 'Last Week':
+          timePeriod = 'last_week';
           break;
         case 'This Month':
-          timePeriod = 'month';
+          timePeriod = 'this_month';
           break;
         case 'Last Month':
-          timePeriod = 'custom';
+          timePeriod = 'last_month';
+          break;
+        case 'This Year':
+          timePeriod = 'this_year';
+          break;
+        case 'Last Year':
+          timePeriod = 'last_year';
           break;
         default:
-          timePeriod = 'month';
+          timePeriod = 'this_month';
       }
       
       // Map sort by to service parameter

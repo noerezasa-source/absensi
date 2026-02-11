@@ -94,11 +94,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       });
       
       // Trigger initial mode selection after page loads
-      Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) {
-          _loadAvailableModes();
-        }
-      });
+      _loadAvailableModes();
     });
   }
 
@@ -245,49 +241,87 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   }
 
   void _updateModeBasedOnSchedule() {
-    if (_memberSchedule == null || _availableModes.isEmpty) return;
+    if (_availableModes.isEmpty) return;
     
-    final newWorkTimeMode = _getWorkTimeMode();
-    if (newWorkTimeMode != _workTimeMode) {
-      setState(() {
-        _workTimeMode = newWorkTimeMode;
-        // Auto-select mode based on work time mode
-        _autoSelectModeFromWorkTimeMode();
-      });
+    // 1. If we have a personal schedule, try to determine work/break time mode
+    if (_memberSchedule != null) {
+      final newWorkTimeMode = _getWorkTimeMode();
+      if (newWorkTimeMode != _workTimeMode) {
+        setState(() {
+          _workTimeMode = newWorkTimeMode;
+          // Auto-select shift based on work/break time mode if possible
+          _autoSelectModeFromWorkTimeMode();
+        });
+      }
     }
     
-    // Also check if we need to auto-select mode even if work time mode hasn't changed
-    // This handles the case when modes are loaded after schedule is set
+    // 2. If no shift is selected yet, or if we want to ensure time-based selection,
+    // call _autoSelectModeFromWorkTimeMode regardless of schedule existence.
     if (_selectedMode == null && _availableModes.isNotEmpty) {
       _autoSelectModeFromWorkTimeMode();
     }
   }
 
   void _autoSelectModeFromWorkTimeMode() {
-    if (_workTimeMode == null || _availableModes.isEmpty) return;
+    if (_availableModes.isEmpty) return;
     
-    // Find matching mode based on work time mode
+    final now = DateTime.now();
+    final currentMinutes = now.hour * 60 + now.minute;
+    
     Map<String, dynamic>? matchingMode;
+    
+    // 1. Try to find a shift that matches the current time range
     for (var mode in _availableModes) {
-      final modeCode = mode['code'] as String? ?? mode['name'] as String? ?? '';
-      final modeName = mode['name'] as String? ?? '';
+      final startTimeStr = mode['start_time'] as String?;
+      final endTimeStr = mode['end_time'] as String?;
       
-      if (_workTimeMode == 'break_time' && 
-          (modeCode.toLowerCase().contains('break') || modeName.toLowerCase().contains('break'))) {
-        matchingMode = mode;
-        break;
-      } else if (_workTimeMode == 'work_time' && 
-          (modeCode.toLowerCase().contains('work') || modeName.toLowerCase().contains('kerja'))) {
-        matchingMode = mode;
-        break;
-      } else if (_workTimeMode == 'overtime' && 
-          (modeCode.toLowerCase().contains('overtime') || modeName.toLowerCase().contains('lembur'))) {
-        matchingMode = mode;
-        break;
+      if (startTimeStr != null && endTimeStr != null) {
+        final start = _parseTimeString(startTimeStr);
+        final end = _parseTimeString(endTimeStr);
+        
+        if (start != null && end != null) {
+          int startMin = start.hour * 60 + start.minute;
+          int endMin = end.hour * 60 + end.minute;
+          
+          // Handle shifts crossing midnight
+          if (endMin < startMin) {
+            if (currentMinutes >= startMin || currentMinutes < endMin) {
+              matchingMode = mode;
+              break;
+            }
+          } else {
+            if (currentMinutes >= startMin && currentMinutes < endMin) {
+              matchingMode = mode;
+              break;
+            }
+          }
+        }
       }
     }
     
-    // If no specific match, select the first available mode
+    // 2. Fallback to existing schedule-based workTimeMode logic if no time-range match found
+    if (matchingMode == null && _workTimeMode != null) {
+      for (var mode in _availableModes) {
+        final modeCode = mode['code'] as String? ?? mode['name'] as String? ?? '';
+        final modeName = mode['name'] as String? ?? '';
+        
+        if (_workTimeMode == 'break_time' && 
+            (modeCode.toLowerCase().contains('break') || modeName.toLowerCase().contains('break'))) {
+          matchingMode = mode;
+          break;
+        } else if (_workTimeMode == 'work_time' && 
+            (modeCode.toLowerCase().contains('work') || modeName.toLowerCase().contains('kerja'))) {
+          matchingMode = mode;
+          break;
+        } else if (_workTimeMode == 'overtime' && 
+            (modeCode.toLowerCase().contains('overtime') || modeName.toLowerCase().contains('lembur'))) {
+          matchingMode = mode;
+          break;
+        }
+      }
+    }
+    
+    // 3. Absolute fallback to first mode
     if (matchingMode == null && _availableModes.isNotEmpty) {
       matchingMode = _availableModes.first;
     }
@@ -570,20 +604,6 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     }
   }
 
-  String _currentModeLabel() {
-    final modeName = _selectedMode?['name'] as String?;
-    if (modeName == null || modeName.isEmpty) return 'Mode belum dipilih';
-    return 'Mode: $modeName';
-  }
-
-  String _attendanceModeLabel() {
-    return _attendanceMode == 'check_in' ? 'IN' : 'OUT';
-  }
-
-  String _modeButtonLabel() {
-    final modeName = _selectedMode?['name'] as String?;
-    return (modeName == null || modeName.isEmpty) ? 'Pilih mode' : modeName;
-  }
 
   String _getWorkTimeMode() {
     if (_workTimeMode != null) return _workTimeMode!;
@@ -658,7 +678,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       final orgId = _organizationId;
       if (orgId == null) return;
 
-      debugPrint('🔄 Starting to cache member data for organization: $orgId');
+      // debugPrint('🔄 Starting to cache member data for organization: $orgId');
 
       // Cache all active RFID cards for this organization
       final cards = await _supabase
@@ -684,7 +704,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         }
       }
       
-      debugPrint('✅ Successfully cached $cachedCount/${cards.length} member cards for offline use');
+      // debugPrint('✅ Successfully cached $cachedCount/${cards.length} member cards for offline use');
     } catch (e) {
       debugPrint('❌ Error caching member data: $e');
     }
@@ -706,6 +726,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           _organizationTimezone = org['timezone'] as String? ?? 'Asia/Jakarta';
           _organizationName = org['name'] as String? ?? '';
         });
+        
+        // Re-calculate auto-selection now that we have the correct timezone
+        _autoSelectModeFromWorkTimeMode();
       }
     } catch (e) {
       debugPrint('Error loading org data: $e');
@@ -726,174 +749,83 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   Future<Map<String, dynamic>?> _findMemberByCard(String cardNumber) async {
     final orgId = _organizationId;
-    if (orgId == null) {
-      debugPrint('❌ Organization ID is null');
-      return null;
-    }
+    if (orgId == null) return null;
 
-    // Normalize card number (trim whitespace)
     final normalizedCardNumber = cardNumber.trim();
-    if (normalizedCardNumber.isEmpty) {
-      debugPrint('❌ Card number is empty after normalization');
-      return null;
-    }
+    if (normalizedCardNumber.isEmpty) return null;
 
     try {
-      Map<String, dynamic>? cardData;
+      // 1. ALWAYS TRY CACHE FIRST for maximum speed
+      debugPrint('🔍 Searching in offline cache for $normalizedCardNumber...');
+      Map<String, dynamic>? cardData = await _offlineDb.findMemberByCardInCache(normalizedCardNumber, orgId);
       
-      debugPrint('🔍 Searching for card: "$normalizedCardNumber" (Org ID: $orgId, Online: $_isOnline)');
-      
-      // Try online first if connected
-      if (_isOnline) {
-        try {
-          // First, try to find the card directly
-          final cardResult = await _supabase
-              .from('rfid_cards')
-              .select('id, card_number, organization_member_id, is_active')
+      if (cardData != null) {
+        final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
+        final userName = _composeMemberName(memberInfo);
+        debugPrint('✅ Instant cache hit: $userName');
+        
+        // In background, if online, verify if it still exists (silent cleanup)
+        if (_isOnline) {
+          _supabase.from('rfid_cards')
+              .select('id')
               .eq('card_number', normalizedCardNumber)
               .eq('is_active', true)
-              .maybeSingle();
-          
-          debugPrint('📋 Card query result: ${cardResult != null ? "Found" : "Not found"}');
-          
-          if (cardResult != null) {
-            final memberId = cardResult['organization_member_id'] as int?;
-            debugPrint('👤 Found member ID: $memberId');
-            
-            if (memberId != null) {
-              // Now fetch the full member data with organization check
-              final memberData = await _supabase
-                  .from('organization_members')
-                  .select('''
-                    id, organization_id, user_id, department_id,
-                    user_profiles (display_name, first_name, last_name, profile_photo_url),
-                    departments!organization_members_department_id_fkey (id, name)
-                  ''')
-                  .eq('id', memberId)
-                  .eq('organization_id', orgId)
-                  .eq('is_active', true)
-                  .maybeSingle();
-              
-              debugPrint('👥 Member data query result: ${memberData != null ? "Found" : "Not found"}');
-              
-              if (memberData != null) {
-                // Construct cardData in the expected format
-                cardData = {
-                  'id': cardResult['id'],
-                  'card_number': cardResult['card_number'],
-                  'organization_member_id': memberId,
-                  'organization_members': memberData,
-                };
-                
-                debugPrint('✅ Found card online, caching data...');
-                await _offlineDb.cacheMemberData(cardData);
-                
-                final userName = _composeMemberName(memberData);
-                debugPrint('👤 Member name: $userName');
-              } else {
-                debugPrint('⚠️ Member $memberId not found or not in organization $orgId or inactive');
-              }
-            } else {
-              debugPrint('⚠️ Card found but organization_member_id is null');
-            }
-          } else {
-            debugPrint('⚠️ Card "$normalizedCardNumber" not found in rfid_cards table or inactive');
-            
-            // Try case-insensitive search as fallback
-            debugPrint('🔍 Trying case-insensitive search...');
-            final allCards = await _supabase
-                .from('rfid_cards')
-                .select('id, card_number, organization_member_id, is_active')
-                .eq('is_active', true)
-                .limit(1000); // Reasonable limit
-            
-            final matchingCard = allCards.firstWhere(
-              (card) => (card['card_number'] as String?)?.trim().toLowerCase() == normalizedCardNumber.toLowerCase(),
-              orElse: () => {},
-            );
-            
-            if (matchingCard.isNotEmpty) {
-              debugPrint('✅ Found card with case-insensitive match: ${matchingCard['card_number']}');
-              final memberId = matchingCard['organization_member_id'] as int?;
-              
-              if (memberId != null) {
-                final memberData = await _supabase
-                    .from('organization_members')
-                    .select('''
-                      id, organization_id, user_id, department_id,
-                      user_profiles (display_name, first_name, last_name, profile_photo_url),
-                      departments!organization_members_department_id_fkey (id, name)
-                    ''')
-                    .eq('id', memberId)
-                    .eq('organization_id', orgId)
-                    .eq('is_active', true)
-                    .maybeSingle();
-                
-                if (memberData != null) {
-                  cardData = {
-                    'id': matchingCard['id'],
-                    'card_number': matchingCard['card_number'],
-                    'organization_member_id': memberId,
-                    'organization_members': memberData,
-                  };
-                  
-                  debugPrint('✅ Found card with case-insensitive match, caching...');
-                  await _offlineDb.cacheMemberData(cardData);
+              .maybeSingle()
+              .then((res) {
+                if (res == null) {
+                   debugPrint('🗑️ Card deleted from server, removing from cache');
+                   _offlineDb.deleteMemberFromCache(normalizedCardNumber);
                 }
-              }
-            }
-          }
-        } catch (e, stackTrace) {
-          debugPrint('❌ Error finding card online: $e');
-          debugPrint('Stack trace: $stackTrace');
-          // Fall back to cache if online fails
+              });
         }
+        return cardData;
       }
-      
-      // If online failed or offline, try cache
-      if (cardData == null) {
-        debugPrint('🔍 Searching in offline cache...');
-        cardData = await _offlineDb.findMemberByCardInCache(normalizedCardNumber, orgId);
-        if (cardData != null) {
-          // Additional validation: if online, verify card still exists in server
-          if (_isOnline) {
-            debugPrint('⚠️ Found in cache but online - verifying card still exists...');
-            final serverCardExists = await _supabase
-                .from('rfid_cards')
-                .select('id')
-                .eq('card_number', normalizedCardNumber)
+
+      // 2. ONLY IF NOT IN CACHE, try online search
+      if (_isOnline) {
+        debugPrint('🌐 Cache miss, searching online for $normalizedCardNumber...');
+        final cardResult = await _supabase
+            .from('rfid_cards')
+            .select('id, card_number, organization_member_id, is_active')
+            .eq('card_number', normalizedCardNumber)
+            .eq('is_active', true)
+            .maybeSingle();
+        
+        if (cardResult != null) {
+          final memberId = cardResult['organization_member_id'] as int?;
+          if (memberId != null) {
+            final memberData = await _supabase
+                .from('organization_members')
+                .select('''
+                  id, organization_id, user_id, department_id,
+                  user_profiles (display_name, first_name, last_name, profile_photo_url),
+                  departments!organization_members_department_id_fkey (id, name)
+                ''')
+                .eq('id', memberId)
+                .eq('organization_id', orgId)
                 .eq('is_active', true)
                 .maybeSingle();
             
-            if (serverCardExists == null) {
-              debugPrint('🗑️ Card deleted from server, removing from cache and rejecting');
-              await _offlineDb.deleteMemberFromCache(normalizedCardNumber);
-              cardData = null;
-            } else {
-              final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
-              final userName = _composeMemberName(memberInfo);
-              debugPrint('✅ Found member in cache: $userName');
+            if (memberData != null) {
+              cardData = {
+                'id': cardResult['id'],
+                'card_number': cardResult['card_number'],
+                'organization_member_id': memberId,
+                'organization_members': memberData,
+              };
+              
+              debugPrint('✅ Found card online, caching for next time');
+              _offlineDb.cacheMemberData(cardData);
+              return cardData;
             }
-          } else {
-            final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
-            final userName = _composeMemberName(memberInfo);
-            debugPrint('✅ Found member in cache: $userName');
           }
-        } else {
-          debugPrint('❌ Card not found in cache');
         }
       }
-      
-      if (cardData == null) {
-        debugPrint('❌ Card "$normalizedCardNumber" not found anywhere (online or cache)');
-      }
-      
-      return cardData;
-    } catch (e, stackTrace) {
+    } catch (e) {
       debugPrint('❌ Error finding card: $e');
-      debugPrint('Stack trace: $stackTrace');
-      return null;
     }
+    
+    return null;
   }
 
   void _showDuplicateAlert(String name, String department, String mode) {
@@ -996,51 +928,6 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     });
   }
 
-  Widget _buildInfoRow(IconData icon, String label, String value, {Color? valueColor}) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF9333EA).withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            icon,
-            size: 20,
-            color: const Color(0xFF9333EA),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey.shade600,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: valueColor ?? Colors.black87,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
 
   Future<void> _handleCardScan() async {
     final cardNumber = _cardController.text.trim();
@@ -1088,99 +975,35 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       final action = _attendanceMode;
       final workTimeMode = _getWorkTimeMode();
       final userName = _composeMemberName(memberInfo);
-      
-      // Check for duplicate attendance
-      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
-      bool hasDuplicate = false;
 
-      // Check online database first if online (more accurate and real-time)
-      if (_isOnline) {
-        try {
-          final existingRecord = await _supabase
-              .from('attendance_records')
-              .select('id, actual_check_in, actual_check_out')
-              .eq('organization_member_id', memberId)
-              .eq('attendance_date', todayStr)
-              .maybeSingle();
-
-          if (existingRecord != null) {
-            if (action == 'check_in' && existingRecord['actual_check_in'] != null) {
-              hasDuplicate = true;
-              debugPrint('⚠️ Duplicate check_in found online for member $memberId on $todayStr');
-            } else if (action == 'check_out' && existingRecord['actual_check_out'] != null) {
-              hasDuplicate = true;
-              debugPrint('⚠️ Duplicate check_out found online for member $memberId on $todayStr');
-            }
-          }
-        } catch (e) {
-          debugPrint('Error checking online duplicate: $e');
-          // If online check fails, continue to check offline
-        }
+      // --- INSTANT FEEDBACK START ---
+      // Provide success sound and UI update immediately
+       await SoundHelper.playSuccessSound();
+       
+       if (mounted) {
+        setState(() {
+          final newEntry = _AttendanceEntry(
+            memberId: memberId,
+            memberInfo: memberInfo,
+            cardNumber: cardNumber,
+            action: action,
+            timestamp: DateTime.now(),
+            workTimeMode: workTimeMode,
+          );
+          _entries.insert(0, newEntry);
+          if (_entries.length > 50) _entries.removeRange(50, _entries.length);
+        });
       }
-
-      // Check offline database if not found duplicate online or if offline
-      if (!hasDuplicate) {
-        hasDuplicate = await _offlineDb.hasDuplicateAttendance(
-          organizationMemberId: memberId,
-          eventType: action,
-          attendanceDate: todayStr,
-        );
-        
-        if (hasDuplicate) {
-          debugPrint('⚠️ Duplicate $action found offline for member $memberId on $todayStr');
-        }
-      }
-
-      // Show popup if duplicate found (both online and offline)
-      if (hasDuplicate) {
-        if (mounted) {
-          final profile = memberInfo['user_profiles'] as Map<String, dynamic>? ?? {};
-          final name = userName ?? profile['display_name'] ?? '${profile['first_name'] ?? ''} ${profile['last_name'] ?? ''}'.trim();
-          final deptMap = memberInfo['departments'] as Map<String, dynamic>? ?? {};
-          final deptName = deptMap['name'] as String? ?? '-';
-          final mode = action == 'check_in' ? 'Check In' : 'Check Out';
-
-          _showDuplicateAlert(name, deptName, mode);
-        }
-        return;
-      }
+      // --- INSTANT FEEDBACK END ---
       
-      debugPrint('💾 Saving attendance: $userName ($action, $workTimeMode)');
-      
-      // Save to offline database
-      final offlineAttendance = OfflineAttendance(
+      // Perform duplicate checks and database saving in background
+      _processAttendanceInBackground(
+        memberId: memberId,
         cardNumber: cardNumber,
-        eventType: action,
-        method: 'rfid_card_mobile',
-        timestamp: TimezoneHelper.formatUtcForSupabase(DateTime.now()),
-        workTimeMode: workTimeMode,
-        organizationMemberId: memberId,
         userName: userName,
+        action: action,
+        workTimeMode: workTimeMode,
       );
-      
-      await _offlineDb.insertAttendance(offlineAttendance);
-      await _loadPendingSyncCount();
-
-      debugPrint('✅ Attendance saved successfully');
-
-      // If online, sync will happen automatically via timer
-      await SoundHelper.playSuccessSound();
-
-      if (!mounted) return;
-      setState(() {
-        final newEntry = _AttendanceEntry(
-          memberId: memberId,
-          memberInfo: memberInfo,
-          cardNumber: cardNumber,
-          action: action,
-          timestamp: DateTime.now(),
-          workTimeMode: workTimeMode,
-        );
-
-        final existingIndex = _entries.indexWhere((e) => e.memberId == memberId);
-        if (existingIndex >= 0) _entries.removeAt(existingIndex);
-        _entries.insert(0, newEntry);
-      });
       
     } catch (e) {
       debugPrint('❌ Error card scan: $e');
@@ -1195,6 +1018,72 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     } finally {
       _cardController.clear();
       _cardFocusNode.requestFocus();
+    }
+  }
+
+  Future<void> _processAttendanceInBackground({
+    required int memberId,
+    required String cardNumber,
+    required String userName,
+    required String action,
+    required String? workTimeMode,
+  }) async {
+    try {
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+      
+      // 1. Check for duplicates (for logging/internal logic)
+      bool hasDuplicate = false;
+      if (_isOnline) {
+        try {
+          final existingRecord = await _supabase
+              .from('attendance_records')
+              .select('id, actual_check_in, actual_check_out')
+              .eq('organization_member_id', memberId)
+              .eq('attendance_date', todayStr)
+              .maybeSingle();
+
+          if (existingRecord != null) {
+            if (action == 'check_in' && existingRecord['actual_check_in'] != null) {
+              hasDuplicate = true;
+            } else if (action == 'check_out' && existingRecord['actual_check_out'] != null) {
+              hasDuplicate = true;
+            }
+          }
+        } catch (e) {
+          debugPrint('Error checking online duplicate: $e');
+        }
+      }
+
+      if (!hasDuplicate) {
+        hasDuplicate = await _offlineDb.hasDuplicateAttendance(
+          organizationMemberId: memberId,
+          eventType: action,
+          attendanceDate: todayStr,
+        );
+      }
+
+      if (hasDuplicate) {
+        debugPrint('ℹ️ Duplicate $action detected for $userName, but proceeding with log entry');
+      }
+
+      // 2. Save to offline database
+      debugPrint('💾 Background saving attendance: $userName ($action)');
+      final offlineAttendance = OfflineAttendance(
+        cardNumber: cardNumber,
+        eventType: action,
+        method: 'rfid_card_mobile',
+        timestamp: TimezoneHelper.formatUtcForSupabase(DateTime.now()),
+        workTimeMode: workTimeMode,
+        organizationMemberId: memberId,
+        userName: userName,
+      );
+      
+      await _offlineDb.insertAttendance(offlineAttendance);
+      await _loadPendingSyncCount();
+      debugPrint('✅ Background save complete for $userName');
+      
+    } catch (e) {
+      debugPrint('❌ Background processing error: $e');
     }
   }
 
@@ -1319,43 +1208,53 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                   
                   // 1. CLOCK & DATE HEADER
                   Center(
-                    child: Column(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.baseline,
-                          textBaseline: TextBaseline.alphabetic,
-                          children: [
-                            Text(
-                              timeStr,
-                              style: const TextStyle(
-                                fontSize: 64,
-                                fontWeight: FontWeight.w400, // Thinner font like iOS
-                                color: Colors.black87,
-                                letterSpacing: -2,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              amPm,
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w500,
-                                color: Color(0xFF9333EA), // Purple accent
-                              ),
-                            ),
-                          ],
-                        ),
+                        // Phantom element on the left to balance the AM/PM on the right
+                        // and keep the clock numbers exactly in the middle.
                         Text(
-                          dateStr,
+                          amPm,
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF9333EA), // Purple accent
-                            letterSpacing: 1.5,
+                            color: Colors.transparent, // Invisible
+                          ),
+                        ),
+                        const SizedBox(width: 4), // Gap
+                        Text(
+                          timeStr,
+                          style: const TextStyle(
+                            fontSize: 72,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.black87,
+                            letterSpacing: -2,
+                          ),
+                        ),
+                        const SizedBox(width: 4), // Gap
+                        Text(
+                          amPm,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade600,
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Center(
+                    child: Text(
+                      dateStr,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade600, // Changed to gray
+                        letterSpacing: 1.5,
+                      ),
                     ),
                   ),
 
@@ -1397,7 +1296,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                             const SizedBox(width: 16),
                             Expanded(
                               child: Text(
-                                _selectedMode?['name'] ?? 'Select Shift',
+                                _selectedMode != null 
+                                  ? '${_selectedMode!['name']} - ${_attendanceMode == 'check_in' ? 'IN' : 'OUT'}'
+                                  : 'Select Shift',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 18,
@@ -1412,94 +1313,97 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                     ),
                   ),
 
-                  const SizedBox(height: 60),
-
-                  // 3. PULSING RFID ANIMATION (Expanded Center)
-                  Expanded(
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              // Outer Pulse
-                              TweenAnimationBuilder(
-                                tween: Tween<double>(begin: 0, end: 1),
-                                duration: const Duration(seconds: 2),
-                                builder: (context, double value, child) {
-                                  return Container(
-                                    width: 200 + (value * 20),
-                                    height: 200 + (value * 20),
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: const Color(0xFF9333EA).withOpacity(0.1 * (1 - value)),
-                                        width: 1,
+                  // 3. PULSING RFID ANIMATION (Only shown if no entries)
+                  if (_filteredEntries.isEmpty)
+                    Expanded(
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                // Outer Pulse
+                                TweenAnimationBuilder(
+                                  tween: Tween<double>(begin: 0, end: 1),
+                                  duration: const Duration(seconds: 2),
+                                  builder: (context, double value, child) {
+                                    return Container(
+                                      width: 200 + (value * 20),
+                                      height: 200 + (value * 20),
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: const Color(0xFF9333EA).withOpacity(0.1 * (1 - value)),
+                                          width: 1,
+                                        ),
                                       ),
-                                    ),
-                                  );
-                                },
-                                onEnd: () => setState((){}), // Loop
-                              ),
-                              // Inner Circles
-                              Container(
-                                width: 180,
-                                height: 180,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: const Color(0xFF9333EA).withOpacity(0.05),
+                                    );
+                                  },
+                                  onEnd: () => setState((){}), // Loop
                                 ),
-                              ),
-                              Container(
-                                width: 130,
-                                height: 130,
-                                decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.white,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black12,
-                                      blurRadius: 20,
-                                      spreadRadius: 2,
-                                    ),
-                                  ],
-                                ),
-                                child: const Center(
-                                  child: Icon(
-                                    Icons.nfc, // RFID Icon
-                                    size: 64,
-                                    color: Color(0xFF9333EA),
+                                // Inner Circles
+                                Container(
+                                  width: 180,
+                                  height: 180,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: const Color(0xFF9333EA).withOpacity(0.05),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 32),
-                          Text(
-                            'Scan your card here',
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.grey.shade600,
-                              fontWeight: FontWeight.w500,
+                                Container(
+                                  width: 130,
+                                  height: 130,
+                                  decoration: const BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.white,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black12,
+                                        blurRadius: 20,
+                                        spreadRadius: 2,
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Center(
+                                    child: Icon(
+                                      Icons.nfc, // RFID Icon
+                                      size: 64,
+                                      color: Color(0xFF9333EA),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 32),
+                            Text(
+                              'Scan your card here',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey.shade600,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
 
-                  // 4. ATTENDANCE LIST (Limited items)
-                  Container(
-                    height: 220, // Check mockup size
-                    margin: const EdgeInsets.only(top: 24),
-                    child: ListView.separated(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                      itemCount: _filteredEntries.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (_, index) => _buildNewEntryCard(_filteredEntries[index]),
-                    ),
-                  ),
+                  // 4. ATTENDANCE LIST (Expanded when entries present)
+                  if (_filteredEntries.isNotEmpty)
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.only(top: 24),
+                        child: ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                          itemCount: _filteredEntries.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (_, index) => _buildNewEntryCard(_filteredEntries[index]),
+                        ),
+                      ),
+                    )
+                  else
+                    const SizedBox(height: 220), // Placeholder height when empty
                 ],
               ),
             ),
@@ -1740,6 +1644,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     return Icons.schedule;
   }
 
+
   Widget _buildNewEntryCard(_AttendanceEntry entry) {
      final profile = entry.memberInfo['user_profiles'] as Map<String, dynamic>? ?? {};
     final photoPath = profile['profile_photo_url'] as String?;
@@ -1785,7 +1690,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                   ),
                 ),
                 Text(
-                  'Lorem ipsum', // Placeholder subtitle or department
+                  entry.memberInfo['departments']?['name'] as String? ?? 'No Department',
                   style: TextStyle(
                     color: Colors.grey.shade500,
                     fontSize: 13,

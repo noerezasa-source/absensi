@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 class PetugasBottomNav extends StatelessWidget {
@@ -11,9 +12,23 @@ class PetugasBottomNav extends StatelessWidget {
     required this.onNavigationTap,
     this.onAttendanceTap, // Opsional
     this.isDarkMode = false,
+    this.attendanceMode = 'face',
   });
 
   final bool isDarkMode;
+  final String attendanceMode;
+
+  IconData _getAttendanceIcon() {
+    switch (attendanceMode.toLowerCase()) {
+      case 'rfid':
+        return Icons.copy_all_rounded;
+      case 'fingerprint':
+        return Icons.fingerprint_rounded;
+      case 'face':
+      default:
+        return Icons.face_retouching_natural_rounded;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -67,7 +82,7 @@ class PetugasBottomNav extends StatelessWidget {
                 _buildNavItem(
                   context,
                   Icons.list_alt_rounded,
-                  'Records',
+                  'Report',
                   2,
                 ),
                 _buildNavItem(
@@ -108,8 +123,8 @@ class PetugasBottomNav extends StatelessWidget {
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.face_retouching_natural_rounded,
+                    child: Icon(
+                      _getAttendanceIcon(),
                       color: Colors.white,
                       size: 30,
                     ),

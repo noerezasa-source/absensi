@@ -48,9 +48,9 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    print('=== USER DASHBOARD INIT ===');
-    print('Organization Member ID: ${widget.organizationMemberId}');
-    print('Role: ${_roleService.getRoleName(widget.memberData)}');
+    // print('=== USER DASHBOARD INIT ===');
+    // print('Organization Member ID: ${widget.organizationMemberId}');
+    // print('Role: ${_roleService.getRoleName(widget.memberData)}');
     _loadUserProfile();
     _checkFaceRegistration();
     _loadAttendanceStats();
@@ -87,7 +87,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
         });
       }
     } catch (e) {
-      print('!!! ERROR loading user profile: $e');
+      debugPrint('!!! ERROR loading user profile: $e');
       if (mounted) {
         setState(() {
           _isLoadingProfile = false;
@@ -156,15 +156,17 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
         _isLoadingStats = false;
       });
       
+      /*
       // Debug print untuk memastikan
       print('=== ATTENDANCE STATS ===');
       print('Total Records: ${records.length}');
       print('Present Days: $presentDays');
       print('Late Days: $lateDays');
       print('Work Hours: $workHours');
+      */
     }
   } catch (e) {
-    print('!!! ERROR loading attendance stats: $e');
+    debugPrint('!!! ERROR loading attendance stats: $e');
     if (mounted) {
       setState(() {
         _attendanceStats = {
@@ -206,7 +208,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
         });
       }
     } catch (e) {
-      print('!!! ERROR loading attendance data: $e');
+      debugPrint('!!! ERROR loading attendance data: $e');
       if (mounted) {
         setState(() {
           _isLoadingAttendance = false;
@@ -251,7 +253,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
           });
         }
       } catch (e) {
-        print('Error processing record: $e');
+        debugPrint('Error processing record: $e');
       }
     }
 
@@ -276,13 +278,13 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
     });
     
     try {
-      print('=== CHECKING FACE REGISTRATION ===');
+      // print('=== CHECKING FACE REGISTRATION ===');
       
       final hasRegistered = await _biometricService.hasRegisteredFace(
         widget.organizationMemberId,
       );
       
-      print('Face registration check result: $hasRegistered');
+      // print('Face registration check result: $hasRegistered');
       
       if (mounted) {
         setState(() {
@@ -291,7 +293,7 @@ class _UserDashboardPageState extends State<UserDashboardPage> with SingleTicker
         });
       }
     } catch (e) {
-      print('!!! ERROR checking face registration: $e');
+      debugPrint('!!! ERROR checking face registration: $e');
       if (mounted) {
         setState(() {
           _hasRegisteredFace = false;

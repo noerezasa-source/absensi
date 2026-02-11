@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import '../services/face_recognition_tflite_service.dart';
 import '../services/biometric_service.dart';
 import '../services/supabase_storage_service.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
 class FaceRegistrationPage extends StatefulWidget {
@@ -52,7 +53,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   final Map<CaptureAngle, Map<String, dynamic>> _capturedTemplates = {};
   String? _frontImagePath;
 
-  // Deboucing & Auto-clear
+  // Guidance and UI
+  List<Face> _detectedFaces = [];
   DateTime? _lastGuidanceUpdate;
   Timer? _errorTimer;
 
@@ -97,7 +99,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     });
     
     _errorTimer?.cancel();
-    _errorTimer = Timer(const Duration(seconds: 3), () {
+    _errorTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
           _errorMessage = null;
@@ -122,8 +124,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       await _initializeCamera();
     } catch (e) {
       if (mounted) {
+        _showError('Failed to load model: $e');
         setState(() {
-          _errorMessage = 'Failed to load model: $e';
           _currentStep = 'Model initialization failed';
         });
       }
@@ -164,9 +166,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _errorMessage = 'Failed to initialize camera: $e';
-        });
+        _showError('Failed to initialize camera: $e');
       }
     }
   }
@@ -213,10 +213,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (faces.isEmpty) {
         _consecutiveValidFrames = 0;
         setState(() {
+          _detectedFaces = [];
           _overlayColor = Colors.transparent;
           _guidanceMessage = 'Arahkan wajah ke kamera';
         });
       } else {
+        if (mounted) {
+          setState(() {
+            _detectedFaces = faces;
+          });
+        }
+
         final face = faces.first;
         final validation = _validateFace(face, Size(image.width.toDouble(), image.height.toDouble()));
         
@@ -233,6 +240,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             setState(() {
               _guidanceMessage = 'Mengambil foto...';
               _currentStep = 'Capturing...';
+              _detectedFaces = []; // Clear brackets during freeze-frame capture
             });
 
             final XFile file = await _cameraController!.takePicture();
@@ -273,13 +281,15 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         if (headX.abs() > 10.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
         break;
       case CaptureAngle.left:
-        // Range: 20 to 45 degrees (Relaxed)
-        if (headY < 15.0) return {'isValid': false, 'message': 'Miringkan Wajah ke Kiri >>'};
+        // Range: 15 to 45 degrees (User turns to THEIR left - sign swapped for this device)
+        if (headY < -10.0) return {'isValid': false, 'message': '← Salah Arah! Toleh KIRI'};
+        if (headY < 15.0) return {'isValid': false, 'message': '← Toleh ke KIRI'};
         if (headY > 45.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
         break;
       case CaptureAngle.right:
-        // Range: -45 to -20 degrees (Relaxed)
-        if (headY > -15.0) return {'isValid': false, 'message': '<< Miringkan Wajah ke Kanan'};
+        // Range: -15 to -45 degrees (User turns to THEIR right - sign swapped for this device)
+        if (headY > 10.0) return {'isValid': false, 'message': 'Salah Arah! Toleh KANAN →'};
+        if (headY > -15.0) return {'isValid': false, 'message': 'Toleh ke KANAN →'};
         if (headY < -45.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
         break;
       default:
@@ -303,17 +313,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         allowSidePose: _currentAngle != CaptureAngle.front,
       );
 
-      // Quality check
+      // ✅ HIGH STANDARD VALIDATION: Mandatory thresholds
       double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
       
-      // Dynamic Threshold: 0.85 for Front, 0.60 for Sides.
-      double minQuality = _currentAngle == CaptureAngle.front ? 0.85 : 0.60;
+      // 🚀 User Requirement: "Kalau tidak memenuhi standart itu tidak bisa register"
+      double minQuality = _currentAngle == CaptureAngle.front ? 0.90 : 0.65;
       
       if (qualityScore < minQuality) {
         setState(() {
-          _overlayColor = Colors.orange;
+          _overlayColor = Colors.red; // More urgent than orange
         });
-        _updateGuidance('Kualitas ${(qualityScore*100).toInt()}%. Butuh > ${(minQuality*100).toInt()}%. Coba lagi.', Colors.orange);
+        _updateGuidance('Kualitas rendah (${(qualityScore*100).toInt()}%). Butuh > ${(minQuality*100).toInt()}%. Silakan ulangi dengan cahaya lebih baik.', Colors.red);
         
         await Future.delayed(const Duration(seconds: 2));
         await File(imagePath).delete();
@@ -334,10 +344,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       // PROGRESS LOGIC
       if (_currentAngle == CaptureAngle.front) {
         _currentAngle = CaptureAngle.left;
-        _resetStreamForAngle('Tahap 2: Samping Kiri', 'Miringkan Wajah ke Kiri >>');
+        _resetStreamForAngle('Tahap 2: Samping Kiri', '← Toleh ke KIRI');
       } else if (_currentAngle == CaptureAngle.left) {
         _currentAngle = CaptureAngle.right;
-        _resetStreamForAngle('Tahap 3: Samping Kanan', '<< Miringkan Wajah ke Kanan');
+        _resetStreamForAngle('Tahap 3: Samping Kanan', 'Toleh ke KANAN →');
       } else {
         // Complete
         setState(() {
@@ -381,7 +391,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (_capturedTemplates.containsKey(CaptureAngle.right)) combinedList.add(_capturedTemplates[CaptureAngle.right]!);
       
       final multiTemplate = {
-        'version': 4,
+        'version': 4, // Aligned with high-standard container version
         'templates': combinedList,
         'totalAngles': combinedList.length,
         'enrollmentDate': DateTime.now().toIso8601String(),
@@ -564,8 +574,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       
     } catch (e) {
       if (mounted) {
+        _showError('Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}');
         setState(() {
-          _errorMessage = 'Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}';
           _overlayColor = Colors.red;
           _isRegistrationComplete = false;
         });
@@ -583,7 +593,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   ) async {
     setState(() {
       _isLoading = true;
-      _errorMessage = null;
       _currentStep = 'Menyimpan template...';
       _overlayColor = Colors.green;
     });
@@ -691,8 +700,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         }
       }
     } catch (e) {
+      _showError('Gagal menyimpan: ${e.toString().replaceAll('Exception: ', '')}');
       setState(() {
-        _errorMessage = 'Gagal menyimpan: ${e.toString().replaceAll('Exception: ', '')}';
         _currentStep = 'Gagal menyimpan';
         _isLoading = false;
         _overlayColor = Colors.red;
@@ -861,75 +870,58 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               child: CircularProgressIndicator(color: Colors.white),
             ),
 
-          // 2. DARKENED OVERLAY WITH VIEWPORT CUTOUT
-          if (_isCameraInitialized && _isModelInitialized)
-            Positioned.fill(
-              child: ColorFiltered(
-                colorFilter: ColorFilter.mode(
-                  Colors.black.withOpacity(0.5),
-                  BlendMode.srcOut,
-                ),
-                child: Stack(
-                  children: [
-                    Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.black,
-                        backgroundBlendMode: BlendMode.dstOut,
-                      ),
-                    ),
-                    Center(
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 200), // Lift viewfinder further up
-                        width: viewfinderWidth,
-                        height: viewfinderHeight,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(40),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          // 2. DYNAMIC FACE BRACKETS (Instead of static box)
+          if (_detectedFaces.isNotEmpty && _cameraController != null)
+            ..._detectedFaces.map((face) {
+              final previewSize = _cameraController!.value.previewSize!;
+              final videoWidth = previewSize.height;
+              final videoHeight = previewSize.width;
+              
+              final screenWidth = screenSize.width;
+              final screenHeight = screenSize.height;
+              
+              final screenRatio = screenWidth / screenHeight;
+              final videoRatio = videoWidth / videoHeight;
+              
+              double scale;
+              if (screenRatio > videoRatio) {
+                scale = screenWidth / videoWidth;
+              } else {
+                scale = screenHeight / videoHeight;
+              }
+              
+              final scaledWidth = videoWidth * scale;
+              final scaledHeight = videoHeight * scale;
+              
+              final offsetX = (screenWidth - scaledWidth) / 2;
+              final offsetY = (screenHeight - scaledHeight) / 2;
+              
+              final rect = face.boundingBox;
+              double nLeft = rect.left / videoWidth; 
+              double nTop = rect.top / videoHeight;
+              double nWidth = rect.width / videoWidth;
+              double nHeight = rect.height / videoHeight;
 
-          // 3. WHITE CORNER BRACKETS
-          if (_isCameraInitialized && _isModelInitialized)
-            Center(
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 200), // Lift corners further up to match cutout
-                width: viewfinderWidth,
-                height: viewfinderHeight,
-                child: Stack(
-                  children: [
-                    // Top Left
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      child: _buildCorner(0),
-                    ),
-                    // Top Right
-                    Positioned(
-                      top: 0,
-                      right: 0,
-                      child: _buildCorner(1),
-                    ),
-                    // Bottom Left
-                    Positioned(
-                      bottom: 0,
-                      left: 0,
-                      child: _buildCorner(2),
-                    ),
-                    // Bottom Right
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: _buildCorner(3),
-                    ),
-                  ],
+              // Mirroring Fix: Flip X for front camera
+              nLeft = 1.0 - (nLeft + nWidth);
+              
+              final left = offsetX + nLeft * scaledWidth;
+              final top = offsetY + nTop * scaledHeight;
+              final width = nWidth * scaledWidth;
+              final height = nHeight * scaledHeight;
+              
+              return Positioned(
+                left: left,
+                top: top,
+                child: CustomPaint(
+                  painter: _FaceBracketPainter(color: const Color(0xFF8E44AD)), // Violet style
+                  child: Container(
+                    width: width,
+                    height: height,
+                  ),
                 ),
-               ),
-            ),
+              );
+            }),
 
           // 4. PROGRESS CARD
           if (_isCameraInitialized && _isModelInitialized)
@@ -1091,60 +1083,60 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     return base + 5; // Started step
   }
 
-  Widget _buildCorner(int position) {
-    const double size = 48; // Larger corner symbols
-    const double thickness = 5; // Bolder corners
-    const double radius = 32; // Rounded corners match cutout
+  // Helper for progress percentage removed as it's defined elsewhere if needed
+  // ...
+}
 
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        children: [
-          if (position == 0) // Top Left
-            Container(
-              decoration: const BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: Colors.white, width: thickness),
-                  left: BorderSide(color: Colors.white, width: thickness),
-                ),
-                borderRadius: BorderRadius.only(topLeft: Radius.circular(radius)),
-              ),
-            ),
-          if (position == 1) // Top Right
-            Container(
-              decoration: const BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: Colors.white, width: thickness),
-                  right: BorderSide(color: Colors.white, width: thickness),
-                ),
-                borderRadius: BorderRadius.only(topRight: Radius.circular(radius)),
-              ),
-            ),
-          if (position == 2) // Bottom Left
-            Container(
-              decoration: const BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: Colors.white, width: thickness),
-                  left: BorderSide(color: Colors.white, width: thickness),
-                ),
-                borderRadius: BorderRadius.only(bottomLeft: Radius.circular(radius)),
-              ),
-            ),
-          if (position == 3) // Bottom Right
-            Container(
-              decoration: const BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: Colors.white, width: thickness),
-                  right: BorderSide(color: Colors.white, width: thickness),
-                ),
-                borderRadius: BorderRadius.only(bottomRight: Radius.circular(radius)),
-              ),
-            ),
-        ],
-      ),
-    );
+/// ✅ NEW: Custom Painter for Face Bracket (VIOLET) - Cloned from Attendance Page
+class _FaceBracketPainter extends CustomPainter {
+  final Color color;
+  final double bracketSize = 25.0;
+  final double bracketWidth = 4.0;
+  final double borderRadius = 30.0;
+
+  _FaceBracketPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Matches the aesthetic from the attendance page
+    final drawColor = color;
+
+    final paint = Paint()
+      ..color = drawColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    // 1. Draw rounded main box with low opacity
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(borderRadius));
+    canvas.drawRRect(rrect, paint..color = drawColor.withOpacity(0.4));
+
+    // 2. Draw 4 thick corner brackets
+    final bracketPaint = Paint()
+      ..color = drawColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = bracketWidth
+      ..strokeCap = StrokeCap.round;
+
+    // Top-Left
+    canvas.drawLine(const Offset(0, 30), const Offset(0, 0), bracketPaint);
+    canvas.drawLine(const Offset(0, 0), const Offset(30, 0), bracketPaint);
+
+    // Top-Right
+    canvas.drawLine(Offset(size.width - 30, 0), Offset(size.width, 0), bracketPaint);
+    canvas.drawLine(Offset(size.width, 0), Offset(size.width, 30), bracketPaint);
+
+    // Bottom-Left
+    canvas.drawLine(Offset(0, size.height - 30), Offset(0, size.height), bracketPaint);
+    canvas.drawLine(Offset(0, size.height), Offset(30, size.height), bracketPaint);
+
+    // Bottom-Right
+    canvas.drawLine(Offset(size.width - 30, size.height), Offset(size.width, size.height), bracketPaint);
+    canvas.drawLine(Offset(size.width, size.height), Offset(size.width, size.height - 30), bracketPaint);
   }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // ✅ ISOLATE WRAPPERS (Top-Level)

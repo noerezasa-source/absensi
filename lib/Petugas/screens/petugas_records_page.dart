@@ -9,6 +9,7 @@ import '../../models/attendance_record.dart';
 import '../../services/attendance_service.dart';
 import '../../helpers/timezone_helper.dart';
 import '../../auth/services/role_service.dart';
+import '../../helpers/rfid_mode_helper.dart';
 import '../widgets/petugas_bottom_nav.dart';
 import 'petugas_dashboard.dart';
 import 'petugas_members_page.dart';
@@ -48,6 +49,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
   bool _isInitialized = false;
   String? _errorMessage;
   int _currentNavIndex = 2;
+  String _attendanceMode = 'face';
 
   Map<String, dynamic>? _organization;
   Map<String, dynamic>? _userProfile;
@@ -95,6 +97,12 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     if (!mounted || _isInitialized) return;
 
     try {
+      // Load attendance mode
+      final organizationId = widget.memberData['organization_id'] as int?;
+      if (organizationId != null) {
+        _attendanceMode = await RfidModeHelper.getAttendanceMode(organizationId);
+      }
+
       await _loadOrganizationData();
       await _loadOrganizationMembers();
       await _loadDeviceLocations();
@@ -521,6 +529,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
           currentIndex: _currentNavIndex,
           onNavigationTap: _handleNavigation,
           isDarkMode: widget.isDarkMode,
+          attendanceMode: _attendanceMode,
         ),
       );
     }
@@ -560,6 +569,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         currentIndex: _currentNavIndex,
         onNavigationTap: _handleNavigation,
         isDarkMode: widget.isDarkMode,
+        attendanceMode: _attendanceMode,
       ),
     );
   }

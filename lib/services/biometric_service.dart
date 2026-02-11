@@ -13,7 +13,7 @@ class BiometricService {
   final SupabaseClient _supabase = Supabase.instance.client;
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
 
-  static const double defaultThreshold = 0.75; 
+  static const double defaultThreshold = 0.65; // ✅ Lowered from 0.75 for better matching 
 
   // ✅ PERFORMANCE: Static instances to persist across multiple BiometricService creations
   // This prevents reloading the heavy TFLite model and Isolate on every match
@@ -22,7 +22,7 @@ class BiometricService {
   // ✅ NEW: Expose shared service to prevent multiple model loads in memory
   Future<FaceRecognitionTFLiteService> getFaceService() async {
     if (_persistentFaceService == null) {
-      debugPrint('🚀 Initializing shared persistent face service...');
+      // debugPrint('🚀 Initializing shared persistent face service...');
       _persistentFaceService = FaceRecognitionTFLiteService();
       await _persistentFaceService!.initialize();
     }
@@ -61,8 +61,7 @@ class BiometricService {
 
       // Version is stored INSIDE the JSON, not as separate column
       final version = faceTemplate['version'] ?? 3;
-      debugPrint('Registering face template version: $version');
-      
+      /*
       // \u2705 NEW: Log ISO compliance features for version 3.1
       if (version == 3.1) {
         debugPrint('\u2705 ISO/IEC Compliant Template:');
@@ -71,13 +70,16 @@ class BiometricService {
         debugPrint('  - Liveness Detection: ${faceTemplate['livenessDetection'] != null}');
         debugPrint('  - Pose Information: ${faceTemplate['poseInformation'] != null}');
       }
+      */
       
+      /*
       // Check if this is multi-template (version 4)
       final isMultiTemplate = version == 4;
       if (isMultiTemplate) {
         final templates = faceTemplate['templates'] as List?;
         debugPrint('Multi-template registration: ${templates?.length ?? 0} templates');
       }
+      */
 
       // Deactivate old templates
       final existingTemplate = await _supabase
@@ -111,7 +113,7 @@ class BiometricService {
           .select()
           .single();
 
-      debugPrint('✅ Face template registered with version $version');
+      // debugPrint('✅ Face template registered with version $version');
       
       // ✅ Cache Invalidation: Clear cache so next identification fetches new data
       _memoryTemplateCache = null;
@@ -177,7 +179,7 @@ class BiometricService {
         _cachedOrganizationId == organizationId &&
         _cacheTimestamp != null &&
         DateTime.now().difference(_cacheTimestamp!) < _cacheExpiry) {
-      debugPrint('✅ Using fresh memory cache (age: ${DateTime.now().difference(_cacheTimestamp!).inMinutes}min)');
+      // debugPrint('✅ Using fresh memory cache (age: ${DateTime.now().difference(_cacheTimestamp!).inMinutes}min)');
       return _memoryTemplateCache!;
     }
 
@@ -190,8 +192,8 @@ class BiometricService {
     }
 
     try {
-      debugPrint('=== FETCHING FACE TEMPLATES (TFLite) ===');
-      debugPrint('Organization ID: $organizationId');
+      // debugPrint('=== FETCHING FACE TEMPLATES (TFLite) ===');
+      // debugPrint('Organization ID: $organizationId');
 
       final results = await _supabase
           .from('biometric_data')
@@ -217,7 +219,6 @@ class BiometricService {
               departments!organization_members_department_id_fkey (
                 id,
                 name
-              ),
               )
             )
           ''')
@@ -225,9 +226,13 @@ class BiometricService {
           .eq('is_active', true)
           .eq('organization_members.organization_id', organizationId);
 
-      debugPrint('Total templates found: ${results.length}');
+      // debugPrint('Total templates found: ${results.length}');
+      // debugPrint('Total templates found: ${results.length}');
       // cache for offline usage
-      saveToCache(List<Map<String, dynamic>>.from(results)); // Removed unawaited to fix lint if needed, or import dart:async code
+      saveToCache(List<Map<String, dynamic>>.from(results));
+      
+      // ✅ PERSIST TO OFFLINE DB
+      _offlineDb.syncBiometricData(List<Map<String, dynamic>>.from(results));
       _cacheTimestamp = DateTime.now(); // SET TIMESTAMP
       
       // Log template versions from JSON
@@ -241,18 +246,11 @@ class BiometricService {
           debugPrint('Error parsing template: $e');
         }
       }
-      debugPrint('Template versions: $versions');
+      // debugPrint('Template versions: $versions');
 
       // Cache biometric data and member info for offline validation
       for (var template in results) {
         try {
-          // 1. Cache the face template
-          await _offlineDb.cacheBiometricData(
-            organizationMemberId: template['organization_member_id'],
-            biometricType: 'face_recognition',
-            templateData: template['template_data'],
-          );
-          
           // 2. Cache the member info (name, dept, position)
           // We wrap the template row to match what cacheMemberData expects
           await _offlineDb.cacheMemberData({
@@ -312,14 +310,13 @@ class BiometricService {
   }) async {
     try {
       final startTime = DateTime.now();
-      debugPrint('=== IDENTIFYING BEST MATCH (OPTIMIZED) ===');
+      // debugPrint('=== IDENTIFYING BEST MATCH (OPTIMIZED) ===');
 
       // 1. Initialize Service ONCE
       final faceService = await getFaceService();
 
       // 2. Load and Cache Templates ONCE (per session/org)
       if (_memoryTemplateCache == null || _cachedOrganizationId != organizationId) {
-        debugPrint('📥 Loading templates into memory cache for Org $organizationId...');
         _memoryTemplateCache = await getAllActiveFaceTemplatesWithUserInfo(organizationId);
         _cachedOrganizationId = organizationId;
         
@@ -332,35 +329,25 @@ class BiometricService {
             debugPrint('⚠️ Error parsing template ${template['id']}: $e');
           }
         }
-        debugPrint('✅ Cached ${_parsedTemplateCache!.length} parsed templates in memory');
       }
 
       final capturedVersion = (capturedTemplate['version'] as num?)?.toInt() ?? 3;
       final capturedQuality = (capturedTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
 
-      // ✅ USE PASSED THRESHOLD: Don't override with hardcoded values
-      double effectiveThreshold = threshold;
+      // ✅ CRITICAL: Raw Cosine Threshold (Ideal ~0.45)
+      double effectiveThreshold = threshold; // 0.45 passed from UI
 
-      // ✅ Phase 4: Dynamic Thresholding (Noise-Aware)
-      // If live capture quality is low (darkness/distance), increase threshold to maintain precision
-      if (capturedQuality < 0.50) { 
-        effectiveThreshold += 0.03;
-        debugPrint('🛡️ Quality-Aware Protection: Threshold increased to ${effectiveThreshold.toStringAsFixed(3)} due to low quality (${(capturedQuality*100).toInt()}%)');
-      }
-      
-      // ✅ DYNAMIC GAP: Adjust based on similarity strength and quality
-      // Lower similarity or quality = need bigger gap to be confident
-      double minSimilarityGap = 0.06; // Raised from 0.05
-      
-      if (strict) {
-        // If similarity is low, require bigger gap to avoid ambiguity
-        minSimilarityGap = 0.08; // Raised from 0.05
-      }
-
-      // ✅ IMPROVED: Lowered quality rejection threshold for distance
-      if (strict && capturedQuality < 0.40) { // Reduced from 0.55 to 0.40 for faster distant recognition
-         debugPrint('❌ Strict match rejected: very low quality (${(capturedQuality*100).toInt()}%)');
-         return null;
+      // ✅ Phase 4: Dynamic Thresholding (Inverted Logic)
+      // If quality is low, we SHOULD NOT increase threshold (that makes it harder).
+      // Instead, we might slightly relax it OR reject if too low.
+      if (capturedQuality < 0.50) {
+        // If really bad quality, strictly reject (don't even try to match with low thresh)
+        if (capturedQuality < 0.35) {
+             debugPrint('❌ Strict match rejected: very low quality (${(capturedQuality*100).toInt()}%)');
+             return null;
+        }
+        // Otherwise, keep threshold as is or VERY slightly relax for known difficult conditions
+        // effectiveThreshold -= 0.02; // Optional: Allow 0.43 for dark rooms
       }
 
       if (_memoryTemplateCache!.isEmpty) {
@@ -369,41 +356,28 @@ class BiometricService {
       }
 
       Map<String, dynamic>? bestMatch;
-      double highestSimilarity = 0.0;
-      double secondHighestSimilarity = 0.0;
+      double highestSimilarity = -1.0; // Init to -1.0 for cosine
+      double secondHighestSimilarity = -1.0;
       String? secondBestName;
       Map<String, dynamic>? secondBestMatch;
 
       // 3. Fast Comparison Loop
       for (var template in _memoryTemplateCache!) {
-        // Skip calling DB/JSON decode - use memory cache
         final registeredTemplate = _parsedTemplateCache![template['id']];
         if (registeredTemplate == null) continue;
 
-        // --- Core Comparison Logic ---
+        // --- Version Check ---
         final templateVersion = (registeredTemplate['version'] as num?)?.toInt() ?? 2;
-        
-        // v4, v5, v6, and v7 (Advanced) are all based on the same W600K model
-        // they must be allowed to match each other. 
-        bool isW600K(int v) => v >= 4 && v <= 7;
-        
-        if (isW600K(capturedVersion) && !isW600K(templateVersion)) continue;
-        if (isW600K(templateVersion) && !isW600K(capturedVersion)) continue;
+        bool isW600K(int v) => v >= 4; // v4+ are W600K
+        if (isW600K(capturedVersion) != isW600K(templateVersion)) continue; 
 
-        // Legacy compatibility
-        if (!isW600K(capturedVersion) && !isW600K(templateVersion)) {
-          if (capturedVersion != templateVersion && 
-              !(capturedVersion == 3 && templateVersion == 2)) {
-             continue; 
-          }
-        }
-
-        double similarity = 0.0;
+        double similarity = -1.0;
         int bestTemplateIdx = -1;
 
+        // ✅ MAX SCORE STRATEGY (Multi-Template)
         if (templateVersion == 4 && registeredTemplate['templates'] != null) {
             final templates = registeredTemplate['templates'] as List;
-            double maxSimilarity = 0.0;
+            double maxSimilarity = -1.0;
             for (int i = 0; i < templates.length; i++) {
               final storedTemplate = templates[i];
               final templateSim = faceService.compareFaces(capturedTemplate, storedTemplate);
@@ -412,37 +386,27 @@ class BiometricService {
                 bestTemplateIdx = i;
               }
             }
-            similarity = maxSimilarity;
+            similarity = maxSimilarity; // Take the BEST match, not average
         } else if (capturedVersion == 4 && capturedTemplate['templates'] != null) {
+             // Reverse case (Multi-capture vs Single DB) - Rare but same logic
             final capturedTemplates = capturedTemplate['templates'] as List;
-            double totalSimilarity = 0.0;
-            double totalWeight = 0.0;
+            double maxSimilarity = -1.0;
             for (int i = 0; i < capturedTemplates.length; i++) {
               final capTemplate = capturedTemplates[i];
               final templateSim = faceService.compareFaces(capTemplate, registeredTemplate);
-              final weight = i == 0 ? 0.5 : 0.25;
-              totalSimilarity += templateSim * weight;
-              totalWeight += weight;
+              if (templateSim > maxSimilarity) maxSimilarity = templateSim;
             }
-            similarity = totalWeight > 0 ? totalSimilarity / totalWeight : 0.0;
+            similarity = maxSimilarity;
         } else {
             similarity = faceService.compareFaces(capturedTemplate, registeredTemplate);
         }
         
-        // Debug Log only for reasonable matches to reduce noise
-        if (similarity > 0.3) {
-           String angleInfo = '';
-           if (bestTemplateIdx != -1) {
-             final angles = ['Front', 'Left', 'Right', 'Up', 'Down'];
-             final angleName = bestTemplateIdx < angles.length ? angles[bestTemplateIdx] : 'Angle $bestTemplateIdx';
-             angleInfo = ' [$angleName]';
-           } 
-           debugPrint('🔍 Match Candidate: ${template['id']} (V$templateVersion)$angleInfo - Sim: ${similarity.toStringAsFixed(3)} vs Thr: $effectiveThreshold');
-        }
-
+        // Track Top 2 Candidates
         if (similarity > highestSimilarity) {
           secondHighestSimilarity = highestSimilarity;
           secondBestName = bestMatch?['user_name'];
+          secondBestMatch = bestMatch; // Save previous best as second
+          
           highestSimilarity = similarity;
           
           if (similarity >= effectiveThreshold) {
@@ -453,9 +417,7 @@ class BiometricService {
                 orgMember['departments'];
              
              String? combinedDept = dept?['name'];
-             
-             debugPrint('🏛️ MATCH INFO: Dept=$combinedDept, User=${userProfile['display_name']}');
-             
+
              final angles = ['Front', 'Left', 'Right', 'Up', 'Down'];
              final matchedAngle = bestTemplateIdx != -1 && bestTemplateIdx < angles.length 
                  ? angles[bestTemplateIdx] 
@@ -477,8 +439,8 @@ class BiometricService {
                 'department_name': combinedDept,
                 'template_version': templateVersion,
                 'threshold': effectiveThreshold,
-                'matched_angle': matchedAngle, // ✅ Pass matched angle to UI/Logs
-                'second_similarity': secondHighestSimilarity, // ✅ Pass for Clear Match check
+                'matched_angle': matchedAngle,
+                'second_similarity': secondHighestSimilarity,
              };
           }
         } else if (similarity > secondHighestSimilarity) {
@@ -486,30 +448,9 @@ class BiometricService {
            final orgMember = template['organization_members'];
            final userProfile = orgMember['user_profiles'];
            secondBestName = userProfile['display_name'] ?? '${userProfile['first_name']}';
-           // Populate secondBestMatch with details of the current template
-           final dept = orgMember['departments'] is List ? 
-              (orgMember['departments'].isNotEmpty ? orgMember['departments'].first : null) : 
-              orgMember['departments'];
            
-           String? combinedDept = dept?['name'];
-           
-           secondBestMatch = {
-              'organization_member_id': template['organization_member_id'],
-              'biometric_id': template['id'],
-              'similarity': similarity,
-              'organization_id': orgMember['organization_id'],
-              'user_id': orgMember['user_id'],
-              'employee_id': orgMember['employee_id'],
-              'user_name': (userProfile['display_name'] ?? '').toString().isEmpty 
-                  ? '${userProfile['first_name']} ${userProfile['last_name']}' 
-                  : userProfile['display_name'],
-              'first_name': userProfile['first_name'],
-              'last_name': userProfile['last_name'],
-              'profile_photo_url': userProfile['profile_photo_url'],
-              'department_name': combinedDept,
-              'template_version': templateVersion,
-              'threshold': effectiveThreshold,
-              'matched_angle': 'Single', // Default for second best if not explicitly tracked
+           secondBestMatch = { /* ... minimal info for log ... */ 
+              'user_name': secondBestName 
            };
         }
       }
@@ -517,59 +458,35 @@ class BiometricService {
       // 4. Final Verification
       if (bestMatch != null) {
         _logMatch(bestMatch['user_name'], highestSimilarity, effectiveThreshold, true);
-        if (secondBestName != null) {
-           debugPrint('🥈 Runner Up: $secondBestName (${(secondHighestSimilarity*100).toStringAsFixed(1)}%)');
-        }
         
         if (highestSimilarity < effectiveThreshold) {
           debugPrint('❌ Rejected: Below threshold');
           return null;
         }
 
-        // ✅ IMPROVED AMBIGUITY CHECK: Dynamic gap based on similarity & quality
-        if (secondHighestSimilarity > 0.0) {
+        // ✅ IMPROVED AMBIGUITY CHECK: Dynamic gap
+        if (secondHighestSimilarity > -1.0) {
           final similarityGap = highestSimilarity - secondHighestSimilarity;
           
-          // ✅ DYNAMIC GAP: Adjust based on both quality AND similarity strength
-          double adjustedGap = minSimilarityGap;
+          double adjustedGap = 0.05; // Base gap
           
-          // Rule 1: Low quality needs bigger gap
-          if (capturedQuality < 0.60) {
-            adjustedGap = 0.10; // Lowered from 0.12
-          } else if (capturedQuality < 0.75) {
-            adjustedGap = 0.08; // Lowered from 0.10
-          } else {
-            adjustedGap = 0.05; // Lowered from 0.08
-          }
+          // Rule 1: Low quality -> Need bigger gap
+          if (capturedQuality < 0.60) adjustedGap = 0.08;
           
-          // Rule 2: Low similarity needs even bigger gap
-          if (highestSimilarity < 0.78) {
-            adjustedGap = math.max(adjustedGap, 0.12); // Lowered from 0.15
-          } else if (highestSimilarity < 0.83) {
-            adjustedGap = math.max(adjustedGap, 0.08); // Lowered from 0.10
-          }
-          
+          // Rule 2: Low Similarity -> Need bigger gap (Ambiguous zone)
+          if (highestSimilarity < 0.48) adjustedGap = 0.10;
+
           if (similarityGap < adjustedGap) {
-            debugPrint('❌ Ambiguous match rejected:');
-            debugPrint('   Top match: ${bestMatch['user_name']} (${(highestSimilarity*100).toStringAsFixed(1)}%)');
-            debugPrint('   Second match: ${secondBestMatch?['user_name']} (${(secondHighestSimilarity*100).toStringAsFixed(1)}%)');
-            debugPrint('   Gap: ${(similarityGap*100).toStringAsFixed(2)}% < required ${(adjustedGap*100).toStringAsFixed(2)}%');
-            debugPrint('   Quality: ${(capturedQuality*100).toInt()}%');
-            debugPrint('   Similarity: ${(highestSimilarity*100).toStringAsFixed(1)}%');
-            debugPrint('💡 Suggestion: Try again with better lighting or different angle');
-            
-            // Log for monitoring
-            _logAmbiguousMatch(
+            debugPrint('❌ Ambiguous match rejected (Gap ${(similarityGap*100).toStringAsFixed(2)}% < ${(adjustedGap*100).toStringAsFixed(2)}%)');
+             _logAmbiguousMatch(
               bestMatch['user_name'],
-              secondBestMatch?['user_name'],
+              secondBestName,
               highestSimilarity,
               secondHighestSimilarity,
               capturedQuality,
             );
             return null;
           }
-          
-          debugPrint('✅ Clear match: gap ${(similarityGap*100).toStringAsFixed(2)}% >= ${(adjustedGap*100).toStringAsFixed(2)}%');
         }
       } else {
          debugPrint('❌ No match found.');
@@ -583,6 +500,7 @@ class BiometricService {
   }
 
   Future<void> updateLastUsed(int biometricId) async {
+
     try {
       await _supabase
           .from('biometric_data')
@@ -591,7 +509,7 @@ class BiometricService {
           })
           .eq('id', biometricId);
       
-      debugPrint('✅ Updated last_used_at for biometric_id: $biometricId');
+      // debugPrint('✅ Updated last_used_at for biometric_id: $biometricId');
     } catch (e) {
       debugPrint('Failed to update last used: $e');
     }
@@ -604,7 +522,7 @@ class BiometricService {
           .update({'is_active': false})
           .eq('id', biometricId);
       
-      debugPrint('✅ Deactivated biometric template: $biometricId');
+      // debugPrint('✅ Deactivated biometric template: $biometricId');
     } catch (e) {
       throw Exception('Failed to deactivate face template: $e');
     }
@@ -625,7 +543,7 @@ class BiometricService {
       if (currentEmbedding.isEmpty || newEmbedding.isEmpty) return;
       if (currentEmbedding.length != newEmbedding.length) return;
 
-      debugPrint('🧬 Evolving template $biometricId (LR: $learningRate)...');
+      // debugPrint('🧬 Evolving template $biometricId (LR: $learningRate)...');
 
       // 1. Weighted Average Evolution
       final nextEmbedding = List<double>.filled(currentEmbedding.length, 0.0);
@@ -652,7 +570,7 @@ class BiometricService {
         'template_data': jsonString,
         'last_used_at': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
       }).eq('id', biometricId).then((_) {
-        debugPrint('✅ Supabase template evolved successfully');
+        // debugPrint('✅ Supabase template evolved successfully');
       }).catchError((e) {
         debugPrint('⚠️ Supabase evolution update failed: $e');
       });
@@ -662,7 +580,7 @@ class BiometricService {
         biometricId: biometricId,
         templateData: jsonString,
       ).then((_) {
-        debugPrint('✅ Local cache template evolved successfully');
+        // debugPrint('✅ Local cache template evolved successfully');
         // Update in-memory cache too
         _parsedTemplateCache?[biometricId] = updatedTemplate;
       });
@@ -691,7 +609,7 @@ class BiometricService {
 
   Future<Map<String, int>> getOrganizationStats(int organizationId) async {
     try {
-      debugPrint('=== FETCHING ORGANIZATION STATS ===');
+      // debugPrint('=== FETCHING ORGANIZATION STATS ===');
 
       final registeredData = await _supabase
           .from('biometric_data')
@@ -728,15 +646,17 @@ class BiometricService {
       
       final totalMembers = totalMembersData.length;
 
+      /*
       debugPrint('Registered faces: $registeredCount');
       debugPrint('Version breakdown: $versionCounts');
       debugPrint('Total members: $totalMembers');
+      */
 
       return {
         'registered_faces': registeredCount,
         'total_members': totalMembers,
         'pending_registration': totalMembers - registeredCount,
-        'w600k_templates': versionCounts[5] ?? 0,
+        'w600k_templates': (versionCounts[4] ?? 0) + (versionCounts[5] ?? 0) + (versionCounts[6] ?? 0) + (versionCounts[7] ?? 0) + (versionCounts[8] ?? 0),
         'tflite_templates': versionCounts[3] ?? 0,
         'mlkit_templates': versionCounts[2] ?? 0,
       };
@@ -753,7 +673,7 @@ class BiometricService {
   /// Migrate old templates by marking them as inactive
   Future<int> migrateToTFLite(int organizationId) async {
     try {
-      debugPrint('=== CHECKING OLD TEMPLATES ===');
+      // debugPrint('=== CHECKING OLD TEMPLATES ===');
       
       final allData = await _supabase
           .from('biometric_data')
@@ -774,8 +694,10 @@ class BiometricService {
         try {
           final templateData = jsonDecode(record['template_data']);
           final version = (templateData['version'] as num?)?.toInt() ?? 2;
+          // v4 through v8 are considered modern W600K templates
+          bool isModern = version >= 4 && version <= 8;
           
-          if (version != 5) {
+          if (!isModern) {
             oldCount++;
             // Optionally mark as inactive
             // await _supabase.from('biometric_data')
@@ -787,7 +709,7 @@ class BiometricService {
         }
       }
 
-      debugPrint('Found $oldCount old templates (version != 5)');
+      // debugPrint('Found $oldCount old templates (version != 5)');
       return oldCount;
     } catch (e) {
       debugPrint('Error in migration check: $e');
