@@ -850,4 +850,72 @@ class AttendanceService {
       rethrow;
     }
   }
+
+  // ================== RFID SERVICES ==================
+
+  /// Register or update an RFID card for a member
+  Future<void> registerRfidCard({
+    required int organizationMemberId,
+    required String cardNumber,
+  }) async {
+    try {
+      final normalizedCard = cardNumber.trim();
+      if (normalizedCard.isEmpty) {
+        throw Exception('Nomor kartu tidak boleh kosong');
+      }
+
+      // 1. Get member's organization_id
+      final memberData = await _supabase
+          .from('organization_members')
+          .select('organization_id')
+          .eq('id', organizationMemberId)
+          .single();
+
+      final int organizationId = memberData['organization_id'] as int;
+
+      // 2. Check if this card is already assigned to ANYONE in the SAME organization
+      final existingCard = await _supabase
+          .from('rfid_cards')
+          .select(
+            'id, organization_member_id, organization_members!inner(organization_id)',
+          )
+          .eq('card_number', normalizedCard)
+          .eq('organization_members.organization_id', organizationId)
+          .maybeSingle();
+
+      if (existingCard != null) {
+        final existingMemberId = existingCard['organization_member_id'] as int;
+        if (existingMemberId != organizationMemberId) {
+          throw Exception(
+            'Kartu ini sudah terdaftar untuk anggota lain di organisasi ini',
+          );
+        }
+        // If it's already registered to the SAME member and active, do nothing
+        await _supabase
+            .from('rfid_cards')
+            .update({
+              'is_active': true,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('id', existingCard['id']);
+        return;
+      }
+
+      // 3. Deactivate any OLD cards for THIS member (optional policy, usually 1 card per member)
+      await _supabase
+          .from('rfid_cards')
+          .update({'is_active': false})
+          .eq('organization_member_id', organizationMemberId);
+
+      // 4. Insert new card
+      await _supabase.from('rfid_cards').insert({
+        'organization_member_id': organizationMemberId,
+        'card_number': normalizedCard,
+        'is_active': true,
+      });
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception('Gagal mendaftarkan kartu RFID: $e');
+    }
+  }
 }

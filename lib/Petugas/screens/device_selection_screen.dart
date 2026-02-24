@@ -170,6 +170,10 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     onProceed();
   }
 
+  Future<void> _handleRefresh() async {
+    await Future.wait([_loadDevices(), _loadShifts(), _getCurrentLocation()]);
+  }
+
   Future<void> _loadDevices() async {
     try {
       setState(() => _isLoading = true);
@@ -697,96 +701,112 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
           ),
         ),
       ),
-      body: _isLoading ? _buildLoadingView() : _buildDeviceList(),
+      body: _buildDeviceList(),
       resizeToAvoidBottomInset: true,
     );
   }
 
-  Widget _buildLoadingView() =>
-      const Center(child: CircularProgressIndicator());
+  // Removed _buildLoadingView in favor of LinearProgressIndicator in _buildDeviceList
 
   Widget _buildDeviceList() {
-    return CustomScrollView(
-      slivers: [
-        // NEW: Shift Selection Section (Relocated to top)
-        if (widget.memberId != null)
+    return RefreshIndicator(
+      onRefresh: _handleRefresh,
+      color: primaryColor,
+      backgroundColor: Colors.white,
+      displacement: 20,
+      strokeWidth: 2,
+      child: CustomScrollView(
+        slivers: [
+          // NEW: Linear Loading Bar "Above Shift"
+          if (_isLoading || _isLoadingShifts)
+            SliverToBoxAdapter(
+              child: LinearProgressIndicator(
+                backgroundColor: primaryColor.withValues(alpha: 0.1),
+                color: primaryColor,
+                minHeight: 3,
+              ),
+            ),
+
+          // NEW: Shift Selection Section (Relocated to top)
+          if (widget.memberId != null)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: _buildShiftSection(),
+              ),
+            ),
+
+          // NEW: Search Bar Section
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: _buildShiftSection(),
+            child: SafeArea(
+              bottom: false,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.only(top: 16, bottom: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _buildSearchBar(),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
 
-        // NEW: Current Location Card
-        SliverToBoxAdapter(
-          child: SafeArea(
-            bottom: false,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.only(top: 16, bottom: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          // NEW: Current Location Card
+          if (widget.allowCurrentLocation && _currentPosition != null)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: _buildCurrentLocationCard(),
+              ),
+            ),
+
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: _buildSearchBar(),
+                  Text(
+                    AppLanguage.tr('attendance.device_selection.nearby_header'),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF94A3B8),
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-        ),
 
-        // NEW: Current Location Card
-        if (widget.allowCurrentLocation && _currentPosition != null)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: _buildCurrentLocationCard(),
-            ),
-          ),
-
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  AppLanguage.tr('attendance.device_selection.nearby_header'),
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF94A3B8),
-                    letterSpacing: 0.5,
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
+            sliver: _devices.isEmpty
+                ? SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _buildEmptyState(),
+                  )
+                : _filteredDevices.isEmpty
+                ? SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _buildNoResultsContent(),
+                  )
+                : SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) =>
+                          _buildDeviceCard(_filteredDevices[index]),
+                      childCount: _filteredDevices.length,
+                    ),
                   ),
-                ),
-              ],
-            ),
           ),
-        ),
-
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
-          sliver: _devices.isEmpty
-              ? SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _buildEmptyState(),
-                )
-              : _filteredDevices.isEmpty
-              ? SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _buildNoResultsContent(),
-                )
-              : SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) =>
-                        _buildDeviceCard(_filteredDevices[index]),
-                    childCount: _filteredDevices.length,
-                  ),
-                ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1140,16 +1160,8 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   );
 
   Widget _buildShiftSection() {
-    if (_isLoadingShifts) {
-      return Container(
-        height: 80,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: const Center(child: CircularProgressIndicator()),
-      );
-    }
+    // Hidden loading state handled by global LinearProgressIndicator
+    if (_shifts.isEmpty && _isLoadingShifts) return const SizedBox.shrink();
 
     if (_shifts.isEmpty) return const SizedBox.shrink();
 

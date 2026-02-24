@@ -14,17 +14,63 @@ import '../../helpers/language_helper.dart';
 import '../services/biometric_service.dart';
 import '../services/face_recognition_tflite_service.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:path_provider/path_provider.dart'; // ✅ Added for debug path
 import '../services/attendance_service.dart';
 import '../../helpers/sound_helper.dart';
 import '../../helpers/timezone_helper.dart';
-import '../../widgets/mode_confirmation_dialog.dart';
 import '../../services/supabase_storage_service.dart';
 import '../../services/offline_database_service.dart';
 import '../services/attendance_sync_service.dart';
 import '../../models/offline_attendance.dart';
 import 'manual_check_page.dart';
 import '../../models/face_tracking_state.dart'; // ✅ NEW: State Machine Enum
+
+/// ✅ NEW: Helper for Parallel Frame Processing
+class _FrameSnapshot {
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final int rotation;
+
+  _FrameSnapshot({
+    required this.bytes,
+    required this.width,
+    required this.height,
+    required this.rotation,
+  });
+}
+
+/// ✅ NEW: Top-level function for multi-threaded weighted averaging (compute)
+List<double> _computeWeightedAverage(Map<String, dynamic> args) {
+  final List<List<double>> embeddings = (args['embeddings'] as List)
+      .cast<List<double>>();
+  final List<double> weights = (args['weights'] as List).cast<double>();
+
+  if (embeddings.isEmpty) return [];
+
+  final embeddingSize = embeddings.first.length;
+  final averaged = List<double>.filled(embeddingSize, 0.0);
+  double totalWeight = 0.0;
+
+  for (int j = 0; j < embeddings.length; j++) {
+    final weight = weights[j];
+    totalWeight += weight;
+    for (int i = 0; i < embeddingSize; i++) {
+      averaged[i] += embeddings[j][i] * weight;
+    }
+  }
+
+  if (totalWeight == 0) return averaged;
+
+  for (int i = 0; i < embeddingSize; i++) averaged[i] /= totalWeight;
+
+  // Re-normalize
+  double sumSquares = 0.0;
+  for (var v in averaged) sumSquares += v * v;
+  final double magnitude = sqrt(sumSquares);
+  return magnitude < 1e-6
+      ? averaged
+      : averaged.map((v) => v / magnitude).toList();
+}
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
@@ -63,6 +109,11 @@ class _FaceAttendanceMultiUserPageState
   Position? _currentPosition;
   String _organizationTimezone = 'Asia/Jakarta';
 
+  // ✅ NEW: Setup Phase Tracking
+  bool _isSystemReady = false;
+  double _initProgress = 0.0;
+  String _initStatus = 'Initializing...';
+
   Timer? _continuousScanTimer;
   Timer? _messageTimer;
   Timer? _scheduleCheckTimer;
@@ -78,11 +129,6 @@ class _FaceAttendanceMultiUserPageState
   Map<String, dynamic>? _selectedMode;
   List<Map<String, dynamic>> _availableModes = [];
   bool _isLoadingModes = false;
-
-  final Map<String, DateTime> _processedUserTimestamps = {};
-  final Duration _userCooldown = const Duration(
-    minutes: 5,
-  ); // ✅ INCREASED: 5 minutes cooldown to prevent duplicate processing
 
   List<Map<String, dynamic>> _detectedFaces = [];
   bool _hasFacesInView = false;
@@ -111,23 +157,12 @@ class _FaceAttendanceMultiUserPageState
   ); // ✅ FASTER: 2s cooldown for quicker re-recognition
 
   // ✅ Adaptive Multi-Frame Configuration (Speed + Accuracy Balance)
-  static const int _multiFrameCount =
-      2; // ✅ REDUCED: 2 frames for faster response while maintaining liveness
-  static const Duration _multiFrameInterval = Duration(
-    milliseconds: 10,
-  ); // ✅ FASTER: 10ms interval (Rapid burst)
-  static const double _maxMovementThreshold =
-      100.0; // ✅ INCREASED: Allow more movement while walking (was 50.0)
-
+  static const int _multiFrameCount = 2;
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
   static const Duration _sameModeCooldown = Duration(minutes: 5);
   final Map<String, DateTime> _lastAttendanceTime = {}; // Key: "memberId_mode"
 
   bool _isOnline = true;
-  String? _debugExternalDir; // Cache for debug path
-  DateTime _lastDebugSave = DateTime.fromMillisecondsSinceEpoch(
-    0,
-  ); // For throttling debug saves
   DateTime _lastCameraProcess = DateTime.fromMillisecondsSinceEpoch(
     0,
   ); // ✅ NEW: Throttle detection loop
@@ -147,14 +182,75 @@ class _FaceAttendanceMultiUserPageState
   @override
   void initState() {
     super.initState();
-    _enableKioskMode();
-    _loadOrganizationData();
-    _startScheduleCheck();
-    _initializeFaceService();
-    _initializeCamera();
-    _getCurrentLocation();
-    _checkConnectivity();
-    _attendanceSyncService.startAutoSync();
+    _initializeSystem();
+  }
+
+  Future<void> _initializeSystem() async {
+    final stopwatch = Stopwatch()..start();
+    debugPrint('🏁 Starting high-performance system initialization...');
+
+    try {
+      // Step 1: Kiosk Mode (5%)
+      setState(() {
+        _initProgress = 0.05;
+        _initStatus = 'Warming up UI...';
+      });
+      await _enableKioskMode();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Step 2: Org & Settings (15%)
+      setState(() {
+        _initProgress = 0.15;
+        _initStatus = 'Loading organization settings...';
+      });
+      await _loadOrganizationData();
+      _startScheduleCheck();
+
+      // Step 3: Face Service & Models (40%)
+      setState(() {
+        _initProgress = 0.40;
+        _initStatus = 'Loading AI Models (Multi-Threaded)...';
+      });
+      await _initializeFaceService();
+
+      // Step 4: Camera (70%)
+      setState(() {
+        _initProgress = 0.70;
+        _initStatus = 'Preparing high-speed camera...';
+      });
+      await _initializeCamera();
+
+      // Step 5: Location & DB Cache (90%)
+      setState(() {
+        _initProgress = 0.90;
+        _initStatus = 'Warming up biometric cache...';
+      });
+      await Future.wait([
+        _getCurrentLocation(),
+        _checkConnectivity(),
+        _biometricService.getAllActiveFaceTemplatesWithUserInfo(
+          widget.organizationId,
+        ),
+      ]);
+
+      // Final: Ready (100%)
+      setState(() {
+        _initProgress = 1.0;
+        _initStatus = 'Ready!';
+      });
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      if (mounted) {
+        setState(() => _isSystemReady = true);
+        _attendanceSyncService.startAutoSync();
+        debugPrint(
+          '🚀 System initialized and ready in ${stopwatch.elapsedMilliseconds}ms',
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Initialization failed: $e');
+      _showMessage('Gagal inisialisasi system: $e', MessageType.error);
+    }
   }
 
   @override
@@ -459,14 +555,6 @@ class _FaceAttendanceMultiUserPageState
           .eq('id', widget.organizationId)
           .maybeSingle();
 
-      // Get debug path once
-      try {
-        final dir = await getApplicationDocumentsDirectory();
-        _debugExternalDir = dir.path;
-      } catch (e) {
-        debugPrint('Failed to get debug dir: $e');
-      }
-
       if (org != null && mounted) {
         setState(() {
           _organizationTimezone = org['timezone'] as String? ?? 'Asia/Jakarta';
@@ -634,19 +722,6 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  Future<void> _stopStream() async {
-    if (_cameraController != null &&
-        _cameraController!.value.isStreamingImages) {
-      // Check value.isStreamingImages if available or just try catch
-      try {
-        await _cameraController!.stopImageStream();
-      } catch (e) {
-        debugPrint('Error stopping stream: $e');
-      }
-    }
-    _isStreaming = false;
-  }
-
   int _lastProcessingTime = 0;
   bool _isIdleMode = true; // Start in idle
   int _consecutiveNoFaceFrames = 0;
@@ -675,9 +750,16 @@ class _FaceAttendanceMultiUserPageState
         _lastStreamWidth = image.width;
         _lastStreamHeight = image.height;
         if (inputImage.metadata?.rotation != null) {
-          _lastStreamRotation = _rotationEnumValueToInt(
-            inputImage.metadata!.rotation,
-          );
+          switch (inputImage.metadata!.rotation) {
+            case InputImageRotation.rotation0deg:
+              _lastStreamRotation = 0;
+            case InputImageRotation.rotation90deg:
+              _lastStreamRotation = 90;
+            case InputImageRotation.rotation180deg:
+              _lastStreamRotation = 180;
+            case InputImageRotation.rotation270deg:
+              _lastStreamRotation = 270;
+          }
         }
       }
 
@@ -778,19 +860,6 @@ class _FaceAttendanceMultiUserPageState
   int _lastStreamWidth = 0;
   int _lastStreamHeight = 0;
   int _lastStreamRotation = 0; // NEW: Rotation in degrees
-
-  int _rotationEnumValueToInt(InputImageRotation rotation) {
-    switch (rotation) {
-      case InputImageRotation.rotation0deg:
-        return 0;
-      case InputImageRotation.rotation90deg:
-        return 90;
-      case InputImageRotation.rotation180deg:
-        return 180;
-      case InputImageRotation.rotation270deg:
-        return 270;
-    }
-  }
 
   Uint8List _concatenatePlanes(List<Plane> planes) {
     final WriteBuffer allBytes = WriteBuffer();
@@ -1019,162 +1088,134 @@ class _FaceAttendanceMultiUserPageState
     int id,
   ) async {
     debugPrint(
-      '🎬 Starting multi-frame capture for face $id (${_multiFrameCount} frames)',
+      '🎬 Starting HIGH-PERFORMANCE multi-frame capture for face $id (${_multiFrameCount} frames)',
     );
 
-    final embeddings = <List<double>>[];
-    final templates = <Map<String, dynamic>>[]; // ✅ Added for Phase 4/5 logic
-    Map<String, dynamic>? lastTemplate;
-    Rect? previousFaceRect;
+    final List<_FrameSnapshot> snapshots = [];
 
     try {
-      // Capture multiple frames
+      // 1. ASYNC SNAPSHOT PHASE: Collect all frame bytes first (Rapid Burst)
       for (int i = 0; i < _multiFrameCount; i++) {
-        // Wait for next frame (except first)
         if (i > 0) {
-          await Future.delayed(_multiFrameInterval);
+          await Future.delayed(
+            const Duration(milliseconds: 10),
+          ); // Use fixed interval
         }
 
-        // Check if stream bytes are still available
         if (_lastStreamBytes == null) {
-          debugPrint('⚠️ Stream bytes unavailable at frame $i');
-          break; // Exit early instead of continue
-        }
-
-        // ✅ Movement Detection: Check if face moved too much
-        if (previousFaceRect != null) {
-          final currentRect = face.boundingBox;
-          final movement = _calculateRectMovement(
-            previousFaceRect,
-            currentRect,
-          );
-
-          if (movement > _maxMovementThreshold) {
-            debugPrint(
-              '⚠️ Face moved too much (${movement.toStringAsFixed(1)}px), canceling multi-frame',
-            );
-            break; // Cancel and use what we have
-          }
-        }
-        previousFaceRect = face.boundingBox;
-
-        // Deep copy bytes to avoid race conditions
-        final currentBytes = _lastStreamBytes;
-        if (currentBytes == null) {
-          debugPrint('⚠️ Stream bytes became null at frame $i');
+          debugPrint('⚠️ Stream bytes unavailable at burst frame $i');
           break;
         }
-        final bytes = Uint8List.fromList(currentBytes);
-        final width = _lastStreamWidth;
-        final height = _lastStreamHeight;
-        final rotation = _lastStreamRotation;
 
-        // Extract embedding from this frame
+        // Deep copy bytes IMMEDIATELY to free stream for next frame
+        snapshots.add(
+          _FrameSnapshot(
+            bytes: Uint8List.fromList(_lastStreamBytes!),
+            width: _lastStreamWidth,
+            height: _lastStreamHeight,
+            rotation: _lastStreamRotation,
+          ),
+        );
+      }
+
+      if (snapshots.isEmpty) return null;
+
+      // 2. PARALLEL PROCESSING PHASE: Run TFLite inference for all frames concurrently
+      debugPrint('⚡ Processing ${snapshots.length} frames in parallel...');
+      final templateFutures = snapshots.map((s) async {
         try {
-          final template = await _faceService.buildTemplateFromBytes(
-            bytes,
-            width,
-            height,
-            rotation,
+          return await _faceService.buildTemplateFromBytes(
+            s.bytes,
+            s.width,
+            s.height,
+            s.rotation,
             face,
             allowSidePose: false,
           );
-
-          // Extract embedding array
-          final embedding = template['embedding'] as List<dynamic>?;
-          if (embedding != null) {
-            embeddings.add(
-              embedding.map((e) => (e as num).toDouble()).toList(),
-            );
-            templates.add(
-              template,
-            ); // Store full template for liveness analysis
-            lastTemplate = template;
-            debugPrint('✅ Frame ${i + 1}/${_multiFrameCount} captured');
-
-            // --- TURBO FAST-ACCEPT LOGIC (Phase 7/11) ---
-            if (i == 0) {
-              final liveness = _checkBehavioralLiveness(
-                [embedding.map((e) => (e as num).toDouble()).toList()],
-                [template],
-              );
-              final bestMatch = await _biometricService
-                  .identifyBestMatchWithUserInfo(
-                    capturedTemplate: template,
-                    organizationId: widget.organizationId,
-                    threshold:
-                        0.45, // ✅ ALIGNED: Raw Cosine 0.45 (Normal Range)
-                    strict: false,
-                  );
-
-              if (liveness['isLive'] && bestMatch != null) {
-                final similarity = bestMatch['similarity'] as double? ?? 0.0;
-                final secondSim =
-                    bestMatch['second_similarity'] as double? ?? 0.0;
-                final gap = similarity - secondSim;
-
-                // --- TURBO FAST-ACCEPT CRITERIA (Balanced) ---
-                // Raw Cosine 0.55 is VERY strong match. Gap 0.08 is solid.
-                bool isClearMatch =
-                    similarity > 0.55 || (similarity > 0.48 && gap > 0.08);
-
-                if (isClearMatch) {
-                  debugPrint(
-                    '⚡ TURBO: Immediate Accept (Sim: ${similarity.toStringAsFixed(3)}, Gap: ${gap.toStringAsFixed(3)})',
-                  );
-                  return {
-                    ...template,
-                    'embedding': embedding
-                        .map((e) => (e as num).toDouble())
-                        .toList(),
-                    'frame_count': 1,
-                    'multi_frame': false,
-                    'turbo_mode': true,
-                    'liveness_verified': true,
-                    'liveness_detail': liveness,
-                    'matched_user': bestMatch,
-                  };
-                }
-              }
-            }
-          }
         } catch (e) {
-          debugPrint('⚠️ Failed to extract embedding from frame $i: $e');
-          break; // Exit on error
+          debugPrint('⚠️ Failed to extract embedding from snapshot: $e');
+          return null;
+        }
+      }).toList();
+
+      // --- TURBO PATH: Handle Frame 0 concurrently with matching ---
+      if (snapshots.length == 1) {
+        final template = await templateFutures[0];
+        if (template == null) return null; // Handle potential null from error
+
+        final embedding = (template['embedding'] as List<dynamic>?)
+            ?.map((e) => (e as num).toDouble())
+            .toList();
+
+        if (embedding == null) return null;
+
+        // Concurrent Liveness + DB Match
+        final matchFuture = _biometricService.identifyBestMatchWithUserInfo(
+          capturedTemplate: template,
+          organizationId: widget.organizationId,
+          threshold: 0.45,
+          strict: false,
+        );
+
+        final liveness = _checkBehavioralLiveness([embedding], [template]);
+        final bestMatch = await matchFuture;
+
+        if (liveness['isLive'] && bestMatch != null) {
+          final similarity = bestMatch['similarity'] as double? ?? 0.0;
+          final secondSim = bestMatch['second_similarity'] as double? ?? 0.0;
+          final gap = similarity - secondSim;
+
+          if (similarity > 0.55 || (similarity > 0.48 && gap > 0.08)) {
+            debugPrint(
+              '⚡ TURBO: Parallel Accept (Sim: ${similarity.toStringAsFixed(3)})',
+            );
+            return {
+              ...template,
+              'embedding': embedding,
+              'frame_count': 1,
+              'turbo_mode': true,
+              'matched_user': bestMatch,
+            };
+          }
+        }
+        return template;
+      }
+
+      // --- MULTI-FRAME PATH: Wait for all processing ---
+      final results = await Future.wait(templateFutures);
+      final List<Map<String, dynamic>> templates = results
+          .whereType<Map<String, dynamic>>()
+          .toList();
+      final List<List<double>> embeddings = [];
+      final List<double> weights = [];
+
+      for (var t in templates) {
+        final e = (t['embedding'] as List<dynamic>?)
+            ?.map((v) => (v as num).toDouble())
+            .toList();
+        if (e != null) {
+          embeddings.add(e);
+          weights.add(t['qualityScore'] as double? ?? 0.5);
         }
       }
 
-      // Check if we have enough frames
-      if (embeddings.isEmpty) {
-        debugPrint('❌ No embeddings captured, aborting');
-        return null;
-      }
+      if (embeddings.isEmpty) return null;
 
-      if (embeddings.length < 2) {
-        debugPrint('⚠️ Only 1 frame captured, using single-frame embedding');
-        return lastTemplate;
-      }
+      // 3. MULTI-THREADED MATH: Offload weighted averaging to an Isolate
+      final avgEmbedding = await compute(_computeWeightedAverage, {
+        'embeddings': embeddings,
+        'weights': weights,
+      });
 
-      // 2. Behavioral Liveness Check
+      // Liveness analysis on all frames
       final livenessResult = _checkBehavioralLiveness(embeddings, templates);
-      debugPrint(
-        '📊 Liveness Result: ${livenessResult['isLive']} - Reason: ${livenessResult['reason']}',
-      );
-
       if (!livenessResult['isLive']) {
         debugPrint('🚫 Liveness rejected: ${livenessResult['reason']}');
         return null;
       }
 
-      // 3. Weighted Average (Phase 4)
-      final weights = templates
-          .map((t) => (t['qualityScore'] as double? ?? 0.5))
-          .toList();
-      final avgEmbedding = _weightedAverageEmbeddings(embeddings, weights);
-
-      // Return template with averaged embedding
       return {
-        ...?lastTemplate,
+        ...templates.last,
         'embedding': avgEmbedding,
         'frame_count': embeddings.length,
         'multi_frame': true,
@@ -1182,7 +1223,7 @@ class _FaceAttendanceMultiUserPageState
         'liveness_detail': livenessResult,
       };
     } catch (e) {
-      debugPrint('❌ Multi-frame capture error: $e');
+      debugPrint('❌ Parallel Multi-frame error: $e');
       return null;
     }
   }
@@ -1286,65 +1327,6 @@ class _FaceAttendanceMultiUserPageState
     };
   }
 
-  // ✅ Phase 4: Weighted average of multiple embeddings
-  List<double> _weightedAverageEmbeddings(
-    List<List<double>> embeddings,
-    List<double> weights,
-  ) {
-    if (embeddings.isEmpty) return [];
-    if (embeddings.length != weights.length)
-      return _averageEmbeddings(embeddings);
-
-    final embeddingSize = embeddings.first.length;
-    final averaged = List<double>.filled(embeddingSize, 0.0);
-    double totalWeight = 0.0;
-
-    for (int j = 0; j < embeddings.length; j++) {
-      final weight = weights[j];
-      totalWeight += weight;
-      for (int i = 0; i < embeddingSize; i++) {
-        averaged[i] += embeddings[j][i] * weight;
-      }
-    }
-
-    if (totalWeight == 0) return _averageEmbeddings(embeddings);
-    for (int i = 0; i < embeddingSize; i++) averaged[i] /= totalWeight;
-
-    double sumSquares = 0.0;
-    for (var v in averaged) sumSquares += v * v;
-    final double magnitude = sqrt(sumSquares);
-    return magnitude < 1e-6
-        ? averaged
-        : averaged.map((v) => v / magnitude).toList();
-  }
-
-  /// ✅ Average multiple embeddings (element-wise mean)
-  List<double> _averageEmbeddings(List<List<double>> embeddings) {
-    if (embeddings.isEmpty) return [];
-    final embeddingSize = embeddings.first.length;
-    final averaged = List<double>.filled(embeddingSize, 0.0);
-    for (final embedding in embeddings) {
-      for (int i = 0; i < embeddingSize; i++) {
-        averaged[i] += embedding[i];
-      }
-    }
-    final count = embeddings.length.toDouble();
-    for (int i = 0; i < embeddingSize; i++) averaged[i] /= count;
-    double sumSquares = 0.0;
-    for (var v in averaged) sumSquares += v * v;
-    final double magnitude = sqrt(sumSquares);
-    return magnitude < 1e-6
-        ? averaged
-        : averaged.map((v) => v / magnitude).toList();
-  }
-
-  /// ✅ Calculate movement distance between two face rectangles
-  double _calculateRectMovement(Rect prev, Rect current) {
-    final dx = (prev.center.dx - current.center.dx).abs();
-    final dy = (prev.center.dy - current.center.dy).abs();
-    return sqrt(dx * dx + dy * dy); // Euclidean distance
-  }
-
   Future<void> _triggerRecognition(Face face, Size imageSize) async {
     final id = face.trackingId ?? -1;
     if (id == -1) return;
@@ -1390,39 +1372,47 @@ class _FaceAttendanceMultiUserPageState
       debugPrint(
         '🔍 [BENCH] Matching against database took: ${matchEnd - matchStart}ms',
       );
+
+      if (result == null) {
+        debugPrint(
+          '⚠️ No match found for face $id (similarity below threshold)',
+        );
+      }
       debugPrint(
         '🚀 [BENCH] TOTAL Recognition Cycle: ${stopwatch.elapsedMilliseconds}ms',
       );
 
       if (result != null) {
-        final name = result['user_name'];
-        final memberId = result['organization_member_id'];
-        final similarityRaw = (result['similarity'] as double? ?? 0.0);
-        // Display as Percentage
-        final similarity = similarityRaw * 100;
-
         // ✅ INSTANT FEEDBACK: Sound + UI First
         if (mounted) {
           SoundHelper.playSuccessSound();
         }
 
+        final now = DateTime.now();
+        final matchedName = result['user_name'] as String? ?? 'Unknown';
+        final matchedSim = (result['similarity'] as num?)?.toDouble() ?? 0.0;
+        final matchedBiometricId = result['biometric_id'] as int?;
+        final organizationMemberId = result['organization_member_id'] as int?;
+
+        debugPrint(
+          '✅ Valid match found: $matchedName (Mem: $organizationMemberId, Bio: $matchedBiometricId) with sim: ${matchedSim.toStringAsFixed(3)}',
+        );
+
+        _persistentFaceTracker[id] = {
+          'name': matchedName,
+          'member_id': organizationMemberId,
+          'id': matchedBiometricId,
+          'similarity': matchedSim * 100,
+          'timestamp': now,
+        };
+
+        // ✅ SUCCESS: Cooldown to prevent spam
+        _cooldowns[id] = now.add(_recognitionCooldown);
+
         _handleAttendance(result, template); // Fire and forget
 
-        // Update Persistent Tracker for UI
-        _persistentFaceTracker[id] = {
-          'name': name,
-          'member_id': memberId,
-          'similarity': similarity,
-          'timestamp': DateTime.now(),
-        };
-        // ✅ SUCCESS: Cooldown to prevent spam
-        _cooldowns[id] = DateTime.now().add(_recognitionCooldown);
-
         // ✅ NEW: Adaptive Learning (Evolution-Only on High Confidence)
-        final matchedBiometricId = result['biometric_id'] as int?;
-        final currentSim = result['similarity'] as double? ?? 0.0;
-
-        if (matchedBiometricId != null && currentSim >= 0.55) {
+        if (matchedBiometricId != null && matchedSim >= 0.55) {
           // 0.55 Raw Cosine is Very High
           final originalTemplate = _biometricService.getParsedTemplateFromCache(
             matchedBiometricId,
@@ -1623,13 +1613,6 @@ class _FaceAttendanceMultiUserPageState
     } catch (e) {
       debugPrint('❌ Background processing failed for $userName: $e');
     }
-  }
-
-  void _cleanupOldTimestamps() {
-    final now = DateTime.now();
-    _processedUserTimestamps.removeWhere((key, timestamp) {
-      return now.difference(timestamp) > _userCooldown;
-    });
   }
 
   void _startScheduleCheck() {
@@ -1954,24 +1937,6 @@ class _FaceAttendanceMultiUserPageState
   }
 
   // Old methods removed to resolve duplication with new Shift Mode implementation
-
-  Future<void> _handleModeChange(String newMode) async {
-    if (_attendanceMode == newMode) return;
-
-    await ModeConfirmationDialog.show(
-      context: context,
-      currentMode: _attendanceMode,
-      newMode: newMode,
-      onConfirm: () {
-        setState(() => _attendanceMode = newMode);
-        _showMessage(
-          'Berhasil mengubah mode ke ${newMode == 'check_in' ? 'Check In' : 'Check Out'}',
-          MessageType.success,
-          seconds: 2,
-        );
-      },
-    );
-  }
 
   Color _getMessageColor() {
     switch (_messageType) {
@@ -2526,116 +2491,89 @@ class _FaceAttendanceMultiUserPageState
                 );
               },
             ),
+
+            // System Setup Overlay (Blocking)
+            if (!_isSystemReady) _buildSetupOverlay(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildModeSelector() {
+  Widget _buildSetupOverlay() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(25),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildAttendanceModeToggle(),
-          const SizedBox(height: 8),
-          _buildWorkTimeModeSelector(),
-        ],
-      ),
-    );
-  }
+      color: isDarkMode ? const Color(0xFF121212) : Colors.white,
+      width: double.infinity,
+      height: double.infinity,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Logo / Icon
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF8938DF).withOpacity(0.1),
+              ),
+              child: const Icon(
+                Icons.face_retouching_natural_rounded,
+                size: 64,
+                color: Color(0xFF8938DF),
+              ),
+            ),
+            const SizedBox(height: 32),
 
-  Widget _buildAttendanceModeToggle() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(25),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildToggleButton('In', 'check_in', Colors.green),
-          _buildToggleButton('Out', 'check_out', Colors.red),
-        ],
-      ),
-    );
-  }
+            // Progress Text
+            Text(
+              'System Setup',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+                color: isDarkMode ? Colors.white : Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _initStatus,
+              style: TextStyle(
+                fontSize: 14,
+                color: isDarkMode ? Colors.white70 : Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 48),
 
-  Widget _buildWorkTimeModeSelector() {
-    final currentMode = _getWorkTimeMode();
-    final isWorkTime = currentMode == 'work_time';
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _buildWorkTimeButton('Waktu Kerja', 'work_time', isWorkTime),
-        const SizedBox(width: 8),
-        _buildWorkTimeButton('Waktu Istirahat', 'break_time', !isWorkTime),
-      ],
-    );
-  }
-
-  Widget _buildWorkTimeButton(String label, String mode, bool isSelected) {
-    return GestureDetector(
-      onTap: () {
-        setState(() => _workTimeMode = mode);
-        _showMessage('Mode: $label', MessageType.success, seconds: 2);
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.transparent : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected
-                ? Colors.white.withValues(alpha: 0.8)
-                : Colors.white.withValues(alpha: 0.3),
-            width: 1.5,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-            color: isSelected
-                ? Colors.white
-                : Colors.white.withValues(alpha: 0.7),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToggleButton(String label, String mode, Color activeColor) {
-    final isSelected = _attendanceMode == mode;
-    return GestureDetector(
-      onTap: () => _handleModeChange(mode),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? activeColor.withValues(alpha: 0.8)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: isSelected
-                ? Colors.white
-                : Colors.white.withValues(alpha: 0.8),
-          ),
+            // Progress Indicator
+            SizedBox(
+              width: 200,
+              child: Column(
+                children: [
+                  LinearProgressIndicator(
+                    value: _initProgress,
+                    backgroundColor: isDarkMode
+                        ? Colors.white10
+                        : Colors.grey.shade200,
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFF8938DF),
+                    ),
+                    minHeight: 8,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '${(_initProgress * 100).toInt()}%',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF8938DF),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2660,15 +2598,8 @@ class _FaceAttendanceMultiUserPageState
   }
 
   void _showMenu(BuildContext context) {
-    // Direct link to the dynamic mode picker
     _openModePicker();
   }
-
-  // NOTE: The _openModePicker method is now defined earlier in the class (restored)
-
-  // Helper methods for the hardcoded UI are no longer needed
-
-  // Removing buildModeOption to cleanup
 }
 
 /// ✅ NEW: Custom Painter for Face Bracket (VIOLET)

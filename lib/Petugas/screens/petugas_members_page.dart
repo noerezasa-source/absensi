@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -1668,18 +1669,39 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final accentColor = const Color(0xFF8938DF);
     final softAccent = accentColor.withOpacity(0.1);
 
+    // --- Registration Status Logic ---
+    bool hasFaceData = false;
+    final bioData = member['biometric_data'];
+    if (bioData is List) {
+      final activeFace = bioData.firstWhere(
+        (b) =>
+            (b['biometric_type'] == 'face' ||
+                b['biometric_type'] == 'face_recognition') &&
+            b['is_active'] == true,
+        orElse: () => null,
+      );
+      if (activeFace != null) hasFaceData = true;
+    } else if (bioData is Map) {
+      if ((bioData['biometric_type'] == 'face' ||
+              bioData['biometric_type'] == 'face_recognition') &&
+          bioData['is_active'] == true) {
+        hasFaceData = true;
+      }
+    }
+    // --- End Registration Status Logic ---
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 8), // Reduced margin
+      margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-        borderRadius: BorderRadius.circular(16), // Reduced radius slightly
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: widget.isDarkMode ? Colors.white10 : Colors.grey.shade100,
         ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(widget.isDarkMode ? 0.2 : 0.03),
-            blurRadius: 8, // Reduced blur
+            blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
@@ -1688,20 +1710,20 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         onTap: () => _showMemberDetail(member),
         borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.all(12), // Reduced padding (was 16)
+          padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              // Circular Profile Photo
+              // Circular Profile Photo (plain, no status ring)
               Container(
-                width: 48, // Reduced from 60
-                height: 48, // Reduced from 60
+                width: 48,
+                height: 48,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: Colors.grey.shade100,
                   border: Border.all(
                     color: widget.isDarkMode
                         ? Colors.white10
-                        : Colors.grey.shade50,
+                        : Colors.grey.shade100,
                     width: 1.5,
                   ),
                 ),
@@ -1715,17 +1737,17 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                           errorWidget: (context, url, error) => Icon(
                             Icons.person,
                             color: Colors.grey.shade400,
-                            size: 26, // Reduced icon size
+                            size: 26,
                           ),
                         )
                       : Icon(
                           Icons.person,
                           color: Colors.grey.shade400,
-                          size: 26, // Reduced icon size
+                          size: 26,
                         ),
                 ),
               ),
-              const SizedBox(width: 12), // Reduced spacing
+              const SizedBox(width: 12),
               // Member Info
               Expanded(
                 child: Column(
@@ -1735,7 +1757,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     Text(
                       _getMemberName(member),
                       style: TextStyle(
-                        fontSize: 16, // Reduced from 18
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                         color: widget.isDarkMode
                             ? Colors.white
@@ -1744,17 +1766,45 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 2), // Reduced spacing
-                    Text(
-                      roleName,
-                      style: TextStyle(
-                        fontSize: 13, // Reduced from 14
-                        color: widget.isDarkMode
-                            ? Colors.white54
-                            : const Color(0xFF8938DF).withOpacity(0.7),
-                        fontWeight: FontWeight.w500,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            roleName,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: widget.isDarkMode
+                                  ? Colors.white54
+                                  : const Color(0xFF8938DF).withOpacity(0.7),
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        // Only show badge if not yet registered
+                        if (!hasFaceData) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEF4444).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'Belum Daftar',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFEF4444),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
@@ -1767,18 +1817,14 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     Icons.chat_bubble_outline_rounded,
                     softAccent,
                     accentColor,
-                    () {
-                      // Handle chat
-                    },
+                    () {},
                   ),
-                  const SizedBox(width: 8), // Reduced spacing
+                  const SizedBox(width: 8),
                   _buildMemberActionIcon(
                     Icons.phone_outlined,
                     softAccent,
                     accentColor,
-                    () {
-                      // Handle phone
-                    },
+                    () {},
                   ),
                 ],
               ),
@@ -1820,27 +1866,39 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
     // Determine Face Data Status
     bool hasFaceData = false;
+    bool isHighAccuracy = false;
     final bioData = member['biometric_data'];
+    Map<String, dynamic>? activeFaceData;
+
     if (bioData is List) {
-      hasFaceData = bioData.any(
+      activeFaceData = bioData.firstWhere(
         (b) =>
             (b['biometric_type'] == 'face' ||
                 b['biometric_type'] == 'face_recognition') &&
             b['is_active'] == true,
+        orElse: () => null,
       );
     } else if (bioData is Map) {
-      // Handle single object case if standard supabase behavior differs
-      hasFaceData =
-          (bioData['biometric_type'] == 'face' ||
+      if ((bioData['biometric_type'] == 'face' ||
               bioData['biometric_type'] == 'face_recognition') &&
-          bioData['is_active'] == true;
+          bioData['is_active'] == true) {
+        activeFaceData = Map<String, dynamic>.from(bioData);
+      }
+    }
+
+    if (activeFaceData != null) {
+      hasFaceData = true;
+      final template = activeFaceData['face_template'];
+      // High Accuracy is multi-angle (totalAngles > 1)
+      if (template != null && (template['totalAngles'] ?? 0) > 1) {
+        isHighAccuracy = true;
+      }
     }
 
     String deptName = AppLanguage.tr('Petugas.members.no_department');
     final posTitle = position?['title'] ?? position?['name'];
     if (department != null && posTitle != null) {
-      deptName =
-          department['name']; // Just Dept name as per image "Department Creative Team"
+      deptName = department['name'];
     } else {
       deptName =
           department?['name'] ??
@@ -1855,400 +1913,791 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-        decoration: BoxDecoration(
-          color: const Color(0xFF5B259F), // Deep Purple Background
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.4),
-              blurRadius: 20,
-              offset: const Offset(0, -5),
-            ),
-          ],
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.88,
+        ),
+        decoration: const BoxDecoration(
+          color: Color(0xFF5B259F), // Deep Purple Background
+          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Drag Handle
-            Container(
-              width: 50,
-              height: 5,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(2.5),
+            // Drag Handle (fixed, not scrollable)
+            Padding(
+              padding: const EdgeInsets.only(top: 16, bottom: 0),
+              child: Container(
+                width: 50,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(2.5),
+                ),
               ),
             ),
-            const SizedBox(height: 32),
 
-            // Profile & Info Row
-            Row(
-              children: [
-                // Profile Photo with Green Dot
-                Stack(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                      ),
-                      child: CircleAvatar(
-                        radius: 45,
-                        backgroundColor: Colors.grey.shade200,
-                        backgroundImage: _getMemberPhotoUrl(member) != null
-                            ? CachedNetworkImageProvider(
-                                _getMemberPhotoUrl(member)!,
-                              )
-                            : null,
-                        child: _getMemberPhotoUrl(member) == null
-                            ? const Icon(
-                                Icons.person,
-                                size: 45,
-                                color: Colors.grey,
-                              )
-                            : null,
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 5,
-                      right: 5,
-                      child: Container(
-                        width: 20,
-                        height: 20,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10B981), // Green active
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                      ),
-                    ),
-                  ],
+            // Scrollable content area
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 20,
                 ),
-                const SizedBox(width: 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(height: 12),
 
-                // Text Info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _getMemberName(member),
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                    // Profile & Info Row
+                    Row(
+                      children: [
+                        // Profile Photo with Green Dot
+                        Stack(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                              child: CircleAvatar(
+                                radius: 45,
+                                backgroundColor: Colors.grey.shade200,
+                                backgroundImage:
+                                    _getMemberPhotoUrl(member) != null
+                                    ? CachedNetworkImageProvider(
+                                        _getMemberPhotoUrl(member)!,
+                                      )
+                                    : null,
+                                child: _getMemberPhotoUrl(member) == null
+                                    ? const Icon(
+                                        Icons.person,
+                                        size: 45,
+                                        color: Colors.grey,
+                                      )
+                                    : null,
+                              ),
+                            ),
+                            Positioned(
+                              bottom: 5,
+                              right: 5,
+                              child: Container(
+                                width: 20,
+                                height: 20,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 20),
+
+                        // Text Info
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _getMemberName(member),
+                                style: const TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+
+                              // Department
+                              Text(
+                                '${AppLanguage.tr('Petugas.members.department')} $deptName',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                              const SizedBox(height: 4),
+
+                              // Employee ID
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    AppLanguage.tr(
+                                      'Petugas.members.employee_id',
+                                    ),
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  Text(
+                                    '$empId',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Conditional Card (Face Data Status)
+                    if (!hasFaceData) ...[
+                      // WARNING CARD (Yellow/Cream)
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF9E6), // Cream/Light Yellow
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.info_outline,
+                              color: Color(0xFFF59E0B),
+                              size: 28,
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    AppLanguage.tr(
+                                      'Petugas.members.face_not_registered_yet',
+                                    ),
+                                    style: const TextStyle(
+                                      color: Color(0xFF92400E),
+                                      fontSize: 16,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    AppLanguage.tr(
+                                      'Petugas.members.register_face_for_attendance',
+                                    ),
+                                    style: const TextStyle(
+                                      color: Color(0xFF92400E),
+                                      fontSize: 14,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 8),
-
-                      // Department
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.business,
-                            color: Colors.white70,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '${AppLanguage.tr('Petugas.members.department')} $deptName',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
+                    ] else if (!isHighAccuracy) ...[
+                      // STANDARD ACCURACY CARD
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE0F2FE),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.photo_outlined,
+                              color: Color(0xFF0369A1),
+                              size: 28,
+                            ),
+                            const SizedBox(width: 16),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Akurasi Standar (Upload)',
+                                    style: TextStyle(
+                                      color: Color(0xFF075985),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                  SizedBox(height: 6),
+                                  Text(
+                                    'Tingkatkan ke Akurasi Tinggi (Live Scan) untuk pengenalan yang lebih cepat dan aman.',
+                                    style: TextStyle(
+                                      color: Color(0xFF0369A1),
+                                      fontSize: 13,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 4),
-
-                      // Employee ID
+                    ] else ...[
+                      // SUCCESS STATE - STATS DASHBOARD
                       Row(
                         children: [
-                          const Icon(
-                            Icons.badge_outlined,
-                            color: Colors.white70,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            AppLanguage.tr('Petugas.members.employee_id'),
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
+                          // Punctuality Card
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 24,
+                                horizontal: 16,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: const Color(0xFF8B5CF6),
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.access_time_filled_rounded,
+                                      color: Color(0xFF8B5CF6),
+                                      size: 28,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _formatPercentage(
+                                      member['performance_stats']?['punctuality_rate'] ??
+                                          0.0,
+                                    ),
+                                    style: const TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF1F2937),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    AppLanguage.tr(
+                                      'Petugas.members.punctuality',
+                                    ).toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF9CA3AF),
+                                      letterSpacing: 1.0,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                          const Spacer(),
-                          Text(
-                            '$empId',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                          const SizedBox(width: 16),
+
+                          // Attendance Card
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 24,
+                                horizontal: 16,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: const Color(0xFF8B5CF6),
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.calendar_today_rounded,
+                                      color: Color(0xFF8B5CF6),
+                                      size: 24,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _formatPercentage(
+                                      member['performance_stats']?['attendance_rate'] ??
+                                          0.0,
+                                    ),
+                                    style: const TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF1F2937),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    AppLanguage.tr(
+                                      'Petugas.members.attendance',
+                                    ).toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF9CA3AF),
+                                      letterSpacing: 1.0,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ],
-                  ),
-                ),
-              ],
-            ),
 
-            const SizedBox(height: 32),
+                    const SizedBox(height: 24),
 
-            // Conditional Card
-            if (!hasFaceData) ...[
-              // WARNING CARD (Yellow/Cream)
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF9E6), // Cream/Light Yellow
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(
-                      Icons.info_outline,
-                      color: Color(0xFFF59E0B),
-                      size: 28,
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            AppLanguage.tr(
-                              'Petugas.members.face_not_registered_yet',
+                    // ─── Buttons Section ───
+                    if (!hasFaceData)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _showRegistrationOptions(member);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFA855F7),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 18),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
                             ),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            AppLanguage.tr('Petugas.members.register_face_id'),
                             style: const TextStyle(
-                              color: Color(0xFF92400E), // Brownish text
                               fontSize: 16,
-                              height: 1.4,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            AppLanguage.tr(
-                              'Petugas.members.register_face_for_attendance',
+                        ),
+                      )
+                    else if (!isHighAccuracy)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => FaceRegistrationPage(
+                                  organizationMemberId: member['id'],
+                                ),
+                              ),
+                            ).then((refresh) {
+                              if (refresh == true)
+                                _loadOrganizationMembersOptimized();
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF10B981),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 18),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
                             ),
-                            style: const TextStyle(
-                              color: Color(0xFF92400E),
-                              fontSize: 14,
-                              height: 1.4,
+                            elevation: 0,
+                          ),
+                          child: const Text(
+                            'Upgrade ke Akurasi Tinggi',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
-                        ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 12),
+
+                    // ─── RFID Registration Button ───
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _showRfidRegistrationDialog(member);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          // Blue-purple teal that complements purple theme
+                          backgroundColor: const Color(0xFF312E81),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            side: const BorderSide(
+                              color: Color(0xFF4F46E5),
+                              width: 1.5,
+                            ),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.nfc_rounded, size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              AppLanguage.tr(
+                                'Petugas.members.register_rfid_card',
+                              ),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
+
+                    const SizedBox(height: 16),
                   ],
                 ),
               ),
-            ] else ...[
-              // SUCCESS STATE - STATS DASHBOARD (As per new image)
-              Row(
-                children: [
-                  // Punctuality Card
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 24,
-                        horizontal: 16,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: const Color(0xFF8B5CF6),
-                                width: 2,
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.access_time_filled_rounded,
-                              color: Color(0xFF8B5CF6),
-                              size: 28,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            _formatPercentage(
-                              member['performance_stats']?['punctuality_rate'] ??
-                                  0.0,
-                            ),
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF1F2937),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            AppLanguage.tr(
-                              'Petugas.members.punctuality',
-                            ).toUpperCase(),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF9CA3AF),
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-
-                  // Attendance Card
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 24,
-                        horizontal: 16,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: const Color(0xFF8B5CF6),
-                                width: 2,
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.calendar_today_rounded,
-                              color: Color(0xFF8B5CF6),
-                              size: 24,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            _formatPercentage(
-                              member['performance_stats']?['attendance_rate'] ??
-                                  0.0,
-                            ),
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF1F2937),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            AppLanguage.tr(
-                              'Petugas.members.attendance',
-                            ).toUpperCase(),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF9CA3AF),
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-
-            const SizedBox(height: 32),
-
-            // Back Button (Only button needed for this state, or maybe Keep Register for updates?)
-            // The image only shows "Back to Profile". But logically we might still want "Update Face".
-            // However, following the image strictly first.
-            // If hasFaceData, maybe we hide the big purple "Register" button or move it?
-            // The previous code had a purple button + creamy back button.
-            // The new image ONLY shows "Back to Profile" (Creamy button).
-
-            // Let's keep the Update button but maybe make it less prominent or remove it if strictly following image?
-            // The image implies this is a "View Mode" when registered.
-            // I will HIDE the Register/Update button when hasFaceData is true to match the image,
-            // OR checks if I should keep it. The user said "ini tampilan jika user sudah memiliki data...".
-            // It shows NO purple button. So I will ONLY show the Back button in this state.
-            if (!hasFaceData)
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _showRegistrationOptions(member);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFA855F7),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    elevation: 0,
-                  ),
-                  icon: const Icon(Icons.face, size: 24),
-                  label: Text(
-                    AppLanguage.tr('Petugas.members.register_face_id'),
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-
-            if (!hasFaceData) const SizedBox(height: 16),
-
-            // Back Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(
-                    0xFFFFF9E6,
-                  ), // Cream/White Button
-                  foregroundColor: const Color(0xFF4B5563), // Dark text
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  elevation: 0,
-                ),
-                child: Text(
-                  AppLanguage.tr('Petugas.members.back_to_profile'),
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
             ),
-
-            const SizedBox(height: 16),
           ],
         ),
       ),
     );
+  }
+
+  void _showRfidRegistrationDialog(Map<String, dynamic> member) {
+    String? scannedCardId;
+    final TextEditingController rfidController = TextEditingController();
+    final FocusNode rfidFocusNode = FocusNode();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            // Request focus but immediately hide soft keyboard
+            Future.delayed(const Duration(milliseconds: 50), () {
+              rfidFocusNode.requestFocus();
+              SystemChannels.textInput.invokeMethod('TextInput.hide');
+            });
+
+            // Listen to HID input: detect card scan on change (ends with \n or length typical)
+            rfidController.addListener(() {
+              final text = rfidController.text;
+              if (text.endsWith('\n') || text.endsWith('\r')) {
+                final cardId = text.trim();
+                if (cardId.isNotEmpty) {
+                  setDialogState(() {
+                    scannedCardId = cardId;
+                    rfidController.clear();
+                  });
+                }
+              }
+            });
+
+            return Container(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode
+                    ? const Color(0xFF1E1040)
+                    : Colors.white,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(28),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Drag handle
+                    Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Title
+                    Text(
+                      AppLanguage.tr('Petugas.members.rfid_registration'),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: widget.isDarkMode
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _getMemberName(member),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: widget.isDarkMode
+                            ? Colors.white54
+                            : Colors.grey.shade600,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // NFC icon / success icon area
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 300),
+                      child: scannedCardId == null
+                          ? Column(
+                              key: const ValueKey('scanning'),
+                              children: [
+                                Container(
+                                  width: 88,
+                                  height: 88,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: const Color(
+                                      0xFF8938DF,
+                                    ).withOpacity(0.1),
+                                  ),
+                                  child: const Icon(
+                                    Icons.nfc_rounded,
+                                    size: 44,
+                                    color: Color(0xFF8938DF),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  AppLanguage.tr(
+                                    'Petugas.members.tap_card_to_scan',
+                                  ),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: widget.isDarkMode
+                                        ? Colors.white70
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Column(
+                              key: const ValueKey('scanned'),
+                              children: [
+                                Container(
+                                  width: 88,
+                                  height: 88,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: const Color(
+                                      0xFF10B981,
+                                    ).withOpacity(0.1),
+                                  ),
+                                  child: const Icon(
+                                    Icons.check_circle_rounded,
+                                    size: 44,
+                                    color: Color(0xFF10B981),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  AppLanguage.tr(
+                                    'Petugas.members.card_id_detected',
+                                  ),
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF10B981),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                      0xFF8938DF,
+                                    ).withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: const Color(
+                                        0xFF8938DF,
+                                      ).withOpacity(0.2),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    scannedCardId!,
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF8938DF),
+                                      letterSpacing: 2,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // Hidden TextField — captures HID input, keyboard stays hidden
+                    SizedBox(
+                      height: 0,
+                      child: TextField(
+                        controller: rfidController,
+                        focusNode: rfidFocusNode,
+                        autofocus: true,
+                        readOnly: false,
+                        showCursor: false,
+                        onSubmitted: (value) {
+                          final cardId = value.trim();
+                          if (cardId.isNotEmpty) {
+                            setDialogState(() {
+                              scannedCardId = cardId;
+                              rfidController.clear();
+                            });
+                          }
+                          // Re-focus and hide keyboard again
+                          Future.delayed(const Duration(milliseconds: 50), () {
+                            rfidFocusNode.requestFocus();
+                            SystemChannels.textInput.invokeMethod(
+                              'TextInput.hide',
+                            );
+                          });
+                        },
+                      ),
+                    ),
+
+                    // Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              side: BorderSide(color: Colors.grey.shade300),
+                            ),
+                            child: Text(
+                              AppLanguage.tr('cancel'),
+                              style: TextStyle(
+                                color: widget.isDarkMode
+                                    ? Colors.white70
+                                    : Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (scannedCardId != null) ...[
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                Navigator.pop(context);
+                                _handleSaveRfid(member, scannedCardId!);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF8938DF),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                elevation: 0,
+                              ),
+                              child: Text(
+                                AppLanguage.tr(
+                                  'Petugas.members.save_rfid_card',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      rfidController.dispose();
+      rfidFocusNode.dispose();
+    });
+  }
+
+  Future<void> _handleSaveRfid(
+    Map<String, dynamic> member,
+    String cardNumber,
+  ) async {
+    _showProcessingOverlay(context, 'Menyimpan data kartu...');
+    try {
+      await _attendanceService.registerRfidCard(
+        organizationMemberId: member['id'],
+        cardNumber: cardNumber,
+      );
+      if (mounted) {
+        Navigator.pop(context); // Pop overlay
+        _showSuccessSnackBar(
+          AppLanguage.tr('Petugas.members.rfid_card_registered_success'),
+        );
+        _loadOrganizationMembersOptimized();
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Pop overlay
+        _showErrorDialog(
+          e.toString().contains('Exception:')
+              ? e.toString().split('Exception:')[1].trim()
+              : e.toString(),
+        );
+      }
+    }
   }
 
   void _showRegistrationOptions(Map<String, dynamic> member) {

@@ -1651,10 +1651,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   // Helper Formats
   String _formatTimeShort(DateTime time) {
-    int hour = time.hour > 12
-        ? time.hour - 12
-        : (time.hour == 0 ? 12 : time.hour);
-    return '${hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 
   String _formatAmPm(DateTime time) {

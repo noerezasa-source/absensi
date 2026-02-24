@@ -34,5 +34,14 @@
     "register_face_id": "Register Face ID",
     "back_to_profile": "Back to Profile",
     "face_registration": "Face Registration",
-    "choose_registration_method": "Choose registration method."
+    "choose_registration_method": "Choose registration method.",
+    "register_rfid_card": "Register RFID Card",
+    "rfid_registration": "RFID Card Registration",
+    "scan_rfid_card": "Scan RFID Card",
+    "tap_card_to_scan": "Tap card to the reader to scan.",
+    "card_id_detected": "Card ID Detected:",
+    "waiting_for_card": "Waiting for card...",
+    "save_rfid_card": "Save Card",
+    "card_already_registered_other": "This card is already registered to another member.",
+    "rfid_card_registered_success": "RFID Card successfully registered!"
 }

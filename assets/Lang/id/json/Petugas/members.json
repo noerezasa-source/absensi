@@ -34,5 +34,14 @@
     "register_face_id": "Daftar Wajah ID",
     "back_to_profile": "Kembali ke Profil",
     "face_registration": "Registrasi Wajah",
-    "choose_registration_method": "Pilih metode registrasi wajah."
+    "choose_registration_method": "Pilih metode registrasi wajah.",
+    "register_rfid_card": "Daftar Kartu RFID",
+    "rfid_registration": "Registrasi Kartu RFID",
+    "scan_rfid_card": "Scan Kartu RFID",
+    "tap_card_to_scan": "Tempelkan kartu ke reader untuk memindai.",
+    "card_id_detected": "ID Kartu Terdeteksi:",
+    "waiting_for_card": "Menunggu kartu...",
+    "save_rfid_card": "Simpan Kartu",
+    "card_already_registered_other": "Kartu ini sudah terdaftar untuk anggota lain.",
+    "rfid_card_registered_success": "Kartu RFID berhasil didaftarkan!"
 }
