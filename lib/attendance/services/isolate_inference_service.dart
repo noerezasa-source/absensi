@@ -82,16 +82,16 @@ class IsolateInferenceService {
       final rootIsolateToken = RootIsolateToken.instance;
 
       // Load optimized W600K MBF model bytes in main isolate
-      final modelData = await rootBundle.load(
-        'assets/models/w600k_mbf_optimized.tflite',
-      );
+      final modelData = await rootBundle.load('assets/models/facenet.tflite');
       final modelBytes = modelData.buffer.asUint8List();
 
+      /*
       // Load 1K3D68 High-Precision Landmark model (Buffalo_S)
       final landmarkData = await rootBundle.load(
         'assets/models/1k3d68_optimized.tflite',
       );
       final landmarkBytes = landmarkData.buffer.asUint8List();
+      */
 
       _isolate = await Isolate.spawn(
         _isolateEntryPoint,
@@ -99,7 +99,7 @@ class IsolateInferenceService {
           receivePort.sendPort,
           rootIsolateToken!,
           modelBytes,
-          landmarkBytes,
+          Uint8List(0), // No landmark model
         ),
       );
 
@@ -215,12 +215,13 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
 
   // Load Recognition Model
   Interpreter? recognitionInterpreter;
-  int recognitionInputSize = 112;
+  int recognitionInputSize = 160;
   int embeddingSize = 512;
 
-  // Load Landmark Model (Buffalo_S 1K3D68)
-  Interpreter? landmarkInterpreter;
-  int landmarkInputSize = 192; // Buffalo_S landmark standard
+  // Load Landmark Model (Removed)
+  // Interpreter? landmarkInterpreter;
+  // int landmarkInputSize = 192;
+  int landmarkInputSize = 0;
 
   try {
     // 1. Define Options with Threads
@@ -232,7 +233,7 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
       // This is the SAFER way to use acceleration on Android.
       // The OS handles whether to use GPU, NPU, or CPU based on device capability.
       recognitionOptions.useNnApiForAndroid = true;
-      landmarkOptions.useNnApiForAndroid = true;
+      // landmarkOptions.useNnApiForAndroid = true;
       debugPrint('ISOLATE: Using NNAPI Acceleration (Safest for Android)');
 
       /* 
@@ -263,10 +264,12 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
         initData.recognitionModelBytes,
         options: recognitionOptions,
       );
+      /*
       landmarkInterpreter = Interpreter.fromBuffer(
         initData.landmarkModelBytes,
         options: landmarkOptions,
       );
+      */
     } catch (e) {
       debugPrint(
         'ISOLATE: Accelerated initialization failed, falling back to CPU: $e',
@@ -279,13 +282,15 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
         initData.recognitionModelBytes,
         options: recognitionOptions,
       );
+      /*
       landmarkInterpreter = Interpreter.fromBuffer(
         initData.landmarkModelBytes,
         options: landmarkOptions,
       );
+      */
     }
 
-    if (recognitionInterpreter == null || landmarkInterpreter == null) {
+    if (recognitionInterpreter == null) {
       throw Exception('Failed to initialize interpreters even with fallback');
     }
 
@@ -299,11 +304,13 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
       embeddingSize = recOutTensor.shape[1];
     }
 
-    // Configure Landmark Model
+    // Landmark model removed for speed parity with wajah project
+    /*
     final lanInTensor = landmarkInterpreter.getInputTensor(0);
     if (lanInTensor.shape.length >= 3) {
       landmarkInputSize = lanInTensor.shape[1];
     }
+    */
   } catch (e) {
     debugPrint('ISOLATE CRITICAL ERROR: Failed to load models: $e');
     // Send a message back to main isolate if possible or just let requests fail
@@ -345,7 +352,7 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           throw Exception('Gagal memproses gambar wajah (null)');
         }
 
-        if (recognitionInterpreter == null || landmarkInterpreter == null) {
+        if (recognitionInterpreter == null) {
           throw Exception(
             'Model AI belum siap. Harap tunggu sebentar atau muat ulang halaman.',
           );
@@ -371,7 +378,8 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           embeddingSize,
         );
 
-        // 2. Run Landmark Model (1K3D68)
+        /*
+        // 2. Run Landmark Model (1K3D68) - REMOVED
         final img.Image lanImage = (faceImage.width == landmarkInputSize)
             ? faceImage
             : img.copyResize(
@@ -385,6 +393,8 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           lanImage,
           landmarkInputSize,
         );
+        */
+        final landmarks3d = null;
 
         initData.sendPort.send(
           InferenceResponse(
@@ -656,103 +666,38 @@ List<double> _runInference(
   return _normalizeEmbedding(embedding);
 }
 
-/// ✅ NEW: High-Precision 3D Landmark Inference (Buffalo_S 1K3D68)
-List<List<double>> _runLandmarkInference(
-  Interpreter interpreter,
-  img.Image image,
-  int inputSize,
-) {
-  // Landmarks model usually expects 0..255 or -1..1. Buffalo_S 1k3d68 usually expects 0..255.
-  final input = _preprocessImageUint8(image, inputSize);
-
-  final outTensor = interpreter.getOutputTensor(0);
-  final outShape = outTensor.shape;
-  final dynamic output;
-
-  if (outShape.length == 3) {
-    // [1, N, M] - e.g. [1, 68, 3]
-    if (outTensor.type == TensorType.uint8 ||
-        outTensor.type == TensorType.int8) {
-      output = List.generate(
-        outShape[0],
-        (_) =>
-            List.generate(outShape[1], (_) => List<int>.filled(outShape[2], 0)),
-      );
-    } else {
-      output = List.generate(
-        outShape[0],
-        (_) => List.generate(
-          outShape[1],
-          (_) => List<double>.filled(outShape[2], 0.0),
-        ),
-      );
-    }
-
-    interpreter.run(input, output);
-
-    // Process and dequantize
-    final result = <List<double>>[];
-    final List<dynamic> batch = output[0];
-    for (var point in batch) {
-      final List<dynamic> p = point as List;
-      // We can't use _dequantize here easily for individual points because it expects the whole tensor
-      // but we can manually apply the params if it's quantized.
-      if (outTensor.type != TensorType.float32) {
-        final s = outTensor.params.scale;
-        final z = outTensor.params.zeroPoint;
-        result.add(p.map((v) => ((v as num).toInt() - z) * s).toList());
-      } else {
-        result.add(p.map((v) => (v as num).toDouble()).toList());
-      }
-    }
-    return result;
-  } else {
-    // Flat output like [1, 3309] or [1, 204]
-    final flatSize = outShape.reduce((a, b) => a * b);
-    if (outTensor.type == TensorType.uint8 ||
-        outTensor.type == TensorType.int8) {
-      output = List.generate(1, (_) => List<int>.filled(flatSize, 0));
-    } else {
-      output = List.generate(1, (_) => List<double>.filled(flatSize, 0.0));
-    }
-
-    interpreter.run(input, output);
-
-    final flatList = _dequantize(outTensor, output);
-
-    // Reshape to points with x,y,z (Assume triplets)
-    final points = <List<double>>[];
-    final numPoints = flatList.length ~/ 3;
-
-    for (int i = 0; i < numPoints; i++) {
-      points.add([flatList[i * 3], flatList[i * 3 + 1], flatList[i * 3 + 2]]);
-    }
-    return points;
-  }
-}
+/* Landmark Inference Code Removed for speed parity with wajah project */
 
 // Standard Float32 Preprocessing (-1 to 1)
-List<List<List<List<double>>>> _preprocessImageFloat(
-  img.Image image,
-  int inputSize,
-) {
-  final input = <List<List<List<double>>>>[];
-  final batch = <List<List<double>>>[];
+List<dynamic> _preprocessImageFloat(img.Image image, int inputSize) {
+  // ✅ SYNC: Replicating Wajah project's specific (jumbled) preprocessing logic
+  // This logic iterates by channels then pixels, which is non-standard but required for parity.
+  final channels = 3;
+  final height = inputSize;
+  final width = inputSize;
 
-  for (int y = 0; y < inputSize; y++) {
-    final row = <List<double>>[];
-    for (int x = 0; x < inputSize; x++) {
-      final pixel = image.getPixel(x, y);
-      row.add([
-        (pixel.r / 127.5) - 1.0,
-        (pixel.g / 127.5) - 1.0,
-        (pixel.b / 127.5) - 1.0,
-      ]);
-    }
-    batch.add(row);
+  // 1. Flatten into [R0, G0, B0, R1, G1, B1, ...]
+  final float32Array = Float32List(width * height * 3);
+  int i = 0;
+  for (final pixel in image) {
+    float32Array[i++] = pixel.r.toDouble();
+    float32Array[i++] = pixel.g.toDouble();
+    float32Array[i++] = pixel.b.toDouble();
   }
-  input.add(batch);
-  return input;
+
+  // 2. Reshape into [1, 160, 160, 3] but using (C, H, W) iteration order for data filling
+  final reshapedArray = Float32List(1 * height * width * channels);
+  for (int c = 0; c < channels; c++) {
+    for (int h = 0; h < height; h++) {
+      for (int w = 0; w < width; w++) {
+        int index = c * height * width + h * width + w;
+        // Using the exact same indexing as Wajah project
+        reshapedArray[index] = (float32Array[index] - 127.5) / 127.5;
+      }
+    }
+  }
+
+  return reshapedArray.reshape([1, width, height, channels]);
 }
 
 // Uint8 Preprocessing (0 to 255)

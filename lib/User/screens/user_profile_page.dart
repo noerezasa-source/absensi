@@ -658,10 +658,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.redAccent,
                           backgroundColor: widget.isDarkMode
-                              ? Colors.red.withValues(alpha: 0.1)
-                              : Colors.red.shade50.withValues(alpha: 0.3),
+                              ? Colors.red.withOpacity(0.1)
+                              : Colors.red.shade50.withOpacity(0.3),
                           side: BorderSide(
-                            color: Colors.redAccent.withValues(alpha: 0.5),
+                            color: Colors.redAccent.withOpacity(0.5),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
@@ -689,7 +689,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   Widget _buildInfoRow(String label, String? value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -812,68 +812,109 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
               ],
             ),
-            child: Row(
+            child: Column(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: (_hasRegisteredFace ? Colors.green : Colors.orange)
-                        .withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    _hasRegisteredFace
-                        ? Icons.verified_user
-                        : Icons.warning_amber_rounded,
-                    color: _hasRegisteredFace ? Colors.green : Colors.orange,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF8938DF).withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
                         _hasRegisteredFace
-                            ? AppLanguage.tr('User.profile.biometric_verified')
-                            : AppLanguage.tr('User.profile.action_required'),
+                            ? Icons.face_retouching_natural_rounded
+                            : Icons.face_unlock_rounded,
+                        color: const Color(0xFF8938DF),
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            AppLanguage.tr('face_recognition'),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: widget.isDarkMode
+                                  ? Colors.white
+                                  : const Color(0xFF1F2937),
+                            ),
+                          ),
+                          Text(
+                            _hasRegisteredFace
+                                ? AppLanguage.tr('User.profile.biometric_ok')
+                                : AppLanguage.tr(
+                                    'User.profile.register_face_prompt',
+                                  ),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: _hasRegisteredFace
+                                  ? (widget.isDarkMode
+                                        ? Colors.greenAccent.shade200
+                                        : Colors.greenAccent.shade700)
+                                  : (widget.isDarkMode
+                                        ? Colors.white70
+                                        : Colors.grey.shade500),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _hasRegisteredFace
+                            ? Colors.green.withOpacity(0.1)
+                            : Colors.orange.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        _hasRegisteredFace
+                            ? AppLanguage.tr('active')
+                            : AppLanguage.tr('missing'),
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: widget.isDarkMode
-                              ? Colors.white
-                              : const Color(0xFF1F2937),
+                          color: _hasRegisteredFace
+                              ? Colors.green
+                              : Colors.orange,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _hasRegisteredFace
-                            ? AppLanguage.tr('User.profile.biometric_ok')
-                            : AppLanguage.tr(
-                                'User.profile.register_face_prompt',
-                              ),
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: widget.isDarkMode
-                              ? Colors.white54
-                              : Colors.grey.shade500,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                if (!_hasRegisteredFace)
-                  TextButton(
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
                     onPressed: _navigateToFaceRegistration,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF8938DF)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
                     child: Text(
-                      AppLanguage.tr('User.profile.register'),
-                      style: TextStyle(
+                      _hasRegisteredFace
+                          ? AppLanguage.tr('re_register_face')
+                          : AppLanguage.tr('User.profile.register'),
+                      style: const TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF4A1E79),
+                        color: Color(0xFF8938DF),
                       ),
                     ),
                   ),
+                ),
               ],
             ),
           );
@@ -887,9 +928,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(
-              alpha: widget.isDarkMode ? 0.2 : 0.04,
-            ),
+            color: Colors.black.withOpacity(widget.isDarkMode ? 0.2 : 0.04),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -913,39 +952,74 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
               ),
               const SizedBox(width: 16),
-              Text(
-                AppLanguage.tr('User.profile.language_settings'),
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: widget.isDarkMode
-                      ? Colors.white54
-                      : Colors.grey.shade700,
-                  letterSpacing: 1.2,
+              Expanded(
+                child: Text(
+                  AppLanguage.tr('User.profile.language_settings'),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: widget.isDarkMode
+                        ? Colors.white54
+                        : Colors.grey.shade700,
+                    letterSpacing: 1.2,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           ValueListenableBuilder<String>(
             valueListenable: LanguageHelper.languageNotifier,
             builder: (context, currentLang, _) {
-              return Column(
-                children: [
-                  _buildLanguageOption(
-                    code: LanguageHelper.indonesian,
-                    title: 'Bahasa Indonesia',
-                    subtitle: 'Indonesian',
-                    isSelected: currentLang == LanguageHelper.indonesian,
+              String langName = currentLang == LanguageHelper.indonesian
+                  ? 'Bahasa Indonesia'
+                  : 'English';
+              String flag = currentLang == LanguageHelper.indonesian
+                  ? '🇮🇩'
+                  : '🇺🇸';
+
+              return InkWell(
+                onTap: _showLanguageBottomSheet,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
                   ),
-                  const SizedBox(height: 12),
-                  _buildLanguageOption(
-                    code: LanguageHelper.english,
-                    title: 'English',
-                    subtitle: 'International',
-                    isSelected: currentLang == LanguageHelper.english,
+                  decoration: BoxDecoration(
+                    color: widget.isDarkMode
+                        ? Colors.white.withOpacity(0.05)
+                        : Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: widget.isDarkMode
+                          ? Colors.white12
+                          : Colors.grey.shade200,
+                    ),
                   ),
-                ],
+                  child: Row(
+                    children: [
+                      Text(flag, style: const TextStyle(fontSize: 20)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          langName,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: widget.isDarkMode
+                                ? Colors.white
+                                : Colors.black87,
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        color: Colors.grey,
+                      ),
+                    ],
+                  ),
+                ),
               );
             },
           ),
@@ -954,87 +1028,154 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
-  Widget _buildLanguageOption({
+  void _showLanguageBottomSheet() async {
+    final currentLang = LanguageHelper.languageNotifier.value;
+
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _buildModernSelectMenu(
+        title: AppLanguage.tr('User.profile.language_settings'),
+        options: [
+          _buildLanguageSelectOption(
+            code: LanguageHelper.indonesian,
+            title: 'Bahasa Indonesia',
+            subtitle: 'Indonesian',
+            isSelected: currentLang == LanguageHelper.indonesian,
+          ),
+          _buildLanguageSelectOption(
+            code: LanguageHelper.english,
+            title: 'English',
+            subtitle: 'International',
+            isSelected: currentLang == LanguageHelper.english,
+          ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      await AppLanguage.setLanguage(result);
+    }
+  }
+
+  Widget _buildLanguageSelectOption({
     required String code,
     required String title,
     required String subtitle,
     required bool isSelected,
   }) {
-    return InkWell(
-      onTap: () async {
-        await AppLanguage.setLanguage(code);
-      },
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: widget.isDarkMode
-              ? (isSelected
-                    ? const Color(0xFF8938DF).withOpacity(0.2)
-                    : Colors.white.withOpacity(0.08))
-              : (isSelected
-                    ? const Color(0xFF8938DF).withOpacity(0.08)
-                    : Colors.grey.shade50),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? const Color(0xFF8938DF) : Colors.transparent,
-            width: 1.5,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => Navigator.pop(context, code),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? const Color(0xFF8938DF).withOpacity(0.1)
+                : (widget.isDarkMode
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.grey.shade50),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected ? const Color(0xFF8938DF) : Colors.transparent,
+              width: 1.5,
+            ),
           ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: widget.isDarkMode
-                    ? Colors.white.withOpacity(0.1)
-                    : Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: widget.isDarkMode
+                      ? Colors.white.withOpacity(0.1)
+                      : Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Center(
                   child: Text(
                     code == 'id' ? '🇮🇩' : '🇺🇸',
-                    style: const TextStyle(fontSize: 20),
+                    style: const TextStyle(fontSize: 24),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: widget.isDarkMode ? Colors.white : Colors.black87,
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: widget.isDarkMode
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
                     ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: widget.isDarkMode
-                          ? Colors.white70
-                          : Colors.grey.shade600,
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: widget.isDarkMode
+                            ? Colors.white60
+                            : Colors.grey.shade600,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            if (isSelected)
-              const Icon(
-                Icons.check_circle_rounded,
-                color: Color(0xFF8938DF),
-                size: 20,
-              ),
-          ],
+              if (isSelected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF8938DF),
+                  size: 24,
+                ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildModernSelectMenu({
+    required String title,
+    required List<Widget> options,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+      ),
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: widget.isDarkMode ? Colors.white : Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 24),
+          ...options,
+        ],
       ),
     );
   }

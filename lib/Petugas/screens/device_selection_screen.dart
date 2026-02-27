@@ -89,22 +89,30 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       final supabase = Supabase.instance.client;
       final response = await supabase
           .from('shifts')
-          .select('id, code, name, start_time, end_time, description')
+          .select()
           .eq('organization_id', widget.organizationId)
           .eq('is_active', true)
           .order('name', ascending: true);
 
       if (mounted) {
-        setState(() {
-          _shifts = List<Map<String, dynamic>>.from(response);
-          _isLoadingShifts = false;
+        final shiftList = List<Map<String, dynamic>>.from(response);
 
-          // NEW: Auto-pick shift based on current time
-          if (_shifts.isNotEmpty) {
-            _selectedShift = _findShiftForCurrentTime();
-            // Fallback to first shift if none match current time
-            _selectedShift ??= _shifts.first;
-          }
+        // ✅ Priority 1: Match user's assigned shift from member_schedules
+        Map<String, dynamic>? autoSelected = await _findUserAssignedShift(
+          supabase,
+          shiftList,
+        );
+
+        // ✅ Priority 2: Fallback to time-range match
+        autoSelected ??= _findShiftForCurrentTime(shiftList);
+
+        // ✅ Priority 3: Fallback to first shift
+        autoSelected ??= shiftList.isNotEmpty ? shiftList.first : null;
+
+        setState(() {
+          _shifts = shiftList;
+          _selectedShift = autoSelected;
+          _isLoadingShifts = false;
         });
       }
     } catch (e) {
@@ -115,12 +123,74 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     }
   }
 
-  Map<String, dynamic>? _findShiftForCurrentTime() {
+  /// Finds the shift that is personally assigned to the logged-in member today
+  Future<Map<String, dynamic>?> _findUserAssignedShift(
+    dynamic supabase,
+    List<Map<String, dynamic>> shiftList,
+  ) async {
+    if (widget.memberId == null || shiftList.isEmpty) return null;
+    try {
+      final today = DateTime.now();
+      final todayStr = today.toIso8601String().split('T')[0];
+      final memberSched = await supabase
+          .from('member_schedules')
+          .select('shift_id, work_schedule_id')
+          .eq('organization_member_id', widget.memberId!)
+          .eq('is_active', true)
+          .lte('effective_date', todayStr)
+          .or('end_date.is.null,end_date.gte.$todayStr')
+          .order('effective_date', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (memberSched == null) return null;
+
+      final assignedShiftId = memberSched['shift_id'] as int?;
+      if (assignedShiftId != null) {
+        for (final s in shiftList) {
+          if (s['id'] == assignedShiftId) return s;
+        }
+      }
+
+      final workScheduleId = memberSched['work_schedule_id'] as int?;
+      if (workScheduleId != null) {
+        final dayOfWeek = today.weekday % 7;
+        final detail = await supabase
+            .from('work_schedule_details')
+            .select('start_time, end_time')
+            .eq('work_schedule_id', workScheduleId)
+            .eq('day_of_week', dayOfWeek)
+            .maybeSingle();
+
+        if (detail != null) {
+          final sTime = detail['start_time'] as String?;
+          final eTime = detail['end_time'] as String?;
+          if (sTime != null && eTime != null) {
+            for (final s in shiftList) {
+              String norm(String t) => t.split(':').take(2).join(':');
+              if (norm(s['start_time'] ?? '') == norm(sTime) &&
+                  norm(s['end_time'] ?? '') == norm(eTime)) {
+                return s;
+              }
+            }
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error finding user assigned shift: $e');
+      return null;
+    }
+  }
+
+  Map<String, dynamic>? _findShiftForCurrentTime(
+    List<Map<String, dynamic>> shiftList,
+  ) {
     try {
       final now = DateTime.now();
       final currentMinutes = now.hour * 60 + now.minute;
 
-      for (var shift in _shifts) {
+      for (var shift in shiftList) {
         final startStr = shift['start_time'] as String?;
         final endStr = shift['end_time'] as String?;
         if (startStr == null || endStr == null) continue;
@@ -134,12 +204,10 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
         final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
 
         if (endMinutes > startMinutes) {
-          // Normal shift
           if (currentMinutes >= startMinutes && currentMinutes <= endMinutes) {
             return shift;
           }
         } else {
-          // Overnight shift (e.g., 22:00 - 06:00)
           if (currentMinutes >= startMinutes || currentMinutes <= endMinutes) {
             return shift;
           }

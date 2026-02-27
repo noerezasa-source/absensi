@@ -25,5 +25,7 @@
     "checking": "Checking...",
     "unknown": "Unknown",
     "error": "Error",
-    "done": "Done"
+    "done": "Done",
+    "break_in": "Break In",
+    "break_out": "Break Out"
 }

@@ -43,6 +43,8 @@ class AttendanceService {
             isWorkingDay: true,
             startTime: assignment.shift!.startTime,
             endTime: assignment.shift!.endTime,
+            breakStart: assignment.shift!.breakStart,
+            breakEnd: assignment.shift!.breakEnd,
             source: 'shift_assignment',
             scheduleName: assignment.shift!.name,
             shiftId: assignment.shift!.id,
@@ -76,6 +78,8 @@ class AttendanceService {
             isWorkingDay: true,
             startTime: shift.startTime,
             endTime: shift.endTime,
+            breakStart: shift.breakStart,
+            breakEnd: shift.breakEnd,
             source: 'member_shift',
             scheduleName: shift.name,
             shiftId: shift.id,
@@ -165,6 +169,8 @@ class AttendanceService {
         isWorkingDay: true,
         startTime: detail.startTime,
         endTime: detail.endTime,
+        breakStart: detail.breakStart,
+        breakEnd: detail.breakEnd,
         source: sourceName,
         scheduleName: detailRes['work_schedules']['name'],
         workScheduleId: scheduleId,
@@ -542,6 +548,150 @@ class AttendanceService {
     }
   }
 
+  // Break Out (Start Break)
+  Future<AttendanceRecord> breakOut({
+    required int organizationMemberId,
+    required String photoUrl,
+    required String method,
+    String? organizationTimezone,
+    Map<String, dynamic>? location,
+    int? deviceId,
+    String? ipAddress,
+    String? userAgent,
+    int? applicationId,
+    Map<String, dynamic>? rawData,
+  }) async {
+    try {
+      final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone);
+      final nowUtc = TimezoneHelper.getCurrentUtcTime();
+      final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
+
+      // Find record for today
+      final existingRecord = await _supabase
+          .from('attendance_records')
+          .select()
+          .eq('organization_member_id', organizationMemberId)
+          .eq('attendance_date', todayStr)
+          .maybeSingle();
+
+      if (existingRecord == null) {
+        throw Exception(
+          'No attendance record found for today. Please check in first.',
+        );
+      }
+
+      // Update record with break start
+      final recordData = {
+        'actual_break_start': TimezoneHelper.formatUtcForSupabase(nowUtc),
+        'break_out_method': method,
+        'break_out_device_id': deviceId,
+        'updated_at': TimezoneHelper.formatUtcForSupabase(nowUtc),
+      };
+
+      await _supabase
+          .from('attendance_records')
+          .update(recordData)
+          .eq('id', existingRecord['id']);
+
+      // Create attendance log
+      await _createAttendanceLog(
+        organizationMemberId: organizationMemberId,
+        attendanceRecordId: existingRecord['id'],
+        eventType: 'break_start',
+        method: method,
+        location: locationWithPhoto,
+        deviceId: deviceId,
+        ipAddress: ipAddress,
+        userAgent: userAgent,
+        applicationId: applicationId,
+        rawData: rawData,
+      );
+
+      final updatedRecord = await _supabase
+          .from('attendance_records')
+          .select()
+          .eq('id', existingRecord['id'])
+          .single();
+
+      return AttendanceRecord.fromJson(updatedRecord);
+    } catch (e) {
+      throw Exception('Failed to record break out: $e');
+    }
+  }
+
+  // Break In (End Break)
+  Future<AttendanceRecord> breakIn({
+    required int organizationMemberId,
+    required String photoUrl,
+    required String method,
+    String? organizationTimezone,
+    Map<String, dynamic>? location,
+    int? deviceId,
+    String? ipAddress,
+    String? userAgent,
+    int? applicationId,
+    Map<String, dynamic>? rawData,
+  }) async {
+    try {
+      final orgTimezone = organizationTimezone ?? 'Asia/Jakarta';
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(orgTimezone);
+      final nowUtc = TimezoneHelper.getCurrentUtcTime();
+      final locationWithPhoto = _decorateLocationWithPhoto(location, photoUrl);
+
+      // Find record for today
+      final existingRecord = await _supabase
+          .from('attendance_records')
+          .select()
+          .eq('organization_member_id', organizationMemberId)
+          .eq('attendance_date', todayStr)
+          .maybeSingle();
+
+      if (existingRecord == null) {
+        throw Exception(
+          'No attendance record found for today. Please check in first.',
+        );
+      }
+
+      // Update record with break end
+      final recordData = {
+        'actual_break_end': TimezoneHelper.formatUtcForSupabase(nowUtc),
+        'break_in_method': method,
+        'break_in_device_id': deviceId,
+        'updated_at': TimezoneHelper.formatUtcForSupabase(nowUtc),
+      };
+
+      await _supabase
+          .from('attendance_records')
+          .update(recordData)
+          .eq('id', existingRecord['id']);
+
+      // Create attendance log
+      await _createAttendanceLog(
+        organizationMemberId: organizationMemberId,
+        attendanceRecordId: existingRecord['id'],
+        eventType: 'break_end',
+        method: method,
+        location: locationWithPhoto,
+        deviceId: deviceId,
+        ipAddress: ipAddress,
+        userAgent: userAgent,
+        applicationId: applicationId,
+        rawData: rawData,
+      );
+
+      final updatedRecord = await _supabase
+          .from('attendance_records')
+          .select()
+          .eq('id', existingRecord['id'])
+          .single();
+
+      return AttendanceRecord.fromJson(updatedRecord);
+    } catch (e) {
+      throw Exception('Failed to record break in: $e');
+    }
+  }
+
   // Get today's attendance
   Future<AttendanceRecord?> getTodayAttendance(
     int organizationMemberId, {
@@ -825,7 +975,6 @@ class AttendanceService {
         );
       }
 
-      // Get current position with high accuracy
       geolocator.Position? position;
       try {
         position = await geolocator.Geolocator.getCurrentPosition(

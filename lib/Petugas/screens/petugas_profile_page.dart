@@ -1016,7 +1016,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
 
   Widget _buildInfoRowDesign(String label, String? value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1415,6 +1415,28 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
   }
 
   Widget _buildAttendanceSettingsCard() {
+    String modeTitle = '';
+    IconData modeIcon = Icons.help_outline;
+
+    switch (_attendanceMode) {
+      case 'face':
+        modeTitle = AppLanguage.tr('face_recognition');
+        modeIcon = Icons.face_retouching_natural_rounded;
+        break;
+      case 'rfid':
+        modeTitle = AppLanguage.tr('rfid_card');
+        modeIcon = Icons.copy_all_rounded;
+        break;
+      case 'selfie':
+        modeTitle = AppLanguage.tr('selfie_attendance');
+        modeIcon = Icons.camera_alt_rounded;
+        break;
+      case 'fingerprint':
+        modeTitle = AppLanguage.tr('fingerprint');
+        modeIcon = Icons.fingerprint_rounded;
+        break;
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Container(
@@ -1448,44 +1470,61 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Text(
-                  AppLanguage.tr('attendance_settings'),
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                Expanded(
+                  child: Text(
+                    AppLanguage.tr('attendance_settings'),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: widget.isDarkMode ? Colors.white : Colors.black87,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
-            _buildModeOption(
-              id: 'face',
-              title: AppLanguage.tr('face_recognition'),
-              subtitle: AppLanguage.tr('scan_face_subtitle'),
-              icon: Icons.face_retouching_natural_rounded,
-            ),
-            const SizedBox(height: 12),
-            _buildModeOption(
-              id: 'rfid',
-              title: AppLanguage.tr('rfid_card'),
-              subtitle: AppLanguage.tr('tap_rfid_subtitle'),
-              icon: Icons.copy_all_rounded,
-            ),
-            const SizedBox(height: 12),
-            _buildModeOption(
-              id: 'selfie',
-              title: AppLanguage.tr('selfie_attendance'),
-              subtitle: AppLanguage.tr('take_selfie_subtitle'),
-              icon: Icons.camera_alt_rounded,
-            ),
-            const SizedBox(height: 12),
-            _buildModeOption(
-              id: 'fingerprint',
-              title: AppLanguage.tr('fingerprint'),
-              subtitle: AppLanguage.tr('scan_fingerprint_subtitle'),
-              icon: Icons.fingerprint_rounded,
-              isSoon: true,
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: _showAttendanceModeBottomSheet,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: widget.isDarkMode
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: widget.isDarkMode
+                        ? Colors.white12
+                        : Colors.grey.shade200,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(modeIcon, color: const Color(0xFF8938DF), size: 22),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        modeTitle,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: widget.isDarkMode
+                              ? Colors.white
+                              : Colors.black87,
+                        ),
+                      ),
+                    ),
+                    const Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: Colors.grey,
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
@@ -1493,125 +1532,195 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
     );
   }
 
-  Widget _buildModeOption({
+  void _showAttendanceModeBottomSheet() async {
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _buildModernSelectMenu(
+        title: AppLanguage.tr('attendance_settings'),
+        options: [
+          _buildSelectOption(
+            id: 'face',
+            title: AppLanguage.tr('face_recognition'),
+            subtitle: AppLanguage.tr('scan_face_subtitle'),
+            icon: Icons.face_retouching_natural_rounded,
+            isSelected: _attendanceMode == 'face',
+          ),
+          _buildSelectOption(
+            id: 'rfid',
+            title: AppLanguage.tr('rfid_card'),
+            subtitle: AppLanguage.tr('tap_rfid_subtitle'),
+            icon: Icons.copy_all_rounded,
+            isSelected: _attendanceMode == 'rfid',
+          ),
+          _buildSelectOption(
+            id: 'selfie',
+            title: AppLanguage.tr('selfie_attendance'),
+            subtitle: AppLanguage.tr('take_selfie_subtitle'),
+            icon: Icons.camera_alt_rounded,
+            isSelected: _attendanceMode == 'selfie',
+          ),
+          _buildSelectOption(
+            id: 'fingerprint',
+            title: AppLanguage.tr('fingerprint'),
+            subtitle: AppLanguage.tr('scan_fingerprint_subtitle'),
+            icon: Icons.fingerprint_rounded,
+            isSelected: _attendanceMode == 'fingerprint',
+            isSoon: true,
+          ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      setState(() => _attendanceMode = result);
+      _saveAttendanceMode(result);
+    }
+  }
+
+  Widget _buildSelectOption({
     required String id,
     required String title,
     required String subtitle,
     required IconData icon,
+    required bool isSelected,
     bool isSoon = false,
   }) {
-    final isSelected = _attendanceMode == id;
-
-    return InkWell(
-      onTap: isSoon
-          ? null
-          : () {
-              setState(() {
-                _attendanceMode = id;
-              });
-              _saveAttendanceMode(id);
-            },
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: widget.isDarkMode
-              ? (isSelected
-                    ? const Color(0xFF8938DF).withOpacity(0.2)
-                    : Colors.white.withOpacity(0.08))
-              : (isSelected
-                    ? const Color(0xFF8938DF).withOpacity(0.08)
-                    : Colors.grey.shade50),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? const Color(0xFF8938DF) : Colors.transparent,
-            width: 1.5,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? (widget.isDarkMode
-                          ? const Color(0xFFB066FF)
-                          : const Color(0xFF8938DF))
-                    : (widget.isDarkMode
-                          ? Colors.white.withOpacity(0.12)
-                          : Colors.grey.shade200),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                icon,
-                color: isSelected
-                    ? Colors.white
-                    : (widget.isDarkMode
-                          ? Colors.white.withOpacity(0.9)
-                          : Colors.grey.shade600),
-                size: 20,
-              ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: isSoon ? null : () => Navigator.pop(context, id),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? const Color(0xFF8938DF).withOpacity(0.1)
+                : (widget.isDarkMode
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.grey.shade50),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected ? const Color(0xFF8938DF) : Colors.transparent,
+              width: 1.5,
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isDarkMode
-                              ? Colors.white
-                              : Colors.black87,
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFF8938DF)
+                      : Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  icon,
+                  color: isSelected ? Colors.white : Colors.grey,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: widget.isDarkMode
+                                ? Colors.white
+                                : Colors.black87,
+                          ),
                         ),
-                      ),
-                      if (isSoon) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'Soon',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.orange,
+                        if (isSoon) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'SOON',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange,
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
-                  ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: widget.isDarkMode
-                          ? Colors.white70
-                          : Colors.grey.shade600,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: widget.isDarkMode
+                            ? Colors.white60
+                            : Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            if (isSelected)
-              const Icon(
-                Icons.check_circle_rounded,
-                color: Color(0xFF8938DF),
-                size: 20,
-              ),
-          ],
+              if (isSelected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF8938DF),
+                  size: 24,
+                ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildModernSelectMenu({
+    required String title,
+    required List<Widget> options,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF1F0B38) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+      ),
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: widget.isDarkMode ? Colors.white : Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 24),
+          ...options,
+        ],
       ),
     );
   }
@@ -1650,36 +1759,71 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Text(
-                  AppLanguage.tr('language_settings'),
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                Expanded(
+                  child: Text(
+                    AppLanguage.tr('language_settings'),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: widget.isDarkMode ? Colors.white : Colors.black87,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             ValueListenableBuilder<String>(
               valueListenable: LanguageHelper.languageNotifier,
               builder: (context, currentLang, _) {
-                return Column(
-                  children: [
-                    _buildLanguageOption(
-                      code: LanguageHelper.indonesian,
-                      title: 'Bahasa Indonesia',
-                      subtitle: 'Indonesian',
-                      isSelected: currentLang == LanguageHelper.indonesian,
+                String langName = currentLang == LanguageHelper.indonesian
+                    ? 'Bahasa Indonesia'
+                    : 'English';
+                String flag = currentLang == LanguageHelper.indonesian
+                    ? '🇮🇩'
+                    : '🇺🇸';
+
+                return InkWell(
+                  onTap: _showLanguageBottomSheet,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
                     ),
-                    const SizedBox(height: 12),
-                    _buildLanguageOption(
-                      code: LanguageHelper.english,
-                      title: 'English',
-                      subtitle: 'International',
-                      isSelected: currentLang == LanguageHelper.english,
+                    decoration: BoxDecoration(
+                      color: widget.isDarkMode
+                          ? Colors.white.withOpacity(0.05)
+                          : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: widget.isDarkMode
+                            ? Colors.white12
+                            : Colors.grey.shade200,
+                      ),
                     ),
-                  ],
+                    child: Row(
+                      children: [
+                        Text(flag, style: const TextStyle(fontSize: 20)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            langName,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: widget.isDarkMode
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                        ),
+                        const Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          color: Colors.grey,
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
             ),
@@ -1689,86 +1833,116 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
     );
   }
 
-  Widget _buildLanguageOption({
+  void _showLanguageBottomSheet() async {
+    final currentLang = LanguageHelper.languageNotifier.value;
+
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _buildModernSelectMenu(
+        title: AppLanguage.tr('language_settings'),
+        options: [
+          _buildLanguageSelectOption(
+            code: LanguageHelper.indonesian,
+            title: 'Bahasa Indonesia',
+            subtitle: 'Indonesian',
+            isSelected: currentLang == LanguageHelper.indonesian,
+          ),
+          _buildLanguageSelectOption(
+            code: LanguageHelper.english,
+            title: 'English',
+            subtitle: 'International',
+            isSelected: currentLang == LanguageHelper.english,
+          ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      await AppLanguage.setLanguage(result);
+    }
+  }
+
+  Widget _buildLanguageSelectOption({
     required String code,
     required String title,
     required String subtitle,
     required bool isSelected,
   }) {
-    return InkWell(
-      onTap: () async {
-        await AppLanguage.setLanguage(code);
-      },
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: widget.isDarkMode
-              ? (isSelected
-                    ? const Color(0xFF8938DF).withOpacity(0.2)
-                    : Colors.white.withOpacity(0.08))
-              : (isSelected
-                    ? const Color(0xFF8938DF).withOpacity(0.08)
-                    : Colors.grey.shade50),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? const Color(0xFF8938DF) : Colors.transparent,
-            width: 1.5,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => Navigator.pop(context, code),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? const Color(0xFF8938DF).withOpacity(0.1)
+                : (widget.isDarkMode
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.grey.shade50),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected ? const Color(0xFF8938DF) : Colors.transparent,
+              width: 1.5,
+            ),
           ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: widget.isDarkMode
-                    ? Colors.white.withOpacity(0.1)
-                    : Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: widget.isDarkMode
+                      ? Colors.white.withOpacity(0.1)
+                      : Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Center(
                   child: Text(
                     code == 'id' ? '🇮🇩' : '🇺🇸',
-                    style: const TextStyle(fontSize: 20),
+                    style: const TextStyle(fontSize: 24),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: widget.isDarkMode ? Colors.white : Colors.black87,
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: widget.isDarkMode
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
                     ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: widget.isDarkMode
-                          ? Colors.white70
-                          : Colors.grey.shade600,
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: widget.isDarkMode
+                            ? Colors.white60
+                            : Colors.grey.shade600,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            if (isSelected)
-              const Icon(
-                Icons.check_circle_rounded,
-                color: Color(0xFF8938DF),
-                size: 20,
-              ),
-          ],
+              if (isSelected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF8938DF),
+                  size: 24,
+                ),
+            ],
+          ),
         ),
       ),
     );

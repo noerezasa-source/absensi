@@ -116,15 +116,29 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     final organizationId = widget.memberData['organization_id'] as int?;
     if (organizationId == null) return;
 
+    // Standard practice: cancel existing subscription before starting a new one
+    _activitySubscription?.cancel();
+
     // Listen to attendance_logs for real-time updates
-    _activitySubscription = _supabase
-        .from('attendance_logs')
-        .stream(primaryKey: ['id'])
-        .order('event_time')
-        .listen((data) {
-          debugPrint('📡 Real-time update detected in attendance_logs');
-          _refreshAll();
-        });
+    try {
+      _activitySubscription = _supabase
+          .from('attendance_logs')
+          .stream(primaryKey: ['id'])
+          .order('event_time')
+          .listen(
+            (data) {
+              debugPrint('📡 Real-time update detected in attendance_logs');
+              _refreshAll();
+            },
+            onError: (error) {
+              debugPrint('❌ Real-time subscription error: $error');
+              // Optionally attempt to restart after a delay or just swallow to prevent crash
+            },
+            cancelOnError: false,
+          );
+    } catch (e) {
+      debugPrint('❌ Failed to initialize real-time stream: $e');
+    }
   }
 
   @override
@@ -209,7 +223,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         });
       }
     } catch (e) {
-      debugPrint('Error loading organization info: $e');
+      debugPrint('Error loading organization info for ID $organizationId: $e');
     }
   }
 
@@ -869,7 +883,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      organization['name'] ??
+                                      organization?['name'] ??
                                           AppLanguage.tr('unknown_org'),
                                       style: TextStyle(
                                         fontSize: 16,
@@ -1215,7 +1229,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                     ),
                     // PROFILE SECTION (Photo, Name, Role, Date) - Combined
                     Transform.translate(
-                      offset: const Offset(0, -70),
+                      offset: const Offset(0, -60),
                       child: Column(
                         children: [
                           // Profile Photo
@@ -1260,14 +1274,14 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                               (context, error, stackTrace) {
                                                 return const Icon(
                                                   Icons.person,
-                                                  size: 40,
+                                                  size: 60,
                                                   color: Colors.white,
                                                 );
                                               },
                                         )
                                       : const Icon(
                                           Icons.person,
-                                          size: 40,
+                                          size: 60,
                                           color: Colors.white,
                                         ),
                                 ),

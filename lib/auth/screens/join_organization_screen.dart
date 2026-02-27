@@ -147,6 +147,8 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
         }
       }
 
+      debugPrint('🔍 Validating Inv Code: "$invCode"');
+
       // Validate code
       final orgResponse = await Supabase.instance.client
           .from('organizations')
@@ -154,6 +156,8 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
           .eq('inv_code', invCode)
           .eq('is_active', true)
           .maybeSingle();
+
+      debugPrint('✅ Validating Inv Code Result: $orgResponse');
 
       if (orgResponse == null) throw Exception('Kode undangan tidak valid');
 

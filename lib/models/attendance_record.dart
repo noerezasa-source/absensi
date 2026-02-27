@@ -33,6 +33,14 @@ class AttendanceRecord {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  // New break fields
+  final DateTime? actualBreakStart;
+  final DateTime? actualBreakEnd;
+  final int? breakInDeviceId;
+  final int? breakOutDeviceId;
+  final String? breakInMethod;
+  final String? breakOutMethod;
+
   AttendanceRecord({
     required this.id,
     required this.organizationMemberId,
@@ -64,6 +72,12 @@ class AttendanceRecord {
     this.rawData,
     required this.createdAt,
     required this.updatedAt,
+    this.actualBreakStart,
+    this.actualBreakEnd,
+    this.breakInDeviceId,
+    this.breakOutDeviceId,
+    this.breakInMethod,
+    this.breakOutMethod,
   });
 
   factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
@@ -104,6 +118,16 @@ class AttendanceRecord {
       rawData: json['raw_data'] as Map<String, dynamic>?,
       createdAt: DateTime.parse(json['created_at']),
       updatedAt: DateTime.parse(json['updated_at']),
+      actualBreakStart: json['actual_break_start'] != null
+          ? DateTime.parse(json['actual_break_start'])
+          : null,
+      actualBreakEnd: json['actual_break_end'] != null
+          ? DateTime.parse(json['actual_break_end'])
+          : null,
+      breakInDeviceId: json['break_in_device_id'] as int?,
+      breakOutDeviceId: json['break_out_device_id'] as int?,
+      breakInMethod: json['break_in_method'] as String?,
+      breakOutMethod: json['break_out_method'] as String?,
     );
   }
 
@@ -115,8 +139,12 @@ class AttendanceRecord {
       'scheduled_shift_id': scheduledShiftId,
       'scheduled_start': scheduledStart,
       'scheduled_end': scheduledEnd,
-      'actual_check_in': actualCheckIn != null ? TimezoneHelper.formatUtcForSupabase(actualCheckIn!) : null,
-      'actual_check_out': actualCheckOut != null ? TimezoneHelper.formatUtcForSupabase(actualCheckOut!) : null,
+      'actual_check_in': actualCheckIn != null
+          ? TimezoneHelper.formatUtcForSupabase(actualCheckIn!)
+          : null,
+      'actual_check_out': actualCheckOut != null
+          ? TimezoneHelper.formatUtcForSupabase(actualCheckOut!)
+          : null,
       'check_in_device_id': checkInDeviceId,
       'check_out_device_id': checkOutDeviceId,
       'check_in_method': checkInMethod,
@@ -133,12 +161,24 @@ class AttendanceRecord {
       'status': status,
       'validation_status': validationStatus,
       'validated_by': validatedBy,
-      'validated_at': validatedAt != null ? TimezoneHelper.formatUtcForSupabase(validatedAt!) : null,
+      'validated_at': validatedAt != null
+          ? TimezoneHelper.formatUtcForSupabase(validatedAt!)
+          : null,
       'validation_note': validationNote,
       'application_id': applicationId,
       'raw_data': rawData,
       'created_at': TimezoneHelper.formatUtcForSupabase(createdAt),
       'updated_at': TimezoneHelper.formatUtcForSupabase(updatedAt),
+      'actual_break_start': actualBreakStart != null
+          ? TimezoneHelper.formatUtcForSupabase(actualBreakStart!)
+          : null,
+      'actual_break_end': actualBreakEnd != null
+          ? TimezoneHelper.formatUtcForSupabase(actualBreakEnd!)
+          : null,
+      'break_in_device_id': breakInDeviceId,
+      'break_out_device_id': breakOutDeviceId,
+      'break_in_method': breakInMethod,
+      'break_out_method': breakOutMethod,
     };
   }
 
@@ -146,7 +186,7 @@ class AttendanceRecord {
   bool get hasCheckedIn => actualCheckIn != null;
   bool get hasCheckedOut => actualCheckOut != null;
   bool get isComplete => hasCheckedIn && hasCheckedOut;
-  
+
   String get statusDisplay {
     if (status == null) return 'Unknown';
     return status!.replaceAll('_', ' ').toUpperCase();
@@ -183,6 +223,12 @@ class AttendanceRecord {
     Map<String, dynamic>? rawData,
     DateTime? createdAt,
     DateTime? updatedAt,
+    DateTime? actualBreakStart,
+    DateTime? actualBreakEnd,
+    int? breakInDeviceId,
+    int? breakOutDeviceId,
+    String? breakInMethod,
+    String? breakOutMethod,
   }) {
     return AttendanceRecord(
       id: id ?? this.id,
@@ -215,6 +261,12 @@ class AttendanceRecord {
       rawData: rawData ?? this.rawData,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      actualBreakStart: actualBreakStart ?? this.actualBreakStart,
+      actualBreakEnd: actualBreakEnd ?? this.actualBreakEnd,
+      breakInDeviceId: breakInDeviceId ?? this.breakInDeviceId,
+      breakOutDeviceId: breakOutDeviceId ?? this.breakOutDeviceId,
+      breakInMethod: breakInMethod ?? this.breakInMethod,
+      breakOutMethod: breakOutMethod ?? this.breakOutMethod,
     );
   }
 }

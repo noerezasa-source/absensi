@@ -180,6 +180,8 @@ class RoleService {
           .eq('user_id', userId)
           .eq('is_active', true);
 
+      debugPrint('RAW MEMBERSHIPS RESPONSE: $response');
+
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
       debugPrint('!!! ERROR fetching all organization memberships: $e');

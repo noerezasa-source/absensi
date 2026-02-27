@@ -14,6 +14,8 @@ import 'package:app_settings/app_settings.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_intent_plus/flag.dart';
 import 'dart:io';
+import '../../models/work_schedule_models.dart';
+import '../services/attendance_service.dart';
 import 'manual_check_page.dart';
 
 class RfidAttendancePage extends StatefulWidget {
@@ -35,6 +37,7 @@ class RfidAttendancePage extends StatefulWidget {
 class _RfidAttendancePageState extends State<RfidAttendancePage> {
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
   final AttendanceSyncService _syncService = AttendanceSyncService();
+  final AttendanceService _attendanceService = AttendanceService();
   final SupabaseClient _supabase = Supabase.instance.client;
 
   final TextEditingController _cardController = TextEditingController();
@@ -56,6 +59,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   String? _workTimeMode;
   Map<String, dynamic>? _memberSchedule;
+  DailySchedule? _dailySchedule; // ✅ NEW: for break time validation
   Timer? _scheduleCheckTimer;
 
   bool _isOnline = true;
@@ -257,56 +261,65 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   void _updateModeBasedOnSchedule() {
     if (_availableModes.isEmpty) return;
 
-    // 1. If we have a personal schedule, try to determine work/break time mode
-    if (_memberSchedule != null) {
-      final newWorkTimeMode = _getWorkTimeMode();
-      if (newWorkTimeMode != _workTimeMode) {
-        setState(() {
-          _workTimeMode = newWorkTimeMode;
-          // Auto-select shift based on work/break time mode if possible
-          _autoSelectModeFromWorkTimeMode();
-        });
-      }
-    }
-
-    // 2. If no shift is selected yet, or if we want to ensure time-based selection,
-    // call _autoSelectModeFromWorkTimeMode regardless of schedule existence.
-    if (_selectedMode == null && _availableModes.isNotEmpty) {
-      _autoSelectModeFromWorkTimeMode();
-    }
-  }
-
-  void _autoSelectModeFromWorkTimeMode() {
-    if (_availableModes.isEmpty) return;
-
     final now = DateTime.now();
     final currentMinutes = now.hour * 60 + now.minute;
 
     Map<String, dynamic>? matchingMode;
 
-    // 1. Try to find a shift that matches the current time range
-    for (var mode in _availableModes) {
-      final startTimeStr = mode['start_time'] as String?;
-      final endTimeStr = mode['end_time'] as String?;
+    // 0. Priority: Match by assigned shift_id from member schedule
+    final memberScheduleShiftId = _memberSchedule?['shift_id'] as int?;
+    if (memberScheduleShiftId != null) {
+      for (var mode in _availableModes) {
+        if (mode['id'] == memberScheduleShiftId) {
+          matchingMode = mode;
+          break;
+        }
+      }
+    }
 
-      if (startTimeStr != null && endTimeStr != null) {
-        final start = _parseTimeString(startTimeStr);
-        final end = _parseTimeString(endTimeStr);
+    // 0b. Priority: Match by work schedule hours for today
+    if (matchingMode == null && _memberSchedule?['type'] == 'work_schedule') {
+      final detail = _memberSchedule?['detail'] as Map<String, dynamic>?;
+      final startTime = detail?['start_time'] as String?;
+      final endTime = detail?['end_time'] as String?;
+      if (startTime != null && endTime != null) {
+        for (var mode in _availableModes) {
+          // Normalize time string (remove seconds if present)
+          String norm(String t) => t.split(':').take(2).join(':');
+          if (norm(mode['start_time'] ?? '') == norm(startTime) &&
+              norm(mode['end_time'] ?? '') == norm(endTime)) {
+            matchingMode = mode;
+            break;
+          }
+        }
+      }
+    }
 
-        if (start != null && end != null) {
-          int startMin = start.hour * 60 + start.minute;
-          int endMin = end.hour * 60 + end.minute;
+    // 1. Fallback: Find a shift that matches the current time range
+    if (matchingMode == null) {
+      for (var mode in _availableModes) {
+        final startTimeStr = mode['start_time'] as String?;
+        final endTimeStr = mode['end_time'] as String?;
 
-          // Handle shifts crossing midnight
-          if (endMin < startMin) {
-            if (currentMinutes >= startMin || currentMinutes < endMin) {
-              matchingMode = mode;
-              break;
-            }
-          } else {
-            if (currentMinutes >= startMin && currentMinutes < endMin) {
-              matchingMode = mode;
-              break;
+        if (startTimeStr != null && endTimeStr != null) {
+          final start = _parseTimeString(startTimeStr);
+          final end = _parseTimeString(endTimeStr);
+
+          if (start != null && end != null) {
+            int startMin = start.hour * 60 + start.minute;
+            int endMin = end.hour * 60 + end.minute;
+
+            // Handle shifts crossing midnight
+            if (endMin < startMin) {
+              if (currentMinutes >= startMin || currentMinutes < endMin) {
+                matchingMode = mode;
+                break;
+              }
+            } else {
+              if (currentMinutes >= startMin && currentMinutes < endMin) {
+                matchingMode = mode;
+                break;
+              }
             }
           }
         }
@@ -360,6 +373,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
       final today = DateTime.now();
       final todayStr = today.toIso8601String().split('T')[0];
 
+      // 1. Get basic member schedule for shift_id & work_schedule_id (used for mode auto-selection)
       final schedule = await _supabase
           .from('member_schedules')
           .select('id, work_schedule_id, shift_id, effective_date, end_date')
@@ -372,50 +386,101 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           .maybeSingle();
 
       if (schedule != null) {
-        final scheduleMap = schedule;
-        final shiftId = scheduleMap['shift_id'] as int?;
-        final workScheduleId = scheduleMap['work_schedule_id'] as int?;
+        setState(() {
+          _memberSchedule = schedule;
+        });
+      }
 
-        Map<String, dynamic>? scheduleData;
+      // 2. Load the full DailySchedule via service for break time validation
+      final dailySched = await _attendanceService.getTodaySchedule(
+        widget.organizationMemberId,
+        organizationTimezone: 'Asia/Jakarta',
+      );
 
-        if (shiftId != null) {
-          final shift = await _supabase
-              .from('shifts')
-              .select('id, start_time, end_time')
-              .eq('id', shiftId)
-              .maybeSingle();
-
-          if (shift != null) {
-            scheduleData = {'type': 'shift', 'shift': shift};
-          }
-        } else if (workScheduleId != null) {
-          final dayOfWeek = today.weekday % 7;
-
-          final detail = await _supabase
-              .from('work_schedule_details')
-              .select(
-                'day_of_week, start_time, end_time, break_start, break_end',
-              )
-              .eq('work_schedule_id', workScheduleId)
-              .eq('day_of_week', dayOfWeek)
-              .maybeSingle();
-
-          if (detail != null) {
-            scheduleData = {'type': 'work_schedule', 'detail': detail};
-          }
-        }
-
-        if (scheduleData != null) {
-          final scheduleDataMap = scheduleData;
-          setState(() {
-            _memberSchedule = Map<String, dynamic>.from(scheduleMap)
-              ..addAll(scheduleDataMap);
-          });
-        }
+      if (mounted) {
+        setState(() {
+          _dailySchedule = dailySched;
+          // Trigger auto mode selection after schedule is loaded
+          _updateModeBasedOnSchedule();
+        });
       }
     } catch (e) {
       debugPrint('Error loading schedule: $e');
     }
+  }
+
+  /// Returns break button availability based on the schedule
+  ({bool canBreakOut, bool canBreakIn, String? hint})
+  _computeBreakButtonState() {
+    final schedule = _dailySchedule;
+    if (schedule == null) {
+      // No schedule loaded: disable buttons to be safe (fail closed)
+      return (canBreakOut: false, canBreakIn: false, hint: 'Memuat jadwal...');
+    }
+
+    final breakStartStr = schedule.breakStart;
+    final breakEndStr = schedule.breakEnd;
+
+    if (breakStartStr == null || breakEndStr == null) {
+      // No break scheduled = disable both buttons
+      return (
+        canBreakOut: false,
+        canBreakIn: false,
+        hint: 'Tidak ada jadwal istirahat',
+      );
+    }
+
+    // Parse break times
+    TimeOfDay? parseTime(String s) {
+      try {
+        final parts = s.split(':');
+        return TimeOfDay(
+          hour: int.parse(parts[0]),
+          minute: int.parse(parts[1]),
+        );
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final breakStart = parseTime(breakStartStr);
+    final breakEnd = parseTime(breakEndStr);
+    if (breakStart == null || breakEnd == null) {
+      return (canBreakOut: true, canBreakIn: true, hint: null);
+    }
+
+    // Use Organization Timezone for current time comparison
+    final now = TimezoneHelper.convertUtcToOrgTimezone(
+      DateTime.now().toUtc(),
+      _organizationTimezone,
+    );
+    final nowMin = now.hour * 60 + now.minute;
+    final bStartMin = breakStart.hour * 60 + breakStart.minute;
+    final bEndMin = breakEnd.hour * 60 + breakEnd.minute;
+
+    // Allow both "Mulai" and "Selesai" if within the schedule window
+    // [breakStart - 30m, breakEnd + 30m]
+    const windowMinutes = 30;
+    final canBreakOut =
+        nowMin >= (bStartMin - windowMinutes) &&
+        nowMin <= (bEndMin + windowMinutes);
+    final canBreakIn =
+        nowMin >= (bStartMin - windowMinutes) &&
+        nowMin <= (bEndMin + windowMinutes);
+
+    String formatTime(TimeOfDay t) {
+      final h = t.hour.toString().padLeft(2, '0');
+      final m = t.minute.toString().padLeft(2, '0');
+      return '$h:$m';
+    }
+
+    String? hint;
+    if (!canBreakOut) {
+      hint =
+          'Istirahat tersedia pukul ${formatTime(breakStart)} - ${formatTime(breakEnd)}';
+    }
+
+    return (canBreakOut: canBreakOut, canBreakIn: canBreakIn, hint: hint);
   }
 
   Future<void> _loadAvailableModes() async {
@@ -599,7 +664,7 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                         onPressed: () => Navigator.pop(context, 'check_in'),
-                        child: Text(AppLanguage.tr('attendance.rfid.in')),
+                        child: const Text('IN'),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -611,10 +676,76 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                         onPressed: () => Navigator.pop(context, 'check_out'),
-                        child: Text(AppLanguage.tr('attendance.rfid.out')),
+                        child: const Text('OUT'),
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                StatefulBuilder(
+                  builder: (context, setState2) {
+                    final bState = _computeBreakButtonState();
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: bState.canBreakOut
+                                      ? Colors.orange
+                                      : Colors.grey.shade400,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
+                                ),
+                                onPressed: bState.canBreakOut
+                                    ? () =>
+                                          Navigator.pop(context, 'break_start')
+                                    : null,
+                                child: Text(
+                                  AppLanguage.tr('attendance.rfid.break_in'),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: bState.canBreakIn
+                                      ? Colors.blue
+                                      : Colors.grey.shade400,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
+                                ),
+                                onPressed: bState.canBreakIn
+                                    ? () => Navigator.pop(context, 'break_end')
+                                    : null,
+                                child: Text(
+                                  AppLanguage.tr('attendance.rfid.break_out'),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (bState.hint != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              bState.hint!,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.orange.shade700,
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),
@@ -625,10 +756,29 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
     if (pickedMode != null && mounted) {
       setState(() => _attendanceMode = pickedMode);
+
+      String typeDisplay;
+      switch (pickedMode) {
+        case 'check_in':
+          typeDisplay = 'IN';
+          break;
+        case 'check_out':
+          typeDisplay = 'OUT';
+          break;
+        case 'break_start':
+          typeDisplay = 'ISTIRAHAT MASUK';
+          break;
+        case 'break_end':
+          typeDisplay = 'ISTIRAHAT KELUAR';
+          break;
+        default:
+          typeDisplay = pickedMode.toUpperCase();
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Mode ${pickedMode == 'check_in' ? 'IN' : 'OUT'} dipilih'
+            'Mode $typeDisplay dipilih'
             '${_selectedMode != null ? ' • ${_selectedMode!['name']}' : ''}',
           ),
           backgroundColor: const Color(0xFF9333EA),
@@ -765,7 +915,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         });
 
         // Re-calculate auto-selection now that we have the correct timezone
-        _autoSelectModeFromWorkTimeMode();
+        if (mounted) {
+          _updateModeBasedOnSchedule();
+        }
       }
     } catch (e) {
       debugPrint('Error loading org data: $e');
@@ -1085,7 +1237,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
         try {
           final existingRecord = await _supabase
               .from('attendance_records')
-              .select('id, actual_check_in, actual_check_out')
+              .select(
+                'id, actual_check_in, actual_check_out, actual_break_start, actual_break_end',
+              )
               .eq('organization_member_id', memberId)
               .eq('attendance_date', todayStr)
               .maybeSingle();
@@ -1096,6 +1250,12 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
               hasDuplicate = true;
             } else if (action == 'check_out' &&
                 existingRecord['actual_check_out'] != null) {
+              hasDuplicate = true;
+            } else if (action == 'break_out' &&
+                existingRecord['actual_break_start'] != null) {
+              hasDuplicate = true;
+            } else if (action == 'break_in' &&
+                existingRecord['actual_break_end'] != null) {
               hasDuplicate = true;
             }
           }
@@ -1895,6 +2055,52 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                   fontWeight: FontWeight.bold,
                   color: Color(0xFF9333EA),
                   fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 4),
+              // ✅ Action Label
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: entry.action == 'check_in'
+                      ? Colors.green.shade50
+                      : entry.action == 'check_out'
+                      ? Colors.red.shade50
+                      : entry.action == 'break_out'
+                      ? Colors.orange.shade50
+                      : Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: entry.action == 'check_in'
+                        ? Colors.green.shade200
+                        : entry.action == 'check_out'
+                        ? Colors.red.shade200
+                        : entry.action == 'break_out'
+                        ? Colors.orange.shade200
+                        : Colors.blue.shade200,
+                  ),
+                ),
+                child: Text(
+                  entry.action == 'check_in'
+                      ? 'MASUK'
+                      : entry.action == 'check_out'
+                      ? 'KELUAR'
+                      : entry.action == 'break_out'
+                      ? 'ISTIRAHAT MASUK'
+                      : entry.action == 'break_in'
+                      ? 'ISTIRAHAT KELUAR'
+                      : entry.action.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    color: entry.action == 'check_in'
+                        ? Colors.green.shade700
+                        : entry.action == 'check_out'
+                        ? Colors.red.shade700
+                        : entry.action == 'break_out'
+                        ? Colors.orange.shade700
+                        : Colors.blue.shade700,
+                  ),
                 ),
               ),
               const SizedBox(height: 4),

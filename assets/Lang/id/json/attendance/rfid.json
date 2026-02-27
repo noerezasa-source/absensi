@@ -24,5 +24,7 @@
     "failed_count": "Gagal",
     "start_sync": "Mulai Sinkronisasi",
     "close": "Tutup",
-    "member": "Anggota"
+    "member": "Anggota",
+    "break_in": "Istirahat Masuk",
+    "break_out": "Istirahat Keluar"
 }

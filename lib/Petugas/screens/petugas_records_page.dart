@@ -109,6 +109,20 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
       }
 
       await _loadOrganizationData();
+
+      // After loading org data, we have the timezone. Update Today.
+      final nowOrg = TimezoneHelper.getCurrentTimeInOrgTimezone(
+        _organizationTimezone,
+      );
+      if (mounted) {
+        setState(() {
+          _selectedMonth = nowOrg.month;
+          _selectedYear = nowOrg.year;
+          _selectedDay = nowOrg;
+          _focusedDay = nowOrg;
+        });
+      }
+
       await _loadOrganizationMembers();
       await _loadDeviceLocations();
       await _loadAttendanceRecords();
@@ -1063,9 +1077,28 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         },
         onPageChanged: (focusedDay) {
           if (!mounted) return;
+
+          final nowOrg = TimezoneHelper.getCurrentTimeInOrgTimezone(
+            _organizationTimezone,
+          );
+          final isCurrentMonth =
+              focusedDay.year == nowOrg.year &&
+              focusedDay.month == nowOrg.month;
+
           setState(() {
             _focusedDay = focusedDay;
+            _selectedMonth = focusedDay.month;
+            _selectedYear = focusedDay.year;
+
+            // If swiping into the current month, select Today. Otherwise select the 1st.
+            if (isCurrentMonth) {
+              _selectedDay = nowOrg;
+            } else if (_selectedDay.month != focusedDay.month ||
+                _selectedDay.year != focusedDay.year) {
+              _selectedDay = DateTime(focusedDay.year, focusedDay.month, 1);
+            }
           });
+          _loadAttendanceRecords();
         },
         calendarStyle: CalendarStyle(
           outsideDaysVisible: false,
@@ -1616,6 +1649,17 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     final checkInLocation = _getDeviceLocationName(checkInDeviceId);
     final checkOutLocation = _getDeviceLocationName(checkOutDeviceId);
 
+    // ✅ NEW: Break Fields
+    final actualBreakStart = record['actual_break_start'] as String?;
+    final actualBreakEnd = record['actual_break_end'] as String?;
+    final breakOutDeviceId = record['break_out_device_id'] as int?;
+    final breakInDeviceId = record['break_in_device_id'] as int?;
+    final breakOutMethod = record['break_out_method'] as String?;
+    final breakInMethod = record['break_in_method'] as String?;
+
+    final breakOutLocation = _getDeviceLocationName(breakOutDeviceId);
+    final breakInLocation = _getDeviceLocationName(breakInDeviceId);
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -1811,6 +1855,48 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                                   'Petugas.attendance.check_out_location',
                                 ),
                                 checkOutLocation,
+                              ),
+                          ],
+
+                          // ✅ NEW: Break Details
+                          if (actualBreakStart != null) ...[
+                            const Divider(height: 20),
+                            _buildDetailRow(
+                              Icons.coffee_outlined,
+                              'Mulai Istirahat',
+                              _formatDateTime(actualBreakStart),
+                            ),
+                            if (breakOutMethod != null)
+                              _buildDetailRow(
+                                Icons.fingerprint,
+                                'Metode Istirahat Keluar',
+                                breakOutMethod,
+                              ),
+                            if (breakOutLocation != null)
+                              _buildDetailRow(
+                                Icons.location_on,
+                                'Lokasi Istirahat Keluar',
+                                breakOutLocation,
+                              ),
+                          ],
+                          if (actualBreakEnd != null) ...[
+                            const Divider(height: 20),
+                            _buildDetailRow(
+                              Icons.login_outlined,
+                              'Selesai Istirahat',
+                              _formatDateTime(actualBreakEnd),
+                            ),
+                            if (breakInMethod != null)
+                              _buildDetailRow(
+                                Icons.fingerprint,
+                                'Metode Istirahat Masuk',
+                                breakInMethod,
+                              ),
+                            if (breakInLocation != null)
+                              _buildDetailRow(
+                                Icons.location_on,
+                                'Lokasi Istirahat Masuk',
+                                breakInLocation,
                               ),
                           ],
                           if (workDurationMinutes != null ||
@@ -2022,6 +2108,22 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                         setState(() {
                           _selectedMonth = tempMonth;
                           _selectedYear = tempYear;
+
+                          final nowOrg =
+                              TimezoneHelper.getCurrentTimeInOrgTimezone(
+                                _organizationTimezone,
+                              );
+                          final isCurrentMonth =
+                              tempYear == nowOrg.year &&
+                              tempMonth == nowOrg.month;
+
+                          if (isCurrentMonth) {
+                            _selectedDay = nowOrg;
+                            _focusedDay = nowOrg;
+                          } else {
+                            _selectedDay = DateTime(tempYear, tempMonth, 1);
+                            _focusedDay = DateTime(tempYear, tempMonth, 1);
+                          }
                         });
                         Navigator.pop(context);
                         _loadAttendanceRecords();

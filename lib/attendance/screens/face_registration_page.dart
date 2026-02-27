@@ -15,10 +15,7 @@ import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 class FaceRegistrationPage extends StatefulWidget {
   final int organizationMemberId;
 
-  const FaceRegistrationPage({
-    super.key,
-    required this.organizationMemberId,
-  });
+  const FaceRegistrationPage({super.key, required this.organizationMemberId});
 
   @override
   State<FaceRegistrationPage> createState() => _FaceRegistrationPageState();
@@ -28,20 +25,21 @@ enum CaptureAngle { front, left, right, complete }
 
 class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
-  final FaceRecognitionTFLiteService _faceService = FaceRecognitionTFLiteService();
+  final FaceRecognitionTFLiteService _faceService =
+      FaceRecognitionTFLiteService();
   final BiometricService _biometricService = BiometricService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
 
   bool _isLoading = false;
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
-  bool _isTakingPicture = false; 
+  bool _isTakingPicture = false;
   bool _isModelInitialized = false;
   String? _errorMessage;
   String _currentStep = 'Loading model...';
   String _guidanceMessage = '';
   Color _overlayColor = Colors.white;
-  
+
   // State variables for ImageStream
   bool _isStreaming = false;
   int _consecutiveValidFrames = 0;
@@ -54,7 +52,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   String? _frontImagePath;
 
   // Guidance and UI
-  List<Face> _detectedFaces = [];
+  List<Map<String, dynamic>> _painterFaces = []; // State for optimized painter
+  DateTime? _lastProcessTime; // Throttling
   DateTime? _lastGuidanceUpdate;
   Timer? _errorTimer;
 
@@ -63,7 +62,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     super.initState();
     _initializeModel();
   }
-  
+
   @override
   void dispose() {
     _stopStream();
@@ -76,12 +75,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   // Helper for debouncing guidance messages
   void _updateGuidance(String message, Color color) {
     final now = DateTime.now();
-    if (_lastGuidanceUpdate != null && 
-        now.difference(_lastGuidanceUpdate!) < const Duration(milliseconds: 500) &&
+    if (_lastGuidanceUpdate != null &&
+        now.difference(_lastGuidanceUpdate!) <
+            const Duration(milliseconds: 500) &&
         message == _guidanceMessage) {
       return; // Skip update if too soon and message is same
     }
-    
+
     if (mounted) {
       setState(() {
         _guidanceMessage = message;
@@ -97,7 +97,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     setState(() {
       _errorMessage = message;
     });
-    
+
     _errorTimer?.cancel();
     _errorTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) {
@@ -115,7 +115,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       });
 
       await _faceService.initialize();
-      
+
       setState(() {
         _isModelInitialized = true;
         _currentStep = 'Model ready';
@@ -148,13 +148,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         frontCamera,
         ResolutionPreset.high,
         enableAudio: false,
-        imageFormatGroup: Platform.isAndroid 
-            ? ImageFormatGroup.yuv420 
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.yuv420
             : ImageFormatGroup.bgra8888,
       );
 
       await _cameraController!.initialize();
-      
+
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
@@ -201,46 +201,69 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     _isProcessing = true;
 
     try {
+      // 🚀 THROTTLING: Max ~10 FPS for detection
+      final now = DateTime.now();
+      if (_lastProcessTime != null &&
+          now.difference(_lastProcessTime!) <
+              const Duration(milliseconds: 100)) {
+        return;
+      }
+      _lastProcessTime = now;
+
       // 1. Convert to InputImage
       final inputImage = await _inputImageFromCameraImage(image);
       if (inputImage == null) return;
 
       // 2. Detect Faces
       final faces = await _faceService.detectFacesFromInputImage(inputImage);
-      
+
       if (!mounted) return;
 
       if (faces.isEmpty) {
         _consecutiveValidFrames = 0;
         setState(() {
-          _detectedFaces = [];
+          _painterFaces = [];
           _overlayColor = Colors.transparent;
           _guidanceMessage = 'Arahkan wajah ke kamera';
         });
       } else {
+        final face = faces.first;
+        final validation = _validateFace(
+          face,
+          Size(image.width.toDouble(), image.height.toDouble()),
+        );
+
         if (mounted) {
           setState(() {
-            _detectedFaces = faces;
+            _painterFaces = faces
+                .map(
+                  (f) => {
+                    'rect': f.boundingBox,
+                    'color': validation['isValid'] == true
+                        ? Colors.green
+                        : Colors.orange,
+                    'name': validation['message'],
+                  },
+                )
+                .toList();
           });
         }
 
-        final face = faces.first;
-        final validation = _validateFace(face, Size(image.width.toDouble(), image.height.toDouble()));
-        
         if (validation['isValid'] == true) {
           _consecutiveValidFrames++;
           _updateGuidance('Tahan posisi...', Colors.green.withOpacity(0.3));
 
           // Check stability before capturing
-          if (_consecutiveValidFrames >= _requiredValidFrames && !_isTakingPicture) {
+          if (_consecutiveValidFrames >= _requiredValidFrames &&
+              !_isTakingPicture) {
             _isTakingPicture = true; // Lock
             _stopStream(); // Async stop stream
-            
+
             // Trigger capture
             setState(() {
               _guidanceMessage = 'Mengambil foto...';
               _currentStep = 'Capturing...';
-              _detectedFaces = []; // Clear brackets during freeze-frame capture
+              _painterFaces = []; // Clear brackets during freeze-frame capture
             });
 
             final XFile file = await _cameraController!.takePicture();
@@ -248,7 +271,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           }
         } else {
           _consecutiveValidFrames = 0;
-          _updateGuidance(validation['message'] ?? 'Sesuaikan posisi', Colors.orange.withOpacity(0.3));
+          _updateGuidance(
+            validation['message'] ?? 'Sesuaikan posisi',
+            Colors.orange.withOpacity(0.3),
+          );
         }
       }
     } catch (e) {
@@ -266,36 +292,58 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final double leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
     final double rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
 
-    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4) return {'isValid': false, 'message': 'Buka mata Anda'};
+    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4)
+      return {'isValid': false, 'message': 'Buka mata Anda'};
 
     final double headY = face.headEulerAngleY ?? 0.0;
     final double headX = face.headEulerAngleX ?? 0.0;
     final double headZ = (face.headEulerAngleZ ?? 0.0).abs();
-    
-    if (headZ > 45.0) return {'isValid': false, 'message': 'Jangan miringkan kepala'}; // Relaxed from 35
+
+    if (headZ > 45.0)
+      return {
+        'isValid': false,
+        'message': 'Jangan miringkan kepala',
+      }; // Relaxed from 35
 
     // Angle specific validation
     switch (_currentAngle) {
       case CaptureAngle.front:
-        if (headY.abs() > 10.0) return {'isValid': false, 'message': 'Lihat Lurus ke Depan'}; // Relaxed from 10 to 15? No, keep 10 for front but provide clear feedback
-        if (headX.abs() > 10.0) return {'isValid': false, 'message': 'Wajah sejajar kamera'};
+        if (headY.abs() > 10.0)
+          return {
+            'isValid': false,
+            'message': 'Lihat Lurus ke Depan',
+          }; // Relaxed from 10 to 15? No, keep 10 for front but provide clear feedback
+        if (headX.abs() > 10.0)
+          return {'isValid': false, 'message': 'Wajah sejajar kamera'};
         break;
       case CaptureAngle.left:
         // Range: 15 to 45 degrees (User turns to THEIR left - sign swapped for this device)
-        if (headY < -10.0) return {'isValid': false, 'message': '← Salah Arah! Toleh KIRI'};
-        if (headY < 15.0) return {'isValid': false, 'message': '← Toleh ke KIRI'};
-        if (headY > 45.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
+        if (headY < -10.0)
+          return {'isValid': false, 'message': '← Salah Arah! Toleh KIRI'};
+        if (headY < 15.0)
+          return {'isValid': false, 'message': '← Toleh ke KIRI'};
+        if (headY > 45.0)
+          return {
+            'isValid': false,
+            'message': 'Terlalu miring! Kembali sedikit',
+          };
         break;
       case CaptureAngle.right:
         // Range: -15 to -45 degrees (User turns to THEIR right - sign swapped for this device)
-        if (headY > 10.0) return {'isValid': false, 'message': 'Salah Arah! Toleh KANAN →'};
-        if (headY > -15.0) return {'isValid': false, 'message': 'Toleh ke KANAN →'};
-        if (headY < -45.0) return {'isValid': false, 'message': 'Terlalu miring! Kembali sedikit'};
+        if (headY > 10.0)
+          return {'isValid': false, 'message': 'Salah Arah! Toleh KANAN →'};
+        if (headY > -15.0)
+          return {'isValid': false, 'message': 'Toleh ke KANAN →'};
+        if (headY < -45.0)
+          return {
+            'isValid': false,
+            'message': 'Terlalu miring! Kembali sedikit',
+          };
         break;
       default:
         break;
     }
-    
+
     return {'isValid': true, 'message': 'Sempurna, Tahan!'};
   }
 
@@ -303,7 +351,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     try {
       setState(() {
         _overlayColor = Colors.green;
-        _guidanceMessage = 'Sudut ${_currentAngle.name.toUpperCase()} Berhasil!';
+        _guidanceMessage =
+            'Sudut ${_currentAngle.name.toUpperCase()} Berhasil!';
         _currentStep = 'Memproses...';
       });
 
@@ -314,17 +363,21 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       );
 
       // ✅ HIGH STANDARD VALIDATION: Mandatory thresholds
-      double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-      
+      double qualityScore =
+          (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+
       // 🚀 User Requirement: "Kalau tidak memenuhi standart itu tidak bisa register"
       double minQuality = _currentAngle == CaptureAngle.front ? 0.90 : 0.65;
-      
+
       if (qualityScore < minQuality) {
         setState(() {
           _overlayColor = Colors.red; // More urgent than orange
         });
-        _updateGuidance('Kualitas rendah (${(qualityScore*100).toInt()}%). Butuh > ${(minQuality*100).toInt()}%. Silakan ulangi dengan cahaya lebih baik.', Colors.red);
-        
+        _updateGuidance(
+          'Kualitas rendah (${(qualityScore * 100).toInt()}%). Butuh > ${(minQuality * 100).toInt()}%. Silakan ulangi dengan cahaya lebih baik.',
+          Colors.red,
+        );
+
         await Future.delayed(const Duration(seconds: 2));
         await File(imagePath).delete();
         _isTakingPicture = false;
@@ -334,7 +387,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       // Store template
       _capturedTemplates[_currentAngle] = faceTemplate;
-      
+
       if (_currentAngle == CaptureAngle.front) {
         _frontImagePath = imagePath; // Keep front image
       } else {
@@ -357,7 +410,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         });
         await _finalizeMultiAngleRegistration();
       }
-
     } catch (e) {
       debugPrint('Error processing angle: $e');
       _isTakingPicture = false;
@@ -365,7 +417,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       _showError('Gagal memproses: $e');
     }
   }
-  
+
   void _resetStreamForAngle(String stepName, String msg) {
     _consecutiveValidFrames = 0;
     _isTakingPicture = false;
@@ -386,10 +438,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     try {
       // 1. Combine templates
       final List<Map<String, dynamic>> combinedList = [];
-      if (_capturedTemplates.containsKey(CaptureAngle.front)) combinedList.add(_capturedTemplates[CaptureAngle.front]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.left)) combinedList.add(_capturedTemplates[CaptureAngle.left]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.right)) combinedList.add(_capturedTemplates[CaptureAngle.right]!);
-      
+      if (_capturedTemplates.containsKey(CaptureAngle.front))
+        combinedList.add(_capturedTemplates[CaptureAngle.front]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.left))
+        combinedList.add(_capturedTemplates[CaptureAngle.left]!);
+      if (_capturedTemplates.containsKey(CaptureAngle.right))
+        combinedList.add(_capturedTemplates[CaptureAngle.right]!);
+
       final multiTemplate = {
         'version': 4, // Aligned with high-standard container version
         'templates': combinedList,
@@ -405,7 +460,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           processedFile,
           widget.organizationMemberId,
         );
-        
+
         // Clean up
         if (await imageFile.exists()) await imageFile.delete();
         if (processedFile.path != imageFile.path) {
@@ -507,16 +562,19 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         imagePath,
         allowSidePose: false,
       );
-      
-      debugPrint('✅ Captured front face with ${faceTemplate['landmarkCount']} landmarks');
-      
+
+      debugPrint(
+        '✅ Captured front face with ${faceTemplate['landmarkCount']} landmarks',
+      );
+
       // ✅ STRICT QUALITY CHECK (Added): Require 90% quality score
-      double qualityScore = (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-      
+      double qualityScore =
+          (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+
       // ✅ IMPROVED: Multi-tier quality check
       String qualityLevel;
       double minRequired;
-      
+
       if (qualityScore >= 0.85) {
         qualityLevel = 'Excellent';
         minRequired = 0.85;
@@ -524,18 +582,22 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         qualityLevel = 'Good';
         minRequired = 0.75;
       } else if (qualityScore >= 0.65) {
-        qualityLevel = 'Acceptable'; // Allow lower quality but might be strict during recog
+        qualityLevel =
+            'Acceptable'; // Allow lower quality but might be strict during recog
         minRequired = 0.65;
       } else {
         qualityLevel = 'Poor';
         minRequired = 0.65;
       }
-      
-      debugPrint('🔍 Face Quality: ${(qualityScore * 100).toStringAsFixed(1)}% ($qualityLevel)');
-      
+
+      debugPrint(
+        '🔍 Face Quality: ${(qualityScore * 100).toStringAsFixed(1)}% ($qualityLevel)',
+      );
+
       if (qualityScore < minRequired) {
         setState(() {
-          _guidanceMessage = 'Kualitas $qualityLevel (${(qualityScore * 100).toInt()}%). Butuh cahaya lebih terang!';
+          _guidanceMessage =
+              'Kualitas $qualityLevel (${(qualityScore * 100).toInt()}%). Butuh cahaya lebih terang!';
           _overlayColor = Colors.orange;
           _currentStep = 'Cahaya kurang - coba lagi';
         });
@@ -547,11 +609,15 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       }
 
       // ✅ ENHANCED: Check liveness score if available
-      final livenessData = faceTemplate['livenessDetection'] as Map<String, dynamic>?;
+      final livenessData =
+          faceTemplate['livenessDetection'] as Map<String, dynamic>?;
       if (livenessData != null) {
-        final livenessScore = (livenessData['livenessScore'] as num?)?.toDouble() ?? 0.0;
+        final livenessScore =
+            (livenessData['livenessScore'] as num?)?.toDouble() ?? 0.0;
         if (livenessScore < 0.5) {
-          debugPrint('⚠️ Low liveness score: ${livenessScore.toStringAsFixed(2)}');
+          debugPrint(
+            '⚠️ Low liveness score: ${livenessScore.toStringAsFixed(2)}',
+          );
           setState(() {
             _guidanceMessage = 'Foto tidak natural. Pastikan wajah asli!';
             _overlayColor = Colors.red;
@@ -565,22 +631,24 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       }
 
       setState(() {
-        _guidanceMessage = '$qualityLevel Quality! (${(qualityScore * 100).toInt()}%)';
+        _guidanceMessage =
+            '$qualityLevel Quality! (${(qualityScore * 100).toInt()}%)';
         _overlayColor = Colors.green;
         _isRegistrationComplete = true;
       });
-      
+
       await _registerSingleTemplate(faceTemplate, imagePath);
-      
     } catch (e) {
       if (mounted) {
-        _showError('Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}');
+        _showError(
+          'Gagal memproses foto: ${e.toString().replaceAll('Exception: ', '')}',
+        );
         setState(() {
           _overlayColor = Colors.red;
           _isRegistrationComplete = false;
         });
       }
-      
+
       // Retry
       await File(imagePath).delete();
       _startImageStream();
@@ -700,14 +768,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         }
       }
     } catch (e) {
-      _showError('Gagal menyimpan: ${e.toString().replaceAll('Exception: ', '')}');
+      _showError(
+        'Gagal menyimpan: ${e.toString().replaceAll('Exception: ', '')}',
+      );
       setState(() {
         _currentStep = 'Gagal menyimpan';
         _isLoading = false;
         _overlayColor = Colors.red;
         _isRegistrationComplete = false;
       });
-      
+
       _startImageStream();
     }
   }
@@ -716,19 +786,15 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     try {
       final imageBytes = await imageFile.readAsBytes();
       final image = img.decodeImage(imageBytes);
-      
+
       if (image == null) {
         return imageFile;
       }
 
-      var enhanced = img.adjustColor(
-        image,
-        brightness: 1.1,
-        contrast: 1.15,
-      );
+      var enhanced = img.adjustColor(image, brightness: 1.1, contrast: 1.15);
 
       final flipped = img.flipHorizontal(enhanced);
-      
+
       final resized = img.copyResize(
         flipped,
         width: 800,
@@ -747,34 +813,37 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
   }
 
-  
   // Helper for CameraImage -> InputImage
   Future<InputImage?> _inputImageFromCameraImage(CameraImage image) async {
     if (_cameraController == null) return null;
 
     final camera = _cameraController!.description;
     final sensorOrientation = camera.sensorOrientation;
-    
+
     // Determine rotation
     InputImageRotation? rotation;
     if (Platform.isIOS) {
       rotation = InputImageRotation.rotation0deg;
     } else if (Platform.isAndroid) {
-      var rotationCompensation = _orientations[_cameraController!.value.deviceOrientation];
+      var rotationCompensation =
+          _orientations[_cameraController!.value.deviceOrientation];
       if (rotationCompensation == null) return null;
       if (camera.lensDirection == CameraLensDirection.front) {
         // Front camera
         rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
       } else {
         // Back camera
-        rotationCompensation = (sensorOrientation - rotationCompensation + 360) % 360;
+        rotationCompensation =
+            (sensorOrientation - rotationCompensation + 360) % 360;
       }
       rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
     }
     if (rotation == null) return null;
 
     // Format
-    InputImageFormat? format = InputImageFormatValue.fromRawValue(image.format.raw);
+    InputImageFormat? format = InputImageFormatValue.fromRawValue(
+      image.format.raw,
+    );
     if (format == null) return null;
 
     // Bytes
@@ -782,34 +851,41 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     int bytesPerRow;
 
     if (Platform.isAndroid && image.format.group == ImageFormatGroup.yuv420) {
-       // ✅ OPTIMIZATION: Run heavy conversion in background isolate
-       try {
-         final planesData = image.planes.map((p) => _PlaneData(
-           bytes: p.bytes,
-           bytesPerRow: p.bytesPerRow,
-           bytesPerPixel: p.bytesPerPixel,
-         )).toList();
+      // ✅ OPTIMIZATION: Run heavy conversion in background isolate
+      try {
+        final planesData = image.planes
+            .map(
+              (p) => _PlaneData(
+                bytes: p.bytes,
+                bytesPerRow: p.bytesPerRow,
+                bytesPerPixel: p.bytesPerPixel,
+              ),
+            )
+            .toList();
 
-         bytes = await compute(_yuv420ToNv21Compute, _NV21ConvertParams(
-           width: image.width,
-           height: image.height,
-           planes: planesData,
-         ));
-         
-         format = InputImageFormat.nv21;
-         bytesPerRow = image.width;
-       } catch (e) {
-         debugPrint('Error in NV21 conversion: $e');
-         return null;
-       }
+        bytes = await compute(
+          _yuv420ToNv21Compute,
+          _NV21ConvertParams(
+            width: image.width,
+            height: image.height,
+            planes: planesData,
+          ),
+        );
+
+        format = InputImageFormat.nv21;
+        bytesPerRow = image.width;
+      } catch (e) {
+        debugPrint('Error in NV21 conversion: $e');
+        return null;
+      }
     } else {
-       // Regular concatenation for other formats
-       final WriteBuffer allBytes = WriteBuffer();
-       for (final Plane plane in image.planes) {
-         allBytes.putUint8List(plane.bytes);
-       }
-       bytes = allBytes.done().buffer.asUint8List();
-       bytesPerRow = image.planes.first.bytesPerRow;
+      // Regular concatenation for other formats
+      final WriteBuffer allBytes = WriteBuffer();
+      for (final Plane plane in image.planes) {
+        allBytes.putUint8List(plane.bytes);
+      }
+      bytes = allBytes.done().buffer.asUint8List();
+      bytesPerRow = image.planes.first.bytesPerRow;
     }
 
     return InputImage.fromBytes(
@@ -829,7 +905,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     DeviceOrientation.portraitDown: 180,
     DeviceOrientation.landscapeRight: 270,
   };
-
 
   @override
   Widget build(BuildContext context) {
@@ -866,63 +941,24 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               ),
             )
           else
-            const Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            ),
+            const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // 2. DYNAMIC FACE BRACKETS (Instead of static box)
-          if (_detectedFaces.isNotEmpty && _cameraController != null)
-            ..._detectedFaces.map((face) {
-              final previewSize = _cameraController!.value.previewSize!;
-              final videoWidth = previewSize.height;
-              final videoHeight = previewSize.width;
-              
-              final screenWidth = screenSize.width;
-              final screenHeight = screenSize.height;
-              
-              final screenRatio = screenWidth / screenHeight;
-              final videoRatio = videoWidth / videoHeight;
-              
-              double scale;
-              if (screenRatio > videoRatio) {
-                scale = screenWidth / videoWidth;
-              } else {
-                scale = screenHeight / videoHeight;
-              }
-              
-              final scaledWidth = videoWidth * scale;
-              final scaledHeight = videoHeight * scale;
-              
-              final offsetX = (screenWidth - scaledWidth) / 2;
-              final offsetY = (screenHeight - scaledHeight) / 2;
-              
-              final rect = face.boundingBox;
-              double nLeft = rect.left / videoWidth; 
-              double nTop = rect.top / videoHeight;
-              double nWidth = rect.width / videoWidth;
-              double nHeight = rect.height / videoHeight;
-
-              // Mirroring Fix: Flip X for front camera
-              nLeft = 1.0 - (nLeft + nWidth);
-              
-              final left = offsetX + nLeft * scaledWidth;
-              final top = offsetY + nTop * scaledHeight;
-              final width = nWidth * scaledWidth;
-              final height = nHeight * scaledHeight;
-              
-              return Positioned(
-                left: left,
-                top: top,
-                child: CustomPaint(
-                  painter: _FaceBracketPainter(color: const Color(0xFF8E44AD)), // Violet style
-                  child: Container(
-                    width: width,
-                    height: height,
+          // 2. DYNAMIC FACE BRACKETS (Optimized CustomPainter)
+          if (_painterFaces.isNotEmpty &&
+              _cameraController != null &&
+              _cameraController!.value.previewSize != null)
+            Positioned.fill(
+              child: CustomPaint(
+                painter: FaceDetectorPainter(
+                  absoluteImageSize: Size(
+                    _cameraController!.value.previewSize!.height,
+                    _cameraController!.value.previewSize!.width,
                   ),
+                  faces: _painterFaces,
+                  isFrontCamera: true,
                 ),
-              );
-            }),
-
+              ),
+            ),
           // 4. PROGRESS CARD
           if (_isCameraInitialized && _isModelInitialized)
             Positioned(
@@ -930,7 +966,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               right: 20,
               bottom: 30, // Positioned slightly lower
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 28,
+                ),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
                     begin: Alignment.topLeft,
@@ -954,7 +993,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _guidanceMessage.isNotEmpty ? _guidanceMessage : 'Scanning your face...',
+                      _guidanceMessage.isNotEmpty
+                          ? _guidanceMessage
+                          : 'Scanning your face...',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22, // Slightly larger like mockup
@@ -1067,19 +1108,26 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
   double _getProgressPercentage() {
     if (_isRegistrationComplete) return 100;
-    
+
     double base = 0;
     switch (_currentAngle) {
-      case CaptureAngle.front: base = 0; break;
-      case CaptureAngle.left: base = 33; break;
-      case CaptureAngle.right: base = 66; break;
-      default: return 100;
+      case CaptureAngle.front:
+        base = 0;
+        break;
+      case CaptureAngle.left:
+        base = 33;
+        break;
+      case CaptureAngle.right:
+        base = 66;
+        break;
+      default:
+        return 100;
     }
 
     // Add small visual progress for validation success
     if (_isTakingPicture) return base + 30; // Almost done with step
     if (_consecutiveValidFrames > 0) return base + 15; // Validating
-    
+
     return base + 5; // Started step
   }
 
@@ -1087,56 +1135,150 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   // ...
 }
 
-/// ✅ NEW: Custom Painter for Face Bracket (VIOLET) - Cloned from Attendance Page
-class _FaceBracketPainter extends CustomPainter {
-  final Color color;
-  final double bracketSize = 25.0;
-  final double bracketWidth = 4.0;
-  final double borderRadius = 30.0;
+/// ✅ SYNC: Optimized Custom Painter for all faces (matching attendance page)
+class FaceDetectorPainter extends CustomPainter {
+  final Size absoluteImageSize;
+  final List<Map<String, dynamic>> faces;
+  final bool isFrontCamera;
 
-  _FaceBracketPainter({required this.color});
+  FaceDetectorPainter({
+    required this.absoluteImageSize,
+    required this.faces,
+    required this.isFrontCamera,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Matches the aesthetic from the attendance page
-    final drawColor = color;
+    if (absoluteImageSize.width == 0 || absoluteImageSize.height == 0) return;
 
-    final paint = Paint()
-      ..color = drawColor
+    final double scaleX = size.width / absoluteImageSize.width;
+    final double scaleY = size.height / absoluteImageSize.height;
+
+    final Paint bracketPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0
+      ..strokeCap = StrokeCap.round;
+
+    final Paint boxPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    // 1. Draw rounded main box with low opacity
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(borderRadius));
-    canvas.drawRRect(rrect, paint..color = drawColor.withOpacity(0.4));
+    for (final face in faces) {
+      final rect = face['rect'] as Rect;
+      final color = face['color'] as Color;
+      final nameLabel = face['name'] as String?;
 
-    // 2. Draw 4 thick corner brackets
-    final bracketPaint = Paint()
-      ..color = drawColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = bracketWidth
-      ..strokeCap = StrokeCap.round;
+      // Apply scaling and mirroring
+      double left, right;
+      if (isFrontCamera) {
+        left = (absoluteImageSize.width - rect.right) * scaleX;
+        right = (absoluteImageSize.width - rect.left) * scaleX;
+      } else {
+        left = rect.left * scaleX;
+        right = rect.right * scaleX;
+      }
+      final top = rect.top * scaleY;
+      final bottom = rect.bottom * scaleY;
 
-    // Top-Left
-    canvas.drawLine(const Offset(0, 30), const Offset(0, 0), bracketPaint);
-    canvas.drawLine(const Offset(0, 0), const Offset(30, 0), bracketPaint);
+      final mappedRect = Rect.fromLTRB(left, top, right, bottom);
 
-    // Top-Right
-    canvas.drawLine(Offset(size.width - 30, 0), Offset(size.width, 0), bracketPaint);
-    canvas.drawLine(Offset(size.width, 0), Offset(size.width, 30), bracketPaint);
+      // 1. Draw main rounded box with low opacity
+      boxPaint.color = color.withOpacity(0.4);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(mappedRect, const Radius.circular(12)),
+        boxPaint,
+      );
 
-    // Bottom-Left
-    canvas.drawLine(Offset(0, size.height - 30), Offset(0, size.height), bracketPaint);
-    canvas.drawLine(Offset(0, size.height), Offset(30, size.height), bracketPaint);
+      // 2. Draw Brackets
+      bracketPaint.color = color;
+      const bSize = 20.0;
 
-    // Bottom-Right
-    canvas.drawLine(Offset(size.width - 30, size.height), Offset(size.width, size.height), bracketPaint);
-    canvas.drawLine(Offset(size.width, size.height), Offset(size.width, size.height - 30), bracketPaint);
+      // Top-Left
+      canvas.drawLine(
+        Offset(left, top + bSize),
+        Offset(left, top),
+        bracketPaint,
+      );
+      canvas.drawLine(
+        Offset(left, top),
+        Offset(left + bSize, top),
+        bracketPaint,
+      );
+
+      // Top-Right
+      canvas.drawLine(
+        Offset(right - bSize, top),
+        Offset(right, top),
+        bracketPaint,
+      );
+      canvas.drawLine(
+        Offset(right, top),
+        Offset(right, top + bSize),
+        bracketPaint,
+      );
+
+      // Bottom-Left
+      canvas.drawLine(
+        Offset(left, bottom - bSize),
+        Offset(left, bottom),
+        bracketPaint,
+      );
+      canvas.drawLine(
+        Offset(left, bottom),
+        Offset(left + bSize, bottom),
+        bracketPaint,
+      );
+
+      // Bottom-Right
+      canvas.drawLine(
+        Offset(right - bSize, bottom),
+        Offset(right, bottom),
+        bracketPaint,
+      );
+      canvas.drawLine(
+        Offset(right, bottom),
+        Offset(right, bottom - bSize),
+        bracketPaint,
+      );
+
+      // 3. Draw Name/Status Label (if present)
+      if (nameLabel != null && nameLabel.isNotEmpty) {
+        final textSpan = TextSpan(
+          text: nameLabel,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            shadows: [Shadow(blurRadius: 2, color: Colors.black)],
+          ),
+        );
+        final textPainter = TextPainter(
+          text: textSpan,
+          textDirection: TextDirection.ltr,
+        )..layout();
+
+        final labelBgPaint = Paint()..color = color.withOpacity(0.8);
+        final labelRect = Rect.fromLTWH(
+          left,
+          top - textPainter.height - 8,
+          textPainter.width + 12,
+          textPainter.height + 4,
+        );
+
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(labelRect, const Radius.circular(6)),
+          labelBgPaint,
+        );
+        textPainter.paint(
+          canvas,
+          Offset(left + 6, top - textPainter.height - 6),
+        );
+      }
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(FaceDetectorPainter oldDelegate) => true;
 }
 
 // ✅ ISOLATE WRAPPERS (Top-Level)
@@ -1144,21 +1286,29 @@ class _PlaneData {
   final Uint8List bytes;
   final int bytesPerRow;
   final int? bytesPerPixel;
-  _PlaneData({required this.bytes, required this.bytesPerRow, this.bytesPerPixel});
+  _PlaneData({
+    required this.bytes,
+    required this.bytesPerRow,
+    this.bytesPerPixel,
+  });
 }
 
 class _NV21ConvertParams {
   final int width;
   final int height;
   final List<_PlaneData> planes;
-  _NV21ConvertParams({required this.width, required this.height, required this.planes});
+  _NV21ConvertParams({
+    required this.width,
+    required this.height,
+    required this.planes,
+  });
 }
 
 Uint8List _yuv420ToNv21Compute(_NV21ConvertParams params) {
   final int width = params.width;
   final int height = params.height;
   final List<_PlaneData> planes = params.planes;
-  
+
   final int ySize = width * height;
   final int uvSize = width * height ~/ 2;
   final Uint8List nv21 = Uint8List(ySize + uvSize);
@@ -1172,7 +1322,7 @@ Uint8List _yuv420ToNv21Compute(_NV21ConvertParams params) {
     final int srcPos = y * yStride;
     final int dstPos = y * width;
     for (int x = 0; x < width; x++) {
-       nv21[dstPos + x] = yBytes[srcPos + x];
+      nv21[dstPos + x] = yBytes[srcPos + x];
     }
   }
 
@@ -1190,10 +1340,10 @@ Uint8List _yuv420ToNv21Compute(_NV21ConvertParams params) {
     for (int x = 0; x < width ~/ 2; x++) {
       final int uIndex = y * uStride + x * pixelStride;
       final int vIndex = y * vStride + x * pixelStride;
-      
+
       if (vIndex < vBytes.length && uIndex < uBytes.length) {
-         nv21[uvIndex++] = vBytes[vIndex];
-         nv21[uvIndex++] = uBytes[uIndex];
+        nv21[uvIndex++] = vBytes[vIndex];
+        nv21[uvIndex++] = uBytes[uIndex];
       }
     }
   }

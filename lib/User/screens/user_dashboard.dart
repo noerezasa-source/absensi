@@ -1298,7 +1298,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                     ),
                     // Profile Section
                     Transform.translate(
-                      offset: const Offset(0, -70),
+                      offset: const Offset(0, -60),
                       child: Column(
                         children: [
                           // Profile Photo
@@ -1322,41 +1322,25 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
                                 ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.2),
-                                    blurRadius: 15,
-                                    offset: const Offset(0, 8),
-                                  ),
-                                ],
                               ),
                               child: ClipOval(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 3,
-                                    ),
-                                  ),
-                                  child: _getProfilePhotoUrl() != null
-                                      ? Image.network(
-                                          _getProfilePhotoUrl()!,
-                                          fit: BoxFit.cover,
-                                          errorBuilder:
-                                              (context, error, stackTrace) =>
-                                                  const Icon(
-                                                    Icons.person,
-                                                    size: 40,
-                                                    color: Colors.white,
-                                                  ),
-                                        )
-                                      : const Icon(
-                                          Icons.person,
-                                          size: 40,
-                                          color: Colors.white,
-                                        ),
-                                ),
+                                child: _getProfilePhotoUrl() != null
+                                    ? Image.network(
+                                        _getProfilePhotoUrl()!,
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) =>
+                                                const Icon(
+                                                  Icons.person,
+                                                  size: 60,
+                                                  color: Colors.white,
+                                                ),
+                                      )
+                                    : const Icon(
+                                        Icons.person,
+                                        size: 60,
+                                        color: Colors.white,
+                                      ),
                               ),
                             ),
                           ),
@@ -1516,7 +1500,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
-                                          '$currentTime ${nowOrg.hour < 12 ? 'AM' : 'PM'}',
+                                          '$currentTime ${nowOrg.hour < 12 ? AppLanguage.tr('am') : AppLanguage.tr('pm')}',
                                           style: TextStyle(
                                             fontSize: 28,
                                             fontWeight: FontWeight.bold,
@@ -1567,12 +1551,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                             Expanded(
                                               child: Text(
                                                 _organization?['name'] ??
-                                                    'Office',
+                                                    AppLanguage.tr('office'),
                                                 style: TextStyle(
                                                   fontSize: 14,
                                                   fontWeight: FontWeight.bold,
                                                   color: _isDarkMode
-                                                      ? Colors.white
+                                                      ? const Color(0xFFD0BCFF)
                                                       : Colors.black87,
                                                 ),
                                                 overflow: TextOverflow.ellipsis,
@@ -1633,98 +1617,99 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   Widget _buildFaceRegistrationCard() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: _isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: _isDarkMode ? 0.2 : 0.05),
+            color: Colors.black.withOpacity(_isDarkMode ? 0.2 : 0.04),
             blurRadius: 10,
-            offset: const Offset(0, 2),
+            offset: const Offset(0, 4),
           ),
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                Icons.face,
-                color: _isDarkMode
-                    ? const Color(0xFFD0BCFF)
-                    : const Color(0xFF4A1E79),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8938DF).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.face_unlock_rounded,
+                  color: Color(0xFF8938DF),
+                  size: 24,
+                ),
               ),
-              const SizedBox(width: 12),
-              Text(
-                AppLanguage.tr('User.dashboard.face_recognition'),
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: _isDarkMode ? Colors.white : Colors.black87,
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      AppLanguage.tr('face_recognition'),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: _isDarkMode
+                            ? Colors.white
+                            : const Color(0xFF1F2937),
+                      ),
+                    ),
+                    Text(
+                      AppLanguage.tr('User.dashboard.face_register_prompt'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: _isDarkMode
+                            ? Colors.white70
+                            : Colors.grey.shade500,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  AppLanguage.tr('missing'),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.orange.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.shade200),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.warning_amber_rounded,
-                  color: Colors.orange.shade700,
-                  size: 32,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        AppLanguage.tr('User.dashboard.face_not_registered'),
-                        style: TextStyle(
-                          color: Colors.orange.shade900,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        AppLanguage.tr('User.dashboard.face_register_prompt'),
-                        style: TextStyle(
-                          color: Colors.orange.shade800,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            height: 50,
-            child: ElevatedButton.icon(
+            child: OutlinedButton(
               onPressed: _navigateToFaceRegistration,
-              icon: const Icon(Icons.face),
-              label: Text(
-                AppLanguage.tr('User.dashboard.register_face'),
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF4A1E79),
-                foregroundColor: Colors.white,
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFF8938DF)),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: Text(
+                AppLanguage.tr('User.profile.register'),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF8938DF),
                 ),
               ),
             ),

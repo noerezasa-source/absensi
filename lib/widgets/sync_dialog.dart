@@ -53,10 +53,7 @@ class _SyncDialogState extends State<_SyncDialog> {
             // Title
             const Text(
               'Sinkronisasi Data',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
 
@@ -90,16 +87,15 @@ class _SyncDialogState extends State<_SyncDialog> {
                   LinearProgressIndicator(
                     value: _total > 0 ? _progress / _total : null,
                     backgroundColor: Colors.grey.shade200,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Colors.blue,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     _message,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade700,
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
                   ),
                 ],
               ),
@@ -155,10 +151,7 @@ class _SyncDialogState extends State<_SyncDialog> {
       children: [
         Text(
           label,
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.grey.shade700,
-          ),
+          style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
         ),
         Text(
           value,
@@ -196,7 +189,7 @@ class _SyncDialogState extends State<_SyncDialog> {
 
       if (mounted) {
         Navigator.of(context).pop();
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(result.message),

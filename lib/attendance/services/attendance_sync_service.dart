@@ -11,7 +11,8 @@ import 'attendance_service.dart';
 import '../../services/supabase_storage_service.dart';
 
 class AttendanceSyncService {
-  static final AttendanceSyncService _instance = AttendanceSyncService._internal();
+  static final AttendanceSyncService _instance =
+      AttendanceSyncService._internal();
   factory AttendanceSyncService() => _instance;
   AttendanceSyncService._internal();
 
@@ -19,11 +20,11 @@ class AttendanceSyncService {
   final AttendanceService _attendanceService = AttendanceService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
   final SupabaseClient _supabase = Supabase.instance.client;
-  
+
   Timer? _autoSyncTimer;
   StreamSubscription<ConnectivityResult>? _connectivitySubscription;
   bool _isSyncing = false;
-  
+
   final _syncStatusController = StreamController<SyncStatus>.broadcast();
   Stream<SyncStatus> get syncStatusStream => _syncStatusController.stream;
 
@@ -40,7 +41,9 @@ class AttendanceSyncService {
     _triggerSync(reason: 'startup');
 
     // Listen to connectivity so the queue ships immediately after back online
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((result) {
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+      result,
+    ) {
       if (result != ConnectivityResult.none) {
         _triggerSync(reason: 'connectivity');
       }
@@ -61,11 +64,11 @@ class AttendanceSyncService {
       if (connectivityResult == ConnectivityResult.none) {
         return false;
       }
-      
+
       // Additional check: try to reach Supabase
-      final result = await InternetAddress.lookup('supabase.co').timeout(
-        const Duration(seconds: 3),
-      );
+      final result = await InternetAddress.lookup(
+        'supabase.co',
+      ).timeout(const Duration(seconds: 3));
       return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
     } catch (e) {
       debugPrint('Connectivity check failed: $e');
@@ -104,16 +107,14 @@ class AttendanceSyncService {
     }
 
     _isSyncing = true;
-    _syncStatusController.add(SyncStatus(
-      isLoading: true,
-      message: 'Syncing pending attendances...',
-    ));
-    
+    _syncStatusController.add(
+      SyncStatus(isLoading: true, message: 'Syncing pending attendances...'),
+    );
+
     if (showProgress) {
-      _syncStatusController.add(SyncStatus(
-        isLoading: true,
-        message: 'Checking connectivity...',
-      ));
+      _syncStatusController.add(
+        SyncStatus(isLoading: true, message: 'Checking connectivity...'),
+      );
     }
 
     try {
@@ -121,11 +122,13 @@ class AttendanceSyncService {
       final isOnline = await _checkConnectivity();
       if (!isOnline) {
         if (showProgress) {
-          _syncStatusController.add(SyncStatus(
-            isLoading: false,
-            message: 'No internet connection',
-            isError: true,
-          ));
+          _syncStatusController.add(
+            SyncStatus(
+              isLoading: false,
+              message: 'No internet connection',
+              isError: true,
+            ),
+          );
         }
         return SyncResult(
           success: false,
@@ -137,21 +140,20 @@ class AttendanceSyncService {
 
       // ✅ Auto-Cleanup: Prune old records (older than 7 days)
       await _offlineDb.pruneOldRecords(days: 7);
-      
+
       // Clean up duplicate records first
       await cleanupDuplicateRecords();
-      
+
       // Get unsynced records
       final unsyncedRecords = await _offlineDb.getUnsyncedAttendances();
-      
+
       debugPrint('📊 Found ${unsyncedRecords.length} unsynced records');
-      
+
       if (unsyncedRecords.isEmpty) {
         if (showProgress) {
-          _syncStatusController.add(SyncStatus(
-            isLoading: false,
-            message: 'No pending data to sync',
-          ));
+          _syncStatusController.add(
+            SyncStatus(isLoading: false, message: 'No pending data to sync'),
+          );
         }
         return SyncResult(
           success: true,
@@ -162,12 +164,14 @@ class AttendanceSyncService {
       }
 
       if (showProgress) {
-        _syncStatusController.add(SyncStatus(
-          isLoading: true,
-          message: 'Syncing ${unsyncedRecords.length} records...',
-          progress: 0,
-          total: unsyncedRecords.length,
-        ));
+        _syncStatusController.add(
+          SyncStatus(
+            isLoading: true,
+            message: 'Syncing ${unsyncedRecords.length} records...',
+            progress: 0,
+            total: unsyncedRecords.length,
+          ),
+        );
       }
 
       int syncedCount = 0;
@@ -176,53 +180,62 @@ class AttendanceSyncService {
 
       for (int i = 0; i < unsyncedRecords.length; i++) {
         final record = unsyncedRecords[i];
-        
-        debugPrint('🔄 [${i + 1}/${unsyncedRecords.length}] Syncing record ID: ${record.id}, Method: ${record.method}');
-        
+
+        debugPrint(
+          '🔄 [${i + 1}/${unsyncedRecords.length}] Syncing record ID: ${record.id}, Method: ${record.method}',
+        );
+
         try {
           await _syncSingleRecord(record);
           syncedCount++;
-          
+
           await _offlineDb.updateSyncStatus(
             id: record.id!,
             isSynced: true,
             syncError: null,
           );
-          
+
           await _offlineDb.deleteAttendance(record.id!);
-          
+
           if (showProgress) {
-            _syncStatusController.add(SyncStatus(
-              isLoading: true,
-              message: 'Syncing... ($syncedCount/${unsyncedRecords.length})',
-              progress: i + 1,
-              total: unsyncedRecords.length,
-            ));
+            _syncStatusController.add(
+              SyncStatus(
+                isLoading: true,
+                message: 'Syncing... ($syncedCount/${unsyncedRecords.length})',
+                progress: i + 1,
+                total: unsyncedRecords.length,
+              ),
+            );
           }
         } catch (e) {
           final errorMessage = e.toString();
-          
+
           // ⚠️ Logika Penanganan Error:
           // 1. Duplicate: Data sudah ada di server (hapus dari HP)
           // 2. Fatal: Kesalahan logika seperti "No check-in found" (tandai sukses tapi simpan error, agar tidak di-retry)
-          
-          final isDuplicate = errorMessage.contains('Already checked') || 
-                             errorMessage.contains('already') ||
-                             errorMessage.toLowerCase().contains('duplicate');
-                             
-          final isFatal = errorMessage.contains('No check-in record found') ||
-                         errorMessage.contains('No-Check-In');
+
+          final isDuplicate =
+              errorMessage.contains('Already checked') ||
+              errorMessage.contains('already') ||
+              errorMessage.toLowerCase().contains('duplicate');
+
+          final isFatal =
+              errorMessage.contains('No check-in record found') ||
+              errorMessage.contains('No-Check-In');
 
           if (isDuplicate || isFatal) {
-            debugPrint('⚠️ ${isFatal ? "FATAL" : "DUPLICATE"} record ${record.id}: $errorMessage');
+            debugPrint(
+              '⚠️ ${isFatal ? "FATAL" : "DUPLICATE"} record ${record.id}: $errorMessage',
+            );
             try {
               // Jika fatal/duplicate, kita tandai is_synced=1 agar SELESAI (tidak di-retry)
               await _offlineDb.updateSyncStatus(
                 id: record.id!,
                 isSynced: true,
-                syncError: '${isFatal ? "FATAL: " : "Duplicate: "}$errorMessage',
+                syncError:
+                    '${isFatal ? "FATAL: " : "Duplicate: "}$errorMessage',
               );
-              
+
               if (isDuplicate) {
                 await _offlineDb.deleteAttendance(record.id!);
               }
@@ -235,7 +248,7 @@ class AttendanceSyncService {
             failedCount++;
             errors.add('Failed: ${record.userName ?? record.cardNumber} - $e');
             debugPrint('❌ Sync failed for record ${record.id}: $e');
-            
+
             await _offlineDb.updateSyncStatus(
               id: record.id!,
               isSynced: false,
@@ -255,11 +268,13 @@ class AttendanceSyncService {
           : 'All syncs failed';
 
       if (showProgress) {
-        _syncStatusController.add(SyncStatus(
-          isLoading: false,
-          message: summaryMessage,
-          isError: failedCount > 0,
-        ));
+        _syncStatusController.add(
+          SyncStatus(
+            isLoading: false,
+            message: summaryMessage,
+            isError: failedCount > 0,
+          ),
+        );
       }
 
       return SyncResult(
@@ -272,11 +287,9 @@ class AttendanceSyncService {
     } catch (e) {
       debugPrint('General sync error: $e');
       if (showProgress) {
-        _syncStatusController.add(SyncStatus(
-          isLoading: false,
-          message: 'Error: $e',
-          isError: true,
-        ));
+        _syncStatusController.add(
+          SyncStatus(isLoading: false, message: 'Error: $e', isError: true),
+        );
       }
       return SyncResult(
         success: false,
@@ -286,17 +299,16 @@ class AttendanceSyncService {
       );
     } finally {
       _isSyncing = false;
-      _syncStatusController.add(SyncStatus(
-        isLoading: false,
-        message: 'Sync finished',
-      ));
+      _syncStatusController.add(
+        SyncStatus(isLoading: false, message: 'Sync finished'),
+      );
     }
   }
 
   // Sync single record
   Future<void> _syncSingleRecord(OfflineAttendance record) async {
     int memberId;
-    
+
     // For RFID: Find member by card number
     if (record.method == 'rfid_card_mobile') {
       final cardData = await _supabase
@@ -312,46 +324,52 @@ class AttendanceSyncService {
           .eq('card_number', record.cardNumber)
           .eq('is_active', true)
           .maybeSingle();
-      
+
       if (cardData == null) {
-        debugPrint('🗑️ Card ${record.cardNumber} not found in server, deleting offline record ${record.id}');
+        debugPrint(
+          '🗑️ Card ${record.cardNumber} not found in server, deleting offline record ${record.id}',
+        );
         await _offlineDb.deleteAttendance(record.id!);
         throw Exception('RFID card not found: ${record.cardNumber}');
       }
-      
+
       memberId = cardData['organization_member_id'] as int;
-      
+
       // Update cache with latest member data
       await _offlineDb.cacheMemberData(cardData);
-      
+
       // Update the record with latest member info
-      final memberInfo = cardData['organization_members'] as Map<String, dynamic>?;
+      final memberInfo =
+          cardData['organization_members'] as Map<String, dynamic>?;
       if (memberInfo != null) {
         final profile = memberInfo['user_profiles'] as Map<String, dynamic>?;
         if (profile != null) {
           final displayName = profile['display_name'] as String?;
           final firstName = profile['first_name'] as String?;
           final lastName = profile['last_name'] as String?;
-          final userName = (displayName?.isNotEmpty == true) 
-              ? displayName 
+          final userName = (displayName?.isNotEmpty == true)
+              ? displayName
               : '$firstName $lastName'.trim();
-          
+
           if (userName?.isNotEmpty == true) {
             await _offlineDb.updateAttendanceUserName(record.id!, userName!);
           }
         }
       }
-    } 
+    }
     // For Face Recognition: Use stored member ID (or derive from FACE_{id}) and update member data
-    else if (record.method == 'FACERECOGNITION' || record.method == 'face_recognition') {
+    else if (record.method == 'FACERECOGNITION' ||
+        record.method == 'face_recognition') {
       if (record.organizationMemberId != null) {
         memberId = record.organizationMemberId!;
       } else {
         memberId = _extractMemberIdFromFaceCard(record.cardNumber);
       }
-      
-      debugPrint('🔄 Syncing face recognition attendance for member ID: $memberId');
-      
+
+      debugPrint(
+        '🔄 Syncing face recognition attendance for member ID: $memberId',
+      );
+
       // Fetch latest member data and update cache
       try {
         final memberData = await _supabase
@@ -364,13 +382,15 @@ class AttendanceSyncService {
             .eq('id', memberId)
             .eq('is_active', true)
             .maybeSingle();
-        
+
         if (memberData == null) {
-          throw Exception('Organization member not found or inactive: $memberId');
+          throw Exception(
+            'Organization member not found or inactive: $memberId',
+          );
         }
-        
+
         debugPrint('✅ Found member data for ID: $memberId');
-        
+
         // Create card-like structure for caching (skip if card_number is null to avoid cache errors)
         try {
           final cardData = {
@@ -379,24 +399,26 @@ class AttendanceSyncService {
             'organization_member_id': memberId,
             'organization_members': memberData,
           };
-          
+
           await _offlineDb.cacheMemberData(cardData);
           debugPrint('✅ Cached member data for face recognition');
         } catch (cacheError) {
-          debugPrint('⚠️ Failed to cache member data (non-critical): $cacheError');
+          debugPrint(
+            '⚠️ Failed to cache member data (non-critical): $cacheError',
+          );
           // Continue even if cache fails
         }
-        
+
         // Update the record with latest member info
         final profile = memberData['user_profiles'] as Map<String, dynamic>?;
         if (profile != null) {
           final displayName = profile['display_name'] as String?;
           final firstName = profile['first_name'] as String?;
           final lastName = profile['last_name'] as String?;
-          final userName = (displayName?.isNotEmpty == true) 
-              ? displayName 
+          final userName = (displayName?.isNotEmpty == true)
+              ? displayName
               : '$firstName $lastName'.trim();
-          
+
           if (userName != null && userName.isNotEmpty) {
             await _offlineDb.updateAttendanceUserName(record.id!, userName);
             debugPrint('✅ Updated attendance user name: $userName');
@@ -409,7 +431,9 @@ class AttendanceSyncService {
         rethrow;
       }
     } else {
-      throw Exception('Cannot determine organization member ID. Method: ${record.method}, CardNumber: ${record.cardNumber}');
+      throw Exception(
+        'Cannot determine organization member ID. Method: ${record.method}, CardNumber: ${record.cardNumber}',
+      );
     }
 
     // Upload photo if exists (use saved file or base64 fallback)
@@ -427,11 +451,14 @@ class AttendanceSyncService {
       // Fallback to captured base64 if no file available
       if (photoFile == null && record.capturedPhotoBase64?.isNotEmpty == true) {
         final bytes = base64Decode(record.capturedPhotoBase64!);
-        final tempPath = '${Directory.systemTemp.path}/offline_face_${record.id ?? DateTime.now().millisecondsSinceEpoch}.jpg';
+        final tempPath =
+            '${Directory.systemTemp.path}/offline_face_${record.id ?? DateTime.now().millisecondsSinceEpoch}.jpg';
         tempPhotoFile = File(tempPath);
         await tempPhotoFile.writeAsBytes(bytes, flush: true);
         photoFile = tempPhotoFile;
-        debugPrint('🗂️ Recreated photo from base64 for member $memberId at $tempPath');
+        debugPrint(
+          '🗂️ Recreated photo from base64 for member $memberId at $tempPath',
+        );
       }
 
       if (photoFile != null) {
@@ -444,7 +471,9 @@ class AttendanceSyncService {
           );
           debugPrint('✅ Photo uploaded successfully: $photoUrl');
         } catch (e) {
-          debugPrint('⚠️ Failed to upload photo (continuing without photo): $e');
+          debugPrint(
+            '⚠️ Failed to upload photo (continuing without photo): $e',
+          );
         }
       } else {
         debugPrint('ℹ️ No photo available for member $memberId');
@@ -475,12 +504,13 @@ class AttendanceSyncService {
     };
 
     // Try to parse encoded shift details
-    if (record.workTimeMode != null && record.workTimeMode!.trim().startsWith('{')) {
+    if (record.workTimeMode != null &&
+        record.workTimeMode!.trim().startsWith('{')) {
       try {
         final parsed = jsonDecode(record.workTimeMode!) as Map<String, dynamic>;
         rawData['shift_details'] = parsed;
         if (parsed.containsKey('mode_code')) {
-           rawData['work_time_mode'] = parsed['mode_code'];
+          rawData['work_time_mode'] = parsed['mode_code'];
         }
       } catch (e) {
         debugPrint('⚠️ Failed to parse workTimeMode JSON: $e');
@@ -490,12 +520,15 @@ class AttendanceSyncService {
     if (record.method == 'rfid_card_mobile') {
       rawData['card_number'] = record.cardNumber;
     }
-    if (record.method == 'FACERECOGNITION' || record.method == 'face_recognition') {
+    if (record.method == 'FACERECOGNITION' ||
+        record.method == 'face_recognition') {
       rawData['face_recognition'] = true;
     }
 
     // Sync to Supabase
-    debugPrint('🔄 Syncing ${record.eventType} to Supabase for member $memberId...');
+    debugPrint(
+      '🔄 Syncing ${record.eventType} to Supabase for member $memberId...',
+    );
     try {
       if (record.eventType == 'check_in') {
         await _attendanceService.checkIn(
@@ -506,7 +539,7 @@ class AttendanceSyncService {
           rawData: rawData,
         );
         debugPrint('✅ Successfully synced check_in for member $memberId');
-      } else {
+      } else if (record.eventType == 'check_out') {
         await _attendanceService.checkOut(
           organizationMemberId: memberId,
           photoUrl: photoUrl,
@@ -515,6 +548,30 @@ class AttendanceSyncService {
           rawData: rawData,
         );
         debugPrint('✅ Successfully synced check_out for member $memberId');
+      } else if (record.eventType == 'break_out' ||
+          record.eventType == 'break_start') {
+        await _attendanceService.breakOut(
+          organizationMemberId: memberId,
+          photoUrl: photoUrl,
+          method: record.method,
+          location: locationData,
+          rawData: rawData,
+        );
+        debugPrint(
+          '✅ Successfully synced ${record.eventType} (break_start) for member $memberId',
+        );
+      } else if (record.eventType == 'break_in' ||
+          record.eventType == 'break_end') {
+        await _attendanceService.breakIn(
+          organizationMemberId: memberId,
+          photoUrl: photoUrl,
+          method: record.method,
+          location: locationData,
+          rawData: rawData,
+        );
+        debugPrint(
+          '✅ Successfully synced ${record.eventType} (break_end) for member $memberId',
+        );
       }
     } catch (e) {
       debugPrint('❌ Error syncing attendance to Supabase: $e');
@@ -545,8 +602,10 @@ class AttendanceSyncService {
     final unsyncedCount = await _offlineDb.getUnsyncedCount();
     final allRecords = await _offlineDb.getAllAttendances();
     final syncedCount = allRecords.where((r) => r.isSynced).length;
-    final failedCount = allRecords.where((r) => !r.isSynced && r.syncError != null).length;
-    
+    final failedCount = allRecords
+        .where((r) => !r.isSynced && r.syncError != null)
+        .length;
+
     return {
       'total': allRecords.length,
       'synced': syncedCount,

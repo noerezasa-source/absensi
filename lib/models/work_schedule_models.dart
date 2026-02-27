@@ -40,10 +40,11 @@ class WorkSchedule {
 class WorkScheduleDetail {
   final int id;
   final int workScheduleId;
-  final int dayOfWeek; // 0=Sunday, 1=Monday, ... depending on DB convention (Postgres usually 0-6 or 1-7 check SQL) -> User SQL says 0-6
+  final int
+  dayOfWeek; // 0=Sunday, 1=Monday, ... depending on DB convention (Postgres usually 0-6 or 1-7 check SQL) -> User SQL says 0-6
   final bool isWorkingDay;
   final String? startTime; // HH:mm:ss
-  final String? endTime;   // HH:mm:ss
+  final String? endTime; // HH:mm:ss
   final String? breakStart;
   final String? breakEnd;
   final int? breakDurationMinutes;
@@ -76,8 +77,10 @@ class WorkScheduleDetail {
       breakEnd: json['break_end'],
       breakDurationMinutes: json['break_duration_minutes'],
       flexibleHours: json['flexible_hours'] ?? false,
-      minimumHours: json['minimum_hours'] != null 
-          ? (json['minimum_hours'] is int ? (json['minimum_hours'] as int).toDouble() : json['minimum_hours']) 
+      minimumHours: json['minimum_hours'] != null
+          ? (json['minimum_hours'] is int
+                ? (json['minimum_hours'] as int).toDouble()
+                : json['minimum_hours'])
           : null,
     );
   }
@@ -95,6 +98,8 @@ class Shift {
   final int? breakDurationMinutes;
   final String? colorCode;
   final bool isActive;
+  final String? breakStart;
+  final String? breakEnd;
 
   Shift({
     required this.id,
@@ -108,6 +113,8 @@ class Shift {
     this.breakDurationMinutes,
     this.colorCode,
     this.isActive = true,
+    this.breakStart,
+    this.breakEnd,
   });
 
   factory Shift.fromJson(Map<String, dynamic> json) {
@@ -123,6 +130,8 @@ class Shift {
       breakDurationMinutes: json['break_duration_minutes'],
       colorCode: json['color_code'],
       isActive: json['is_active'] ?? true,
+      breakStart: json['break_start'],
+      breakEnd: json['break_end'],
     );
   }
 }
@@ -187,23 +196,28 @@ class DailySchedule {
   final bool isWorkingDay;
   final String? startTime;
   final String? endTime;
-  final String source; // 'shift_assignment', 'member_shift', 'work_schedule', 'default', 'none'
+  final String? breakStart;
+  final String? breakEnd;
+  final String
+  source; // 'shift_assignment', 'member_shift', 'work_schedule', 'default', 'none'
   final String? scheduleName;
-  final int? shiftId;          // If derived from a Shift
-  final int? workScheduleId;   // If derived from a WorkSchedule (and detail)
+  final int? shiftId; // If derived from a Shift
+  final int? workScheduleId; // If derived from a WorkSchedule (and detail)
   final bool isOvernight;
 
   DailySchedule({
     this.isWorkingDay = true,
     this.startTime,
     this.endTime,
+    this.breakStart,
+    this.breakEnd,
     required this.source,
     this.scheduleName,
     this.shiftId,
     this.workScheduleId,
     this.isOvernight = false,
   });
-  
+
   // Factory for "No Schedule"
   factory DailySchedule.unscheduled() {
     return DailySchedule(

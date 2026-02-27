@@ -24,5 +24,7 @@
     "failed_count": "Failed",
     "start_sync": "Start Sync",
     "close": "Close",
-    "member": "Member"
+    "member": "Member",
+    "break_in": "Break In",
+    "break_out": "Break Out"
 }

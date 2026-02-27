@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../helpers/language_helper.dart';
 import 'package:intl/intl.dart';
 import '../../services/camera_service.dart';
@@ -10,6 +11,7 @@ import 'member_selection_page.dart';
 import 'device_selection_screen.dart';
 import '../../services/supabase_storage_service.dart';
 import '../../models/attendance_model.dart';
+import '../../helpers/timezone_helper.dart';
 
 class SelfieAttendanceFlowPage extends StatefulWidget {
   final int organizationId;
@@ -52,6 +54,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
     Map<String, dynamic>? selectedMember;
     Map<String, dynamic>? selectedShift;
     Map<String, dynamic>? locationData;
+    String? selectedAction;
     String? photoPath;
 
     try {
@@ -64,37 +67,42 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
           }
 
           if (selectedMember == null) {
-            // Exit entirely to dashboard
             Navigator.pop(context);
             return;
           }
-          currentStep = 2; // Move to Shift Selection
-        } else if (currentStep == 2) {
-          currentStep = 3; // Move to Location & Shift Selection
+          currentStep = 3;
         } else if (currentStep == 3) {
           final selection = await _selectLocation(selectedMember!['id']);
           if (selection == null) {
-            // Exit entirely
             Navigator.pop(context);
             return;
           }
           locationData = selection;
           selectedShift = selection['selectedShift'];
-          currentStep = 4; // Move to Take Selfie
+
+          selectedAction = await _selectAction(
+            selectedMember['id'],
+            selectedShift: selectedShift,
+          );
+
+          if (selectedAction == null) {
+            continue;
+          }
+          currentStep = 4;
         } else if (currentStep == 4) {
           photoPath = await _takeSelfie();
           if (photoPath == null) {
-            // Go back to step 3
             currentStep = 3;
             continue;
           }
-          currentStep = 5; // Move to Submit
+          currentStep = 5;
         } else if (currentStep == 5) {
           await _submitSelfieAttendance(
             member: selectedMember!,
             locationData: locationData!,
             photoPath: photoPath!,
             selectedShift: selectedShift,
+            selectedAction: selectedAction!,
           );
 
           if (mounted) {
@@ -115,6 +123,197 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
         Navigator.pop(context);
       }
     }
+  }
+
+  Future<String?> _selectAction(
+    int memberId, {
+    Map<String, dynamic>? selectedShift,
+  }) async {
+    final todayAttendance = await _attendanceService.getTodayAttendance(
+      memberId,
+      organizationTimezone: 'Asia/Jakarta',
+    );
+
+    final schedule = await _attendanceService.getTodaySchedule(
+      memberId,
+      organizationTimezone: 'Asia/Jakarta',
+    );
+
+    String? autoAction;
+    bool canBreakOut = false;
+    bool canBreakIn = false;
+    String breakHint = 'Mencari jadwal...';
+
+    final now = TimezoneHelper.convertUtcToOrgTimezone(
+      DateTime.now().toUtc(),
+      'Asia/Jakarta',
+    );
+    final currentTime = TimeOfDay.fromDateTime(now);
+    final currentMin = currentTime.hour * 60 + currentTime.minute;
+
+    String? effectiveBreakStart;
+    String? effectiveBreakEnd;
+
+    if (selectedShift != null &&
+        selectedShift['break_start'] != null &&
+        selectedShift['break_end'] != null) {
+      effectiveBreakStart = selectedShift['break_start'];
+      effectiveBreakEnd = selectedShift['break_end'];
+    } else if (schedule.breakStart != null && schedule.breakEnd != null) {
+      effectiveBreakStart = schedule.breakStart;
+      effectiveBreakEnd = schedule.breakEnd;
+    } else {
+      try {
+        final dbDayOfWeek = now.weekday % 7;
+
+        final shiftsRes = await Supabase.instance.client
+            .from('shifts')
+            .select('break_start, break_end')
+            .eq('organization_id', widget.organizationId)
+            .eq('is_active', true);
+
+        for (final shift in shiftsRes) {
+          final bStartStr = shift['break_start'] as String?;
+          final bEndStr = shift['break_end'] as String?;
+          if (bStartStr != null && bEndStr != null) {
+            final bStart = _parseBreakTime(bStartStr);
+            final bEnd = _parseBreakTime(bEndStr);
+            if (bStart != null && bEnd != null) {
+              final startMin = bStart.hour * 60 + bStart.minute;
+              final endMin = bEnd.hour * 60 + bEnd.minute;
+              const windowMin = 30;
+
+              if (currentMin >= (startMin - windowMin) &&
+                  currentMin <= (endMin + windowMin)) {
+                effectiveBreakStart = bStartStr;
+                effectiveBreakEnd = bEndStr;
+                break;
+              }
+            }
+          }
+        }
+
+        if (effectiveBreakStart == null) {
+          final schedulesRes = await Supabase.instance.client
+              .from('work_schedules')
+              .select('id, name')
+              .eq('organization_id', widget.organizationId)
+              .eq('is_active', true);
+
+          final scheduleIds = (schedulesRes as List)
+              .map((s) => s['id'] as int)
+              .toList();
+
+          if (scheduleIds.isNotEmpty) {
+            final detailsRes = await Supabase.instance.client
+                .from('work_schedule_details')
+                .select('break_start, break_end, work_schedule_id')
+                .filter('work_schedule_id', 'in', '(${scheduleIds.join(',')})')
+                .eq('day_of_week', dbDayOfWeek);
+
+            for (final detail in detailsRes) {
+              final bStartStr = detail['break_start'] as String?;
+              final bEndStr = detail['break_end'] as String?;
+              if (bStartStr != null && bEndStr != null) {
+                final bStart = _parseBreakTime(bStartStr);
+                final bEnd = _parseBreakTime(bEndStr);
+                if (bStart != null && bEnd != null) {
+                  final startMin = bStart.hour * 60 + bStart.minute;
+                  final endMin = bEnd.hour * 60 + bEnd.minute;
+                  const windowMin = 30;
+
+                  if (currentMin >= (startMin - windowMin) &&
+                      currentMin <= (endMin + windowMin)) {
+                    effectiveBreakStart = bStartStr;
+                    effectiveBreakEnd = bEndStr;
+                    break;
+                  }
+                }
+              }
+            }
+            if (effectiveBreakStart == null && detailsRes.isNotEmpty) {
+              breakHint = 'Jam istirahat di luar jendela waktu.';
+            }
+          }
+        }
+      } catch (e) {
+        breakHint = 'Gagal memuat jadwal';
+      }
+    }
+
+    if (effectiveBreakStart != null && effectiveBreakEnd != null) {
+      final bStart = _parseBreakTime(effectiveBreakStart);
+      final bEnd = _parseBreakTime(effectiveBreakEnd);
+
+      if (bStart != null && bEnd != null) {
+        final startMin = bStart.hour * 60 + bStart.minute;
+        final endMin = bEnd.hour * 60 + bEnd.minute;
+        const windowMin = 30;
+
+        canBreakOut =
+            currentMin >= (startMin - windowMin) &&
+            currentMin <= (endMin + windowMin);
+        canBreakIn =
+            currentMin >= (startMin - windowMin) &&
+            currentMin <= (endMin + windowMin);
+
+        if (canBreakOut) {
+          breakHint =
+              'Istirahat tersedia ($effectiveBreakStart - $effectiveBreakEnd)';
+        } else {
+          breakHint =
+              'Jadwal istirahat: $effectiveBreakStart - $effectiveBreakEnd';
+        }
+      }
+    } else if (breakHint.startsWith('Mencari')) {
+      breakHint = 'Tidak ada jadwal istirahat aktif.';
+    }
+
+    if (todayAttendance == null || todayAttendance.actualCheckIn == null) {
+      autoAction = 'check_in';
+      if (canBreakOut || canBreakIn) {
+        breakHint =
+            'Silakan Masuk terlebih dulu. Jam istirahat: $effectiveBreakStart - $effectiveBreakEnd';
+      }
+    } else {
+      if (canBreakOut) {
+        if (todayAttendance.actualBreakStart == null) {
+          autoAction = 'break_start';
+        } else if (todayAttendance.actualBreakEnd == null) {
+          autoAction = 'break_end';
+        } else {
+          autoAction = 'check_out';
+        }
+      } else {
+        autoAction = 'check_out';
+      }
+    }
+
+    if (!mounted) return null;
+
+    return await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ActionSelectionBottomSheet(
+        autoAction: autoAction,
+        canBreakOut: canBreakOut,
+        canBreakIn: canBreakIn,
+        breakHint: breakHint,
+      ),
+    );
+  }
+
+  TimeOfDay? _parseBreakTime(String timeStr) {
+    try {
+      final parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        return TimeOfDay(
+          hour: int.parse(parts[0]),
+          minute: int.parse(parts[1]),
+        );
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<Map<String, dynamic>?> _selectMember() async {
@@ -177,6 +376,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
     required Map<String, dynamic> member,
     required Map<String, dynamic> locationData,
     required String photoPath,
+    required String selectedAction,
     Map<String, dynamic>? selectedShift,
   }) async {
     if (_isProcessing) return;
@@ -207,7 +407,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
                     const SizedBox(height: 16),
                     Text(
                       AppLanguage.tr('attendance.selfie.submitting'),
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w500,
                       ),
@@ -238,54 +438,78 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
         if (locationData['reason'] != null) 'reason': locationData['reason'],
       };
 
-      // 3. Determine check-in or check-out
-      final todayAttendance = await _attendanceService.getTodayAttendance(
-        member['id'] as int,
-        organizationTimezone: 'Asia/Jakarta',
-      );
+      final memberId = member['id'] as int;
+      final rawData = {
+        if (selectedShift != null) 'selected_shift_id': selectedShift['id'],
+        if (selectedShift != null) 'selected_shift_name': selectedShift['name'],
+      };
 
-      final isCheckOut =
-          todayAttendance != null && todayAttendance.actualCheckIn != null;
-
-      // 4. Submit attendance
-      if (isCheckOut) {
-        await _attendanceService.checkOut(
-          organizationMemberId: member['id'] as int,
-          photoUrl: photoUrl,
-          method: 'selfie',
-          organizationTimezone: 'Asia/Jakarta',
-          location: location,
-          deviceId: locationData['type'] == 'device'
-              ? int.tryParse(
-                  (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
-                      '',
-                )
-              : null,
-          rawData: {
-            if (selectedShift != null) 'selected_shift_id': selectedShift['id'],
-            if (selectedShift != null)
-              'selected_shift_name': selectedShift['name'],
-          },
-        );
-      } else {
-        await _attendanceService.checkIn(
-          organizationMemberId: member['id'] as int,
-          photoUrl: photoUrl,
-          method: 'selfie',
-          organizationTimezone: 'Asia/Jakarta',
-          location: location,
-          deviceId: locationData['type'] == 'device'
-              ? int.tryParse(
-                  (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
-                      '',
-                )
-              : null,
-          rawData: {
-            if (selectedShift != null) 'selected_shift_id': selectedShift['id'],
-            if (selectedShift != null)
-              'selected_shift_name': selectedShift['name'],
-          },
-        );
+      // 3. Submit attendance based on selected action
+      switch (selectedAction) {
+        case 'check_in':
+          await _attendanceService.checkIn(
+            organizationMemberId: memberId,
+            photoUrl: photoUrl,
+            method: 'selfie',
+            organizationTimezone: 'Asia/Jakarta',
+            location: location,
+            deviceId: locationData['type'] == 'device'
+                ? int.tryParse(
+                    (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
+                        '',
+                  )
+                : null,
+            rawData: rawData,
+          );
+          break;
+        case 'check_out':
+          await _attendanceService.checkOut(
+            organizationMemberId: memberId,
+            photoUrl: photoUrl,
+            method: 'selfie',
+            organizationTimezone: 'Asia/Jakarta',
+            location: location,
+            deviceId: locationData['type'] == 'device'
+                ? int.tryParse(
+                    (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
+                        '',
+                  )
+                : null,
+            rawData: rawData,
+          );
+          break;
+        case 'break_start':
+          await _attendanceService.breakOut(
+            organizationMemberId: memberId,
+            photoUrl: photoUrl,
+            method: 'selfie',
+            organizationTimezone: 'Asia/Jakarta',
+            location: location,
+            deviceId: locationData['type'] == 'device'
+                ? int.tryParse(
+                    (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
+                        '',
+                  )
+                : null,
+            rawData: rawData,
+          );
+          break;
+        case 'break_end':
+          await _attendanceService.breakIn(
+            organizationMemberId: memberId,
+            photoUrl: photoUrl,
+            method: 'selfie',
+            organizationTimezone: 'Asia/Jakarta',
+            location: location,
+            deviceId: locationData['type'] == 'device'
+                ? int.tryParse(
+                    (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
+                        '',
+                  )
+                : null,
+            rawData: rawData,
+          );
+          break;
       }
 
       // Close loading dialog
@@ -305,6 +529,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
           shiftName:
               selectedShift?['name'] ??
               AppLanguage.tr('attendance.selfie.non_scheduled'),
+          action: selectedAction,
         );
       }
     } catch (e) {
@@ -331,6 +556,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
     required String photoPath,
     required String locationName,
     required String time,
+    required String action,
     String? memberName,
     String? shiftName,
   }) async {
@@ -439,6 +665,12 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
                         label: AppLanguage.tr('attendance.selfie.location'),
                         value: locationName,
                       ),
+                      const SizedBox(height: 12),
+                      _buildInfoRow(
+                        icon: Icons.info_outline_rounded,
+                        label: AppLanguage.tr('attendance.selfie.action'),
+                        value: _getActionDisplayName(action),
+                      ),
                     ],
                   ),
                 ),
@@ -458,6 +690,21 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
     });
 
     return dialogFuture;
+  }
+
+  String _getActionDisplayName(String action) {
+    switch (action) {
+      case 'check_in':
+        return AppLanguage.tr('attendance.selfie.in');
+      case 'check_out':
+        return AppLanguage.tr('attendance.selfie.out');
+      case 'break_start':
+        return AppLanguage.tr('attendance.selfie.break_in');
+      case 'break_end':
+        return AppLanguage.tr('attendance.selfie.break_out');
+      default:
+        return action.toUpperCase();
+    }
   }
 
   Widget _buildInfoRow({
@@ -574,6 +821,161 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class ActionSelectionBottomSheet extends StatelessWidget {
+  final String? autoAction;
+  final bool canBreakOut;
+  final bool canBreakIn;
+  final String? breakHint;
+
+  const ActionSelectionBottomSheet({
+    super.key,
+    this.autoAction,
+    this.canBreakOut = true,
+    this.canBreakIn = true,
+    this.breakHint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: const BoxDecoration(
+        color: Color(0xFF1F2937),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () => Navigator.pop(context, 'check_in'),
+                  child: Text(
+                    AppLanguage.tr('attendance.selfie.in'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () => Navigator.pop(context, 'check_out'),
+                  child: Text(
+                    AppLanguage.tr('attendance.selfie.out'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.white.withOpacity(0.1),
+                    disabledForegroundColor: Colors.white.withOpacity(0.5),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: canBreakOut
+                      ? () => Navigator.pop(context, 'break_start')
+                      : null,
+                  child: Text(
+                    AppLanguage.tr('attendance.selfie.break_in'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.white.withOpacity(0.1),
+                    disabledForegroundColor: Colors.white.withOpacity(0.5),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: canBreakIn
+                      ? () => Navigator.pop(context, 'break_end')
+                      : null,
+                  child: Text(
+                    AppLanguage.tr('attendance.selfie.break_out'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (breakHint != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                breakHint!,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.orange.shade700,
+                  fontStyle: FontStyle.italic,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          const SizedBox(height: 12),
+        ],
       ),
     );
   }

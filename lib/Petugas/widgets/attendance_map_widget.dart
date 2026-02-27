@@ -60,8 +60,14 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
   }
 
   // Public methods to allow external control if needed
-  void zoomIn() => _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1);
-  void zoomOut() => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1);
+  void zoomIn() => _mapController.move(
+    _mapController.camera.center,
+    _mapController.camera.zoom + 1,
+  );
+  void zoomOut() => _mapController.move(
+    _mapController.camera.center,
+    _mapController.camera.zoom - 1,
+  );
   void recenter() => _fitBounds();
 
   void _fitBounds() {
@@ -70,12 +76,24 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
     if (widget.userPosition != null && widget.officePosition != null) {
       final bounds = LatLngBounds(
         LatLng(
-          math.min(widget.userPosition!.latitude, widget.officePosition!.latitude),
-          math.min(widget.userPosition!.longitude, widget.officePosition!.longitude),
+          math.min(
+            widget.userPosition!.latitude,
+            widget.officePosition!.latitude,
+          ),
+          math.min(
+            widget.userPosition!.longitude,
+            widget.officePosition!.longitude,
+          ),
         ),
         LatLng(
-          math.max(widget.userPosition!.latitude, widget.officePosition!.latitude),
-          math.max(widget.userPosition!.longitude, widget.officePosition!.longitude),
+          math.max(
+            widget.userPosition!.latitude,
+            widget.officePosition!.latitude,
+          ),
+          math.max(
+            widget.userPosition!.longitude,
+            widget.officePosition!.longitude,
+          ),
         ),
       );
 
@@ -92,7 +110,10 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
     if (!widget.showRadius || widget.officePosition == null) return [];
     return [
       CircleMarker(
-        point: LatLng(widget.officePosition!.latitude, widget.officePosition!.longitude),
+        point: LatLng(
+          widget.officePosition!.latitude,
+          widget.officePosition!.longitude,
+        ),
         radius: widget.radiusMeters,
         useRadiusInMeter: true,
         color: const Color(0xFF2DD4BF).withValues(alpha: 0.1),
@@ -108,7 +129,10 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
     if (widget.officePosition != null) {
       markers.add(
         Marker(
-          point: LatLng(widget.officePosition!.latitude, widget.officePosition!.longitude),
+          point: LatLng(
+            widget.officePosition!.latitude,
+            widget.officePosition!.longitude,
+          ),
           width: 80,
           height: 80,
           child: _buildOfficeMarker(),
@@ -119,7 +143,10 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
     if (widget.userPosition != null) {
       markers.add(
         Marker(
-          point: LatLng(widget.userPosition!.latitude, widget.userPosition!.longitude),
+          point: LatLng(
+            widget.userPosition!.latitude,
+            widget.userPosition!.longitude,
+          ),
           width: 80,
           height: 80,
           child: AnimatedBuilder(
@@ -161,7 +188,7 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
                 color: Colors.black.withValues(alpha: 0.15),
                 blurRadius: 10,
                 offset: const Offset(0, 4),
-              )
+              ),
             ],
           ),
         ),
@@ -178,11 +205,13 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
             ),
           ),
           child: ClipOval(
-            child: widget.userPhotoUrl != null && widget.userPhotoUrl!.isNotEmpty
+            child:
+                widget.userPhotoUrl != null && widget.userPhotoUrl!.isNotEmpty
                 ? Image.network(
                     widget.userPhotoUrl!,
                     fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => const Icon(Icons.person, color: Colors.white, size: 22),
+                    errorBuilder: (context, error, stackTrace) =>
+                        const Icon(Icons.person, color: Colors.white, size: 22),
                   )
                 : const Icon(Icons.person, color: Colors.white, size: 22),
           ),
@@ -231,7 +260,7 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
                 color: const Color(0xFF2DD4BF).withValues(alpha: 0.3),
                 blurRadius: 12,
                 offset: const Offset(0, 4),
-              )
+              ),
             ],
           ),
           child: const Icon(
@@ -245,17 +274,18 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
   }
 
   Widget _buildDefaultUserIcon() => Container(
-        color: const Color(0xFF6366F1).withOpacity(0.1),
-        child: const Icon(Icons.person, color: Color(0xFF6366F1), size: 20),
-      );
+    color: const Color(0xFF6366F1).withOpacity(0.1),
+    child: const Icon(Icons.person, color: Color(0xFF6366F1), size: 20),
+  );
 
   Widget _buildDefaultOfficeIcon() => Container(
-        color: const Color(0xFF10B981).withOpacity(0.1),
-        child: const Icon(Icons.business, color: Color(0xFF10B981), size: 20),
-      );
+    color: const Color(0xFF10B981).withOpacity(0.1),
+    child: const Icon(Icons.business, color: Color(0xFF10B981), size: 20),
+  );
 
   double? _calculateDistance() {
-    if (widget.userPosition == null || widget.officePosition == null) return null;
+    if (widget.userPosition == null || widget.officePosition == null)
+      return null;
     return Geolocator.distanceBetween(
       widget.userPosition!.latitude,
       widget.userPosition!.longitude,
@@ -281,7 +311,7 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
             color: Colors.black.withOpacity(0.08),
             blurRadius: 12,
             offset: const Offset(0, 2),
-          )
+          ),
         ],
       ),
       child: ClipRRect(
@@ -292,11 +322,19 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
               mapController: _mapController,
               options: MapOptions(
                 initialCenter: widget.userPosition != null
-                    ? LatLng(widget.userPosition!.latitude, widget.userPosition!.longitude)
-                    : LatLng(widget.officePosition!.latitude, widget.officePosition!.longitude),
+                    ? LatLng(
+                        widget.userPosition!.latitude,
+                        widget.userPosition!.longitude,
+                      )
+                    : LatLng(
+                        widget.officePosition!.latitude,
+                        widget.officePosition!.longitude,
+                      ),
                 initialZoom: 16,
                 maxZoom: 22,
-                interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.all,
+                ),
                 backgroundColor: Colors.grey.shade100,
               ),
               children: [
@@ -310,7 +348,8 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
                 MarkerLayer(markers: _buildMarkers()),
               ],
             ),
-            if (distance != null && !widget.hideOverlays) _buildDistanceOverlay(distance, isWithinRadius),
+            if (distance != null && !widget.hideOverlays)
+              _buildDistanceOverlay(distance, isWithinRadius),
             if (!widget.hideOverlays) _buildControlButtons(),
           ],
         ),
@@ -333,7 +372,7 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
               color: Colors.black.withOpacity(0.1),
               blurRadius: 8,
               offset: const Offset(0, 2),
-            )
+            ),
           ],
         ),
         child: Row(
@@ -342,7 +381,9 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
               width: 8,
               height: 8,
               decoration: BoxDecoration(
-                color: isWithinRadius ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                color: isWithinRadius
+                    ? const Color(0xFF10B981)
+                    : const Color(0xFFF59E0B),
                 shape: BoxShape.circle,
               ),
             ),
@@ -357,7 +398,9 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: isWithinRadius ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                      color: isWithinRadius
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFF59E0B),
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -365,10 +408,7 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
                     distance < 1000
                         ? '${distance.toInt()} meter dari lokasi'
                         : '${(distance / 1000).toStringAsFixed(1)} kilometer dari lokasi',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey.shade600,
-                    ),
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                   ),
                 ],
               ),
@@ -385,33 +425,31 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
       bottom: 12,
       child: Column(
         children: [
-          _buildControlButton(
-            Icons.my_location, 
-            _fitBounds, 
-            'Lokasi Saya'
-          ),
+          _buildControlButton(Icons.my_location, _fitBounds, 'Lokasi Saya'),
           const SizedBox(height: 6),
-          _buildControlButton(
-            Icons.add, 
-            () {
-              _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1);
-            }, 
-            'Perbesar'
-          ),
+          _buildControlButton(Icons.add, () {
+            _mapController.move(
+              _mapController.camera.center,
+              _mapController.camera.zoom + 1,
+            );
+          }, 'Perbesar'),
           const SizedBox(height: 6),
-          _buildControlButton(
-            Icons.remove, 
-            () {
-              _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1);
-            }, 
-            'Perkecil'
-          ),
+          _buildControlButton(Icons.remove, () {
+            _mapController.move(
+              _mapController.camera.center,
+              _mapController.camera.zoom - 1,
+            );
+          }, 'Perkecil'),
         ],
       ),
     );
   }
 
-  Widget _buildControlButton(IconData icon, VoidCallback onPressed, String tooltip) {
+  Widget _buildControlButton(
+    IconData icon,
+    VoidCallback onPressed,
+    String tooltip,
+  ) {
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -433,26 +471,23 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
   }
 
   Widget _buildEmptyState() => Container(
-        height: 300,
-        decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.location_off, size: 48, color: Colors.grey.shade400),
-              const SizedBox(height: 12),
-              Text(
-                'Lokasi tidak tersedia',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey.shade600,
-                ),
-              ),
-            ],
+    height: 300,
+    decoration: BoxDecoration(
+      color: Colors.grey.shade100,
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.location_off, size: 48, color: Colors.grey.shade400),
+          const SizedBox(height: 12),
+          Text(
+            'Lokasi tidak tersedia',
+            style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
           ),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 }

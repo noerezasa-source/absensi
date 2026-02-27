@@ -21,9 +21,7 @@ class ModeConfirmationDialog extends StatelessWidget {
     final label = isCheckIn ? 'Check In' : 'Check Out';
 
     return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 8,
       child: Container(
         padding: const EdgeInsets.all(20),
@@ -44,11 +42,7 @@ class ModeConfirmationDialog extends StatelessWidget {
                     color: color.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    icon,
-                    size: 24,
-                    color: color,
-                  ),
+                  child: Icon(icon, size: 24, color: color),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -85,7 +79,7 @@ class ModeConfirmationDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 20),
-            
+
             // Quick Mode Selection
             Row(
               children: [
@@ -117,7 +111,7 @@ class ModeConfirmationDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // Cancel Button
             SizedBox(
               width: double.infinity,
@@ -158,18 +152,11 @@ class ModeConfirmationDialog extends StatelessWidget {
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: color.withValues(alpha: 0.3),
-            width: 1.5,
-          ),
+          border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
         ),
         child: Column(
           children: [
-            Icon(
-              icon,
-              color: color,
-              size: 28,
-            ),
+            Icon(icon, color: color, size: 28),
             const SizedBox(height: 8),
             Text(
               label,

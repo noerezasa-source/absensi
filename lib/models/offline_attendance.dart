@@ -9,8 +9,10 @@ class OfflineAttendance {
   final String method; // 'rfid_card_mobile' or 'face_recognition_kiosk'
   final String timestamp; // ISO8601 string
   final String? photoPath; // Local file path
-  final String? capturedPhotoBase64; // Local photo in base64 for sync/offline UI
-  final String? profilePhotoBase64; // Cached profile photo base64 for offline UI
+  final String?
+  capturedPhotoBase64; // Local photo in base64 for sync/offline UI
+  final String?
+  profilePhotoBase64; // Cached profile photo base64 for offline UI
   final double? latitude;
   final double? longitude;
   final String? workTimeMode; // 'work_time' or 'break_time'

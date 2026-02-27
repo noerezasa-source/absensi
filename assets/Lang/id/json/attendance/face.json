@@ -25,5 +25,7 @@
     "checking": "Memeriksa...",
     "unknown": "Tidak Dikenal",
     "error": "Error",
-    "done": "Selesai"
+    "done": "Selesai",
+    "break_in": "Istirahat Masuk",
+    "break_out": "Istirahat Keluar"
 }

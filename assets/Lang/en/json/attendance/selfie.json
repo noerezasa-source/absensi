@@ -27,5 +27,10 @@
     "unknown_location": "Unknown Location",
     "camera_error": "Camera error",
     "no_cameras": "No cameras available",
-    "failed_init_camera": "Failed to initialize camera"
+    "failed_init_camera": "Failed to initialize camera",
+    "break_in": "Break In",
+    "break_out": "Break Out",
+    "action": "Select Action",
+    "in": "In",
+    "out": "Out"
 }

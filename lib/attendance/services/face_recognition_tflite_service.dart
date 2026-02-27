@@ -7,27 +7,21 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'isolate_inference_service.dart';
-import 'face_anti_spoofing_service.dart';
 import '../../helpers/timezone_helper.dart';
 
 class FaceRecognitionTFLiteService {
   late final FaceDetector _faceDetector;
   final IsolateInferenceService _inferenceService = IsolateInferenceService();
-  final FaceAntiSpoofingService _antiSpoofingService =
-      FaceAntiSpoofingService();
   bool _isInitialized = false;
 
   // W600K MBF optimized model config
-  int inputSize = 112;
+  int inputSize = 160;
   int embeddingSize = 512;
 
   // ✅ OPTIMIZED: Realistic Quality Thresholds for Mobile Attendance
   static const double minFaceQualityScore = 0.28; // Lowered from 0.35
   static const double minEyeOpenProbability = 0.30; // Lowered from 0.40/0.50
   static const double maxHeadRotation = 25.0; // Increased from 20.0
-  static const double minLivenessScore = 0.65;
-  static const double maxDepthThreshold =
-      0.04; // ✅ Relaxed: 0.04 is enough for 3D vs Phone Screen
 
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -48,8 +42,9 @@ class FaceRecognitionTFLiteService {
     try {
       debugPrint('=== Initializing Face Recognition Service ===');
       await _inferenceService.initialize();
-      await _antiSpoofingService.initialize();
-      debugPrint('✅ Face Recognition Service initialized (with anti-spoofing)');
+      debugPrint(
+        '✅ Face Recognition Service initialized (matching wajah project)',
+      );
       _isInitialized = true;
     } catch (e) {
       debugPrint('!!! Failed to initialize Face Recognition Service: $e');
@@ -233,15 +228,11 @@ class FaceRecognitionTFLiteService {
     // ✅ CRITICAL: L2 Normalize embedding immediately
     final normalizedEmbedding = l2Normalize(response.embedding!);
 
-    final depthScore = _calculate3DDepthScore(response.landmarks3d);
-
     return _buildTemplate(
       face,
       normalizedEmbedding, // Use IS L2 Normalized
       landmarks,
       "stream_capture",
-      landmarks3d: response.landmarks3d,
-      depthScore: depthScore,
     );
   }
 
@@ -293,16 +284,7 @@ class FaceRecognitionTFLiteService {
     // ✅ CRITICAL: L2 Normalize embedding immediately
     final normalizedEmbedding = l2Normalize(response.embedding!);
 
-    final depthScore = _calculate3DDepthScore(response.landmarks3d);
-
-    return _buildTemplate(
-      face,
-      normalizedEmbedding,
-      landmarks,
-      imagePath,
-      landmarks3d: response.landmarks3d,
-      depthScore: depthScore,
-    );
+    return _buildTemplate(face, normalizedEmbedding, landmarks, imagePath);
   }
 
   // ... [Keep helper methods: _calculateIPD, _calculateBiometricMetrics, _detectOcclusion, _detectPassiveLiveness, _calculateImageQualityMetrics] ...
@@ -318,17 +300,7 @@ class FaceRecognitionTFLiteService {
     return 0.0;
   }
 
-  double _calculate3DDepthScore(List<List<double>>? landmarks3d) {
-    if (landmarks3d == null || landmarks3d.length < 68) return 0.0;
-    final zs = landmarks3d.map((p) => p[2]).toList();
-    double sum = 0;
-    for (var z in zs) sum += z;
-    final mean = sum / zs.length;
-    double varianceSum = 0;
-    for (var z in zs) varianceSum += (z - mean) * (z - mean);
-    final stdDev = sqrt(varianceSum / zs.length);
-    return stdDev.clamp(0.0, 1.0);
-  }
+  /* 3D Depth Score Logic Removed for speed parity with wajah project */
 
   // Helpers for completeness (retained from original file to ensure no breaking changes)
   Map<String, dynamic> _calculateBiometricMetrics(
@@ -378,54 +350,14 @@ class FaceRecognitionTFLiteService {
   }
 
   // Helper for liveness (retained)
-  Future<Map<String, dynamic>> validateLiveness(
-    Uint8List imageBytes,
-    int width,
-    int height,
-    Rect faceBox,
-  ) async {
-    // ... Implementation delegated to antiSpoofingService ...
-    if (!_isInitialized) await initialize();
-    try {
-      img.Image? fullImage = img.decodeImage(imageBytes);
-      if (fullImage == null) throw Exception('Failed to decode image');
-
-      const padding = 20;
-      final left = (faceBox.left - padding)
-          .clamp(0, fullImage.width - 1)
-          .toInt();
-      final top = (faceBox.top - padding)
-          .clamp(0, fullImage.height - 1)
-          .toInt();
-      final widthIdx =
-          ((faceBox.right + padding).clamp(0, fullImage.width - 1).toInt()) -
-          left;
-      final heightIdx =
-          ((faceBox.bottom + padding).clamp(0, fullImage.height - 1).toInt()) -
-          top;
-
-      final croppedFace = img.copyCrop(
-        fullImage,
-        x: left,
-        y: top,
-        width: widthIdx.clamp(1, fullImage.width),
-        height: heightIdx.clamp(1, fullImage.height),
-      );
-      return await _antiSpoofingService.detectLiveness(croppedFace);
-    } catch (e) {
-      return {'isLive': false, 'reason': 'Error: $e'};
-    }
-  }
+  /* Liveness Validation Delegate Removed for speed parity with wajah project */
 
   Map<String, dynamic> _buildTemplate(
     Face face,
     List<double> embedding,
     Map<String, dynamic> landmarks,
-    String imagePath, {
-    List<List<double>>? landmarks3d,
-    double? depthScore,
-    Map<String, dynamic>? livenessData,
-  }) {
+    String imagePath,
+  ) {
     final qualityScore = calculateFaceQuality(face);
     final biometricMetrics = _calculateBiometricMetrics(
       face.boundingBox,
@@ -448,7 +380,6 @@ class FaceRecognitionTFLiteService {
       'landmarks': landmarks,
       'biometricMetrics': biometricMetrics,
       'livenessDetection': livenessDetection,
-      'antiSpoofingLiveness': livenessData,
       'qualityScores': {
         'leftEyeOpen': face.leftEyeOpenProbability ?? 0.0,
         'rightEyeOpen': face.rightEyeOpenProbability ?? 0.0,
@@ -458,12 +389,7 @@ class FaceRecognitionTFLiteService {
         'roll': face.headEulerAngleZ ?? 0.0,
         'pitch': face.headEulerAngleX ?? 0.0,
       },
-      'advancedAttributes': {
-        'occlusion': occlusion,
-        'depthScore': depthScore ?? 0.0,
-        'is3DReal':
-            (depthScore ?? 0.0) > maxDepthThreshold, // ✅ Corrected Threshold
-      },
+      'advancedAttributes': {'occlusion': occlusion},
       'captureMetadata': {
         'captureDate': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
         'captureDevice': 'Mobile Camera',
@@ -547,7 +473,6 @@ class FaceRecognitionTFLiteService {
   void dispose() {
     _faceDetector.close();
     _inferenceService.dispose();
-    _antiSpoofingService.dispose();
     _isInitialized = false;
   }
 }
