@@ -14,6 +14,7 @@ import 'petugas_profile_page.dart';
 import '../../attendance/screens/rfid_attendance_page.dart';
 import '../../User/screens/user_dashboard.dart'; // ✅ Added for organization switcher
 import 'selfie_attendance_flow_page.dart';
+import '../../attendance/screens/fingerprint_attendance_page.dart';
 import '../../auth/screens/join_organization_screen.dart'; // ✅ Added for Join Organization option
 import '../../helpers/language_helper.dart';
 
@@ -685,12 +686,16 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       _handleSelfAttendance();
       return;
     } else if (_attendanceMode == 'fingerprint') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLanguage.tr('fingerprint_coming_soon')),
-          backgroundColor: Colors.orange,
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FingerprintAttendancePage(
+            organizationMemberId: widget.organizationMemberId,
+            memberData: widget.memberData,
+            userProfile: _userProfile ?? widget.userProfile,
+          ),
         ),
-      );
+      ).then((_) => _refreshAll());
     } else if (_attendanceMode == 'face') {
       _navigateToMultiUserFaceAttendance(null);
     }
@@ -2089,25 +2094,38 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         color: _isDarkMode ? Colors.white : Colors.black87,
                       ),
                     ),
-                    Container(
-                      margin: const EdgeInsets.only(top: 4),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        AppLanguage.tr('Petugas.dashboard.on_time'),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green.shade700,
+                    if (activity['checkInMethod'] != null)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.green.shade100),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _getMethodIcon(activity['checkInMethod']),
+                              size: 10,
+                              color: Colors.green.shade700,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _formatMethodName(activity['checkInMethod']),
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green.shade700,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
                   ],
                 ),
               ],
@@ -2424,11 +2442,14 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     Color backgroundColor,
   ) {
     IconData? methodIcon;
+    final m = (method ?? '').toString().toLowerCase();
     if (method == 'manual') {
       methodIcon = Icons.edit;
     } else if (method == 'rfid') {
       methodIcon = Icons.nfc;
-    } else if (method == 'face_recognition') {
+    } else if (m.contains('fingerprint')) {
+      methodIcon = Icons.fingerprint;
+    } else if (m.contains('face') || m.contains('wajah')) {
       methodIcon = Icons.face;
     }
 
@@ -2481,6 +2502,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     if (m.contains('face') || m.contains('wajah')) return Icons.face;
     if (m.contains('selfie')) return Icons.camera_alt;
     if (m.contains('manual')) return Icons.edit_note;
+    if (m.contains('fingerprint')) return Icons.fingerprint;
     return Icons.check_circle_outline;
   }
 
@@ -2491,6 +2513,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     if (m.contains('face') || m.contains('wajah')) return 'FACE';
     if (m.contains('selfie')) return 'SELFIE';
     if (m.contains('manual')) return 'MANUAL';
+    if (m.contains('fingerprint')) return 'FINGER';
     return method.toString().toUpperCase();
   }
 }

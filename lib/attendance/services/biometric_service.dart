@@ -1,3 +1,4 @@
+// BiometricService handles both face recognition and fingerprint templates in Supabase.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -149,6 +150,146 @@ class BiometricService {
       return null;
     }
   }
+
+  // === FINGERPRINT METHODS ===
+
+  Future<BiometricData> registerFingerprintTemplate({
+    required int organizationMemberId,
+    required String templateBase64,
+  }) async {
+    try {
+      final user = _supabase.auth.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      // Deactivate old fingerprint templates
+      final existingTemplate = await _supabase
+          .from('biometric_data')
+          .select()
+          .eq('organization_member_id', organizationMemberId)
+          .eq('biometric_type', 'fingerprint')
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (existingTemplate != null) {
+        await _supabase
+            .from('biometric_data')
+            .update({'is_active': false})
+            .eq('id', existingTemplate['id']);
+      }
+
+      // Insert new template
+      final biometricData = {
+        'organization_member_id': organizationMemberId,
+        'biometric_type': 'fingerprint',
+        'template_data': templateBase64,
+        'enrollment_date': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
+        'is_active': true,
+      };
+
+      final result = await _supabase
+          .from('biometric_data')
+          .insert(biometricData)
+          .select()
+          .single();
+
+      return BiometricData.fromJson(result);
+    } catch (e) {
+      throw Exception('Failed to register fingerprint template: $e');
+    }
+  }
+
+  Future<BiometricData?> getActiveFingerprintTemplate(
+    int organizationMemberId,
+  ) async {
+    try {
+      final result = await _supabase
+          .from('biometric_data')
+          .select()
+          .eq('organization_member_id', organizationMemberId)
+          .eq('biometric_type', 'fingerprint')
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (result == null) return null;
+
+      return BiometricData.fromJson(result);
+    } catch (e) {
+      debugPrint('Error getting fingerprint template: $e');
+      return null;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getAllActiveFingerprintTemplates(
+    int organizationId,
+  ) async {
+    try {
+      final results = await _supabase
+          .from('biometric_data')
+          .select('''
+            id,
+            organization_member_id,
+            template_data,
+            organization_members!inner (
+              id,
+              user_id,
+              organization_id,
+              employee_id,
+              department_id,
+              user_profiles!inner (
+                id,
+                first_name,
+                last_name,
+                display_name,
+                profile_photo_url
+              ),
+              departments!organization_members_department_id_fkey (
+                id,
+                name
+              )
+            )
+          ''')
+          .eq('biometric_type', 'fingerprint')
+          .eq('is_active', true)
+          .eq('organization_members.organization_id', organizationId);
+
+      return List<Map<String, dynamic>>.from(results);
+    } catch (e) {
+      debugPrint('!!! ERROR fetching fingerprint templates: $e');
+      return [];
+    }
+  }
+
+  Future<bool> hasRegisteredFingerprint(int organizationMemberId) async {
+    try {
+      final result = await _supabase
+          .from('biometric_data')
+          .select('id')
+          .eq('organization_member_id', organizationMemberId)
+          .eq('biometric_type', 'fingerprint')
+          .eq('is_active', true)
+          .maybeSingle();
+
+      return result != null;
+    } catch (e) {
+      debugPrint('Error checking fingerprint registration: $e');
+      return false;
+    }
+  }
+
+  Future<void> deactivateFingerprintTemplate(int biometricId) async {
+    try {
+      await _supabase
+          .from('biometric_data')
+          .update({'is_active': false})
+          .eq('id', biometricId);
+    } catch (e) {
+      throw Exception('Failed to deactivate fingerprint template: $e');
+    }
+  }
+
+  // === FACE RECOGNITION METHODS ===
 
   Future<List<Map<String, dynamic>>> getAllActiveFaceTemplatesWithUserInfo(
     int organizationId,

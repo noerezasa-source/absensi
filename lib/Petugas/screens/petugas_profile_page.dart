@@ -1567,7 +1567,6 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
             subtitle: AppLanguage.tr('scan_fingerprint_subtitle'),
             icon: Icons.fingerprint_rounded,
             isSelected: _attendanceMode == 'fingerprint',
-            isSoon: true,
           ),
         ],
       ),

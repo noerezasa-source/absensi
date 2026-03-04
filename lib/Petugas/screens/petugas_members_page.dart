@@ -19,6 +19,7 @@ import '../widgets/petugas_bottom_nav.dart';
 import 'petugas_records_page.dart';
 import 'petugas_profile_page.dart';
 import '../../attendance/screens/face_registration_page.dart';
+import '../../attendance/screens/fingerprint_registration_page.dart';
 import '../../helpers/language_helper.dart';
 
 class PetugasMembersPage extends StatefulWidget {
@@ -1671,6 +1672,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
     // --- Registration Status Logic ---
     bool hasFaceData = false;
+    bool hasFingerprintData = false;
     final bioData = member['biometric_data'];
     if (bioData is List) {
       final activeFace = bioData.firstWhere(
@@ -1681,11 +1683,21 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         orElse: () => null,
       );
       if (activeFace != null) hasFaceData = true;
+
+      final activeFinger = bioData.firstWhere(
+        (b) => b['biometric_type'] == 'fingerprint' && b['is_active'] == true,
+        orElse: () => null,
+      );
+      if (activeFinger != null) hasFingerprintData = true;
     } else if (bioData is Map) {
       if ((bioData['biometric_type'] == 'face' ||
               bioData['biometric_type'] == 'face_recognition') &&
           bioData['is_active'] == true) {
         hasFaceData = true;
+      }
+      if (bioData['biometric_type'] == 'fingerprint' &&
+          bioData['is_active'] == true) {
+        hasFingerprintData = true;
       }
     }
     // --- End Registration Status Logic ---
@@ -1783,7 +1795,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                           ),
                         ),
                         // Only show badge if not yet registered
-                        if (!hasFaceData) ...[
+                        if (!hasFaceData || !hasFingerprintData) ...[
                           const SizedBox(width: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -1791,15 +1803,21 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                               vertical: 1,
                             ),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFEF4444).withOpacity(0.12),
+                              color: (!hasFaceData && !hasFingerprintData)
+                                  ? const Color(0xFFEF4444).withOpacity(0.12)
+                                  : const Color(0xFFF59E0B).withOpacity(0.12),
                               borderRadius: BorderRadius.circular(6),
                             ),
-                            child: const Text(
-                              'Belum Daftar',
+                            child: Text(
+                              (!hasFaceData && !hasFingerprintData)
+                                  ? 'Belum Daftar'
+                                  : (!hasFaceData ? 'No Face' : 'No Finger'),
                               style: TextStyle(
                                 fontSize: 9,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFFEF4444),
+                                color: (!hasFaceData && !hasFingerprintData)
+                                    ? const Color(0xFFEF4444)
+                                    : const Color(0xFFF59E0B),
                               ),
                             ),
                           ),
@@ -1866,9 +1884,11 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
     // Determine Face Data Status
     bool hasFaceData = false;
+    bool hasFingerprintData = false;
     bool isHighAccuracy = false;
     final bioData = member['biometric_data'];
     Map<String, dynamic>? activeFaceData;
+    Map<String, dynamic>? activeFingerData;
 
     if (bioData is List) {
       activeFaceData = bioData.firstWhere(
@@ -1878,21 +1898,35 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             b['is_active'] == true,
         orElse: () => null,
       );
+      activeFingerData = bioData.firstWhere(
+        (b) => b['biometric_type'] == 'fingerprint' && b['is_active'] == true,
+        orElse: () => null,
+      );
     } else if (bioData is Map) {
       if ((bioData['biometric_type'] == 'face' ||
               bioData['biometric_type'] == 'face_recognition') &&
           bioData['is_active'] == true) {
         activeFaceData = Map<String, dynamic>.from(bioData);
       }
+      if (bioData['biometric_type'] == 'fingerprint' &&
+          bioData['is_active'] == true) {
+        activeFingerData = Map<String, dynamic>.from(bioData);
+      }
     }
 
-    if (activeFaceData != null) {
+    // Extract biometric data
+    final faceData = activeFaceData;
+    final fingerData = activeFingerData;
+
+    if (faceData != null) {
       hasFaceData = true;
-      final template = activeFaceData['face_template'];
-      // High Accuracy is multi-angle (totalAngles > 1)
+      final template = faceData['face_template'] as Map<String, dynamic>?;
       if (template != null && (template['totalAngles'] ?? 0) > 1) {
         isHighAccuracy = true;
       }
+    }
+    if (fingerData != null) {
+      hasFingerprintData = true;
     }
 
     String deptName = AppLanguage.tr('Petugas.members.no_department');
@@ -2056,6 +2090,99 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                       ],
                     ),
 
+                    const SizedBox(height: 12),
+                    // Fingerprint Data Status
+                    if (!hasFingerprintData)
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.2),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.fingerprint_rounded,
+                              color: Colors.white70,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                'Sidik jari belum terdaftar',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        FingerprintRegistrationPage(
+                                          organizationMemberId: member['id'],
+                                          memberName: _getMemberName(member),
+                                        ),
+                                  ),
+                                ).then((refresh) {
+                                  if (refresh == true)
+                                    _loadOrganizationMembersOptimized();
+                                });
+                              },
+                              child: const Text(
+                                'Daftar',
+                                style: TextStyle(
+                                  color: Color(0xFFA855F7),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: const Color(0xFF10B981).withOpacity(0.3),
+                          ),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(
+                              Icons.fingerprint_rounded,
+                              color: Color(0xFF10B981),
+                              size: 24,
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Sidik jari aktif',
+                                style: TextStyle(
+                                  color: Color(0xFF10B981),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              Icons.check_circle,
+                              color: Color(0xFF10B981),
+                              size: 16,
+                            ),
+                          ],
+                        ),
+                      ),
                     const SizedBox(height: 24),
 
                     // Conditional Card (Face Data Status)
@@ -2824,6 +2951,26 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 16),
+            _buildOptionCard(
+              'Fingerprint Scanner',
+              Icons.fingerprint_rounded,
+              const Color(0xFFF59E0B),
+              () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => FingerprintRegistrationPage(
+                      organizationMemberId: member['id'],
+                      memberName: _getMemberName(member),
+                    ),
+                  ),
+                ).then((refresh) {
+                  if (refresh == true) _loadOrganizationMembersOptimized();
+                });
+              },
             ),
             const SizedBox(height: 16),
           ],

@@ -25,9 +25,25 @@ class PetugasBottomNav extends StatelessWidget {
         return Icons.copy_all_rounded;
       case 'fingerprint':
         return Icons.fingerprint_rounded;
+      case 'selfie':
+        return Icons.camera_alt_rounded;
       case 'face':
       default:
         return Icons.face_retouching_natural_rounded;
+    }
+  }
+
+  Color _getAttendanceColor() {
+    switch (attendanceMode.toLowerCase()) {
+      case 'fingerprint':
+        return const Color(0xFF9333EA);
+      case 'rfid':
+        return const Color(0xFF1E88E5);
+      case 'selfie':
+        return const Color(0xFFE91E63);
+      case 'face':
+      default:
+        return const Color(0xFF4A1E79);
     }
   }
 
@@ -110,8 +126,8 @@ class PetugasBottomNav extends StatelessWidget {
                     height: 70,
                     decoration: BoxDecoration(
                       color: isDarkMode
-                          ? const Color(0xFF9E77F1)
-                          : const Color(0xFF4A1E79),
+                          ? _getAttendanceColor().withOpacity(0.8)
+                          : _getAttendanceColor(),
                       shape: BoxShape.circle,
                       border: Border.all(
                         color: isDarkMode
@@ -121,11 +137,9 @@ class PetugasBottomNav extends StatelessWidget {
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color:
-                              (isDarkMode
-                                      ? const Color(0xFF9E77F1)
-                                      : const Color(0xFF4A1E79))
-                                  .withValues(alpha: isDarkMode ? 0.3 : 0.4),
+                          color: _getAttendanceColor().withValues(
+                            alpha: isDarkMode ? 0.3 : 0.4,
+                          ),
                           blurRadius: 15,
                           offset: const Offset(0, 4),
                         ),

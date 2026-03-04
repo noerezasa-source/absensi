@@ -793,10 +793,12 @@ class AttendanceService {
         'application_id': applicationId,
         'raw_data': rawData,
         'is_verified':
-            method == 'face_recognition' || method == 'face_recognition_kiosk',
+            method == 'face_recognition' ||
+            method == 'face_recognition_kiosk' ||
+            method == 'fingerprint',
         'verification_method': method.contains('face_recognition')
             ? 'face_recognition'
-            : null,
+            : (method == 'fingerprint' ? 'fingerprint' : null),
       };
 
       await _supabase.from('attendance_logs').insert(logData);
@@ -911,6 +913,7 @@ class AttendanceService {
             'rfid_card_mobile',
             'manual',
             'selfie',
+            'fingerprint',
           ])
           .order('event_time', ascending: false)
           .limit(limit * 2); // Ambil lebih banyak untuk filter
@@ -1066,5 +1069,78 @@ class AttendanceService {
       if (e is Exception) rethrow;
       throw Exception('Gagal mendaftarkan kartu RFID: $e');
     }
+  }
+  // --- Fingerprint Attendance Methods ---
+
+  Future<AttendanceRecord> checkInFingerprint({
+    required int organizationMemberId,
+    String? organizationTimezone,
+    Map<String, dynamic>? location,
+    int? deviceId,
+    Map<String, dynamic>? rawData,
+  }) async {
+    return checkIn(
+      organizationMemberId: organizationMemberId,
+      photoUrl: '', // No photo for fingerprint
+      method: 'fingerprint',
+      organizationTimezone: organizationTimezone,
+      location: location,
+      deviceId: deviceId,
+      rawData: {...?rawData, 'verification_type': 'fingerprint'},
+    );
+  }
+
+  Future<AttendanceRecord> checkOutFingerprint({
+    required int organizationMemberId,
+    String? organizationTimezone,
+    Map<String, dynamic>? location,
+    int? deviceId,
+    Map<String, dynamic>? rawData,
+  }) async {
+    return checkOut(
+      organizationMemberId: organizationMemberId,
+      photoUrl: '',
+      method: 'fingerprint',
+      organizationTimezone: organizationTimezone,
+      location: location,
+      deviceId: deviceId,
+      rawData: {...?rawData, 'verification_type': 'fingerprint'},
+    );
+  }
+
+  Future<AttendanceRecord> breakOutFingerprint({
+    required int organizationMemberId,
+    String? organizationTimezone,
+    Map<String, dynamic>? location,
+    int? deviceId,
+    Map<String, dynamic>? rawData,
+  }) async {
+    return breakOut(
+      organizationMemberId: organizationMemberId,
+      photoUrl: '',
+      method: 'fingerprint',
+      organizationTimezone: organizationTimezone,
+      location: location,
+      deviceId: deviceId,
+      rawData: {...?rawData, 'verification_type': 'fingerprint'},
+    );
+  }
+
+  Future<AttendanceRecord> breakInFingerprint({
+    required int organizationMemberId,
+    String? organizationTimezone,
+    Map<String, dynamic>? location,
+    int? deviceId,
+    Map<String, dynamic>? rawData,
+  }) async {
+    return breakIn(
+      organizationMemberId: organizationMemberId,
+      photoUrl: '',
+      method: 'fingerprint',
+      organizationTimezone: organizationTimezone,
+      location: location,
+      deviceId: deviceId,
+      rawData: {...?rawData, 'verification_type': 'fingerprint'},
+    );
   }
 }

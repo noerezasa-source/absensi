@@ -221,6 +221,7 @@ class AttendanceSyncService {
 
           final isFatal =
               errorMessage.contains('No check-in record found') ||
+              errorMessage.contains('No attendance record found') ||
               errorMessage.contains('No-Check-In');
 
           if (isDuplicate || isFatal) {
