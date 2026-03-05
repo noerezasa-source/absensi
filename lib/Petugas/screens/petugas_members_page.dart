@@ -2117,353 +2117,14 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     ),
 
                     const SizedBox(height: 12),
-                    // Fingerprint Data Status
-                    if (!hasFingerprintData)
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.2),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.fingerprint_rounded,
-                              color: Colors.white70,
-                              size: 24,
-                            ),
-                            const SizedBox(width: 12),
-                            const Expanded(
-                              child: Text(
-                                'Sidik jari belum terdaftar',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () {
-                                Navigator.pop(context);
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        FingerprintRegistrationPage(
-                                          organizationMemberId: member['id'],
-                                          memberName: _getMemberName(member),
-                                        ),
-                                  ),
-                                ).then((refresh) {
-                                  if (refresh == true)
-                                    _loadOrganizationMembersOptimized();
-                                });
-                              },
-                              child: const Text(
-                                'Daftar',
-                                style: TextStyle(
-                                  color: Color(0xFFA855F7),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: const Color(0xFF10B981).withOpacity(0.3),
-                          ),
-                        ),
-                        child: const Row(
-                          children: [
-                            Icon(
-                              Icons.fingerprint_rounded,
-                              color: Color(0xFF10B981),
-                              size: 24,
-                            ),
-                            SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                'Sidik jari aktif',
-                                style: TextStyle(
-                                  color: Color(0xFF10B981),
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            Icon(
-                              Icons.check_circle,
-                              color: Color(0xFF10B981),
-                              size: 16,
-                            ),
-                          ],
-                        ),
-                      ),
-                    const SizedBox(height: 24),
-
-                    // Conditional Card (Face Data Status)
-                    if (!hasFaceData) ...[
-                      // WARNING CARD (Yellow/Cream)
-                      Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF9E6), // Cream/Light Yellow
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.info_outline,
-                              color: Color(0xFFF59E0B),
-                              size: 28,
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    AppLanguage.tr(
-                                      'Petugas.members.face_not_registered_yet',
-                                    ),
-                                    style: const TextStyle(
-                                      color: Color(0xFF92400E),
-                                      fontSize: 16,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    AppLanguage.tr(
-                                      'Petugas.members.register_face_for_attendance',
-                                    ),
-                                    style: const TextStyle(
-                                      color: Color(0xFF92400E),
-                                      fontSize: 14,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ] else if (!isHighAccuracy) ...[
-                      // STANDARD ACCURACY CARD
-                      Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE0F2FE),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.photo_outlined,
-                              color: Color(0xFF0369A1),
-                              size: 28,
-                            ),
-                            const SizedBox(width: 16),
-                            const Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Akurasi Standar (Upload)',
-                                    style: TextStyle(
-                                      color: Color(0xFF075985),
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                  SizedBox(height: 6),
-                                  Text(
-                                    'Tingkatkan ke Akurasi Tinggi (Live Scan) untuk pengenalan yang lebih cepat dan aman.',
-                                    style: TextStyle(
-                                      color: Color(0xFF0369A1),
-                                      fontSize: 13,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ] else ...[
-                      // SUCCESS STATE - STATS DASHBOARD
-                      Row(
-                        children: [
-                          // Punctuality Card
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 24,
-                                horizontal: 16,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: const Color(0xFF8B5CF6),
-                                        width: 2,
-                                      ),
-                                    ),
-                                    child: const Icon(
-                                      Icons.access_time_filled_rounded,
-                                      color: Color(0xFF8B5CF6),
-                                      size: 28,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    _formatPercentage(
-                                      member['performance_stats']?['punctuality_rate'] ??
-                                          0.0,
-                                    ),
-                                    style: const TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF1F2937),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    AppLanguage.tr(
-                                      'Petugas.members.punctuality',
-                                    ).toUpperCase(),
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF9CA3AF),
-                                      letterSpacing: 1.0,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-
-                          // Attendance Card
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 24,
-                                horizontal: 16,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: const Color(0xFF8B5CF6),
-                                        width: 2,
-                                      ),
-                                    ),
-                                    child: const Icon(
-                                      Icons.calendar_today_rounded,
-                                      color: Color(0xFF8B5CF6),
-                                      size: 24,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    _formatPercentage(
-                                      member['performance_stats']?['attendance_rate'] ??
-                                          0.0,
-                                    ),
-                                    style: const TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF1F2937),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    AppLanguage.tr(
-                                      'Petugas.members.attendance',
-                                    ).toUpperCase(),
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF9CA3AF),
-                                      letterSpacing: 1.0,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-
-                    const SizedBox(height: 24),
-
-                    // ─── Buttons Section ───
-                    if (!hasFaceData)
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            _showRegistrationOptions(member);
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFA855F7),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 18),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: Text(
-                            AppLanguage.tr('Petugas.members.register_face_id'),
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      )
-                    else if (!isHighAccuracy)
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(context);
+                    // ─── REGISTRATION ACTIONS ───
+                    // 1. Face Registration (Top)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          if (hasFaceData && !isHighAccuracy) {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
@@ -2472,32 +2133,113 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                                 ),
                               ),
                             ).then((refresh) {
-                              if (refresh == true)
+                              if (refresh == true) {
                                 _loadOrganizationMembersOptimized();
+                              }
                             });
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10B981),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 18),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: const Text(
-                            'Upgrade ke Akurasi Tinggi',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                          } else {
+                            _showRegistrationOptions(member);
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF312E81),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            side: const BorderSide(
+                              color: Color(0xFF4F46E5),
+                              width: 1.5,
                             ),
                           ),
+                          elevation: 0,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.face_rounded, size: 20),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Registrasi Wajah',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            if (hasFaceData) ...[
+                              const SizedBox(width: 8),
+                              const Icon(
+                                Icons.check_circle,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-
+                    ),
                     const SizedBox(height: 12),
 
-                    // ─── RFID Registration Button ───
+                    // 2. Fingerprint Registration (Middle)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => FingerprintRegistrationPage(
+                                organizationMemberId: member['id'],
+                                memberName: _getMemberName(member),
+                              ),
+                            ),
+                          ).then((refresh) {
+                            if (refresh == true) {
+                              _loadOrganizationMembersOptimized();
+                            }
+                          });
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF312E81),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            side: const BorderSide(
+                              color: Color(0xFF4F46E5),
+                              width: 1.5,
+                            ),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.fingerprint_rounded, size: 20),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Registrasi Sidik Jari',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            if (hasFingerprintData) ...[
+                              const SizedBox(width: 8),
+                              const Icon(
+                                Icons.check_circle,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // 3. RFID Registration (Bottom)
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
@@ -2506,7 +2248,6 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                           _showRfidRegistrationDialog(member);
                         },
                         style: ElevatedButton.styleFrom(
-                          // Blue-purple teal that complements purple theme
                           backgroundColor: const Color(0xFF312E81),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 18),
@@ -2524,15 +2265,21 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                           children: [
                             const Icon(Icons.nfc_rounded, size: 20),
                             const SizedBox(width: 8),
-                            Text(
-                              AppLanguage.tr(
-                                'Petugas.members.register_rfid_card',
-                              ),
-                              style: const TextStyle(
+                            const Text(
+                              'Registrasi RFID',
+                              style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            if (member['rfid_card_id'] != null) ...[
+                              const SizedBox(width: 8),
+                              const Icon(
+                                Icons.check_circle,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              ),
+                            ],
                           ],
                         ),
                       ),

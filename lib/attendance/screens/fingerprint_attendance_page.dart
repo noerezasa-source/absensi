@@ -51,7 +51,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
 
   // Fingerprint State
   bool _isScannerReady = false;
-  String _statusMessage = 'Menghubungkan ke scanner...';
+  String _statusMessage = AppLanguage.tr('attendance.fingerprint.initializing');
   Uint8List? _capturedImage;
   bool _isProcessing = false;
   List<Map<String, dynamic>> _allTemplates = [];
@@ -106,7 +106,11 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
   _computeBreakButtonState() {
     final schedule = _dailySchedule;
     if (schedule == null)
-      return (canBreakOut: false, canBreakIn: false, hint: 'Memuat jadwal...');
+      return (
+        canBreakOut: false,
+        canBreakIn: false,
+        hint: AppLanguage.tr('attendance.common.loading_schedule'),
+      );
 
     final bStartStr = schedule.breakStart;
     final bEndStr = schedule.breakEnd;
@@ -114,7 +118,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
       return (
         canBreakOut: false,
         canBreakIn: false,
-        hint: 'Tidak ada jadwal istirahat',
+        hint: AppLanguage.tr('attendance.fingerprint.no_break_schedule'),
       );
 
     TimeOfDay? parseTime(String s) {
@@ -146,7 +150,8 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     if (!can) {
       String fmt(TimeOfDay t) =>
           '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-      hint = 'Istirahat tersedia pukul ${fmt(bStart)} - ${fmt(bEnd)}';
+      hint =
+          '${AppLanguage.tr('attendance.fingerprint.break_available_at')} ${fmt(bStart)} - ${fmt(bEnd)}';
     }
 
     return (canBreakOut: can, canBreakIn: can, hint: hint);
@@ -164,8 +169,9 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
           // If we are already ready, just keep the ready message
           if (_isScannerReady && !_isProcessing) {
             setState(
-              () => _statusMessage =
-                  'Silakan tempelkan jari Anda pada scanner...',
+              () => _statusMessage = AppLanguage.tr(
+                'attendance.fingerprint.place_finger',
+              ),
             );
           }
           return;
@@ -203,21 +209,23 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
 
   String _translateStatus(String status) {
     if (status.contains('Identification active') || status.contains('Ready')) {
-      return 'Silakan tempelkan jari Anda pada scanner...';
+      return AppLanguage.tr('attendance.fingerprint.place_finger');
     }
-    if (status.contains('connect success')) return 'Scanner terhubung!';
+    if (status.contains('connect success'))
+      return AppLanguage.tr('attendance.fingerprint.connect_success');
     if (status.contains('connect failed') || status.contains('failed!')) {
-      return 'Gagal menghubungkan scanner.';
+      return AppLanguage.tr('attendance.fingerprint.connect_failed');
     }
     if (status.contains('Capture error')) {
       return status.contains('not found')
-          ? 'Scanner tidak terdeteksi.'
-          : 'Silakan tempelkan jari Anda pada scanner...';
+          ? AppLanguage.tr('attendance.fingerprint.scanner_not_found')
+          : AppLanguage.tr('attendance.fingerprint.place_finger');
     }
     if (status.contains('Not recognized')) {
-      return 'TIDAK DIKENALI. Silakan coba lagi.';
+      return AppLanguage.tr('attendance.fingerprint.scan_failed');
     }
-    if (status.contains('Identify success')) return 'Sidik jari dikenali!';
+    if (status.contains('Identify success'))
+      return AppLanguage.tr('attendance.fingerprint.scan_success');
     return status;
   }
 
@@ -242,14 +250,20 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     try {
       bool permission = await _fingerprintService.requestPermission();
       if (!permission) {
-        setState(() => _statusMessage = 'Izin akses USB ditolak');
+        setState(
+          () => _statusMessage = AppLanguage.tr(
+            'attendance.fingerprint.usb_permission_denied',
+          ),
+        );
         return;
       }
 
       final result = await _fingerprintService.startScanner();
       if (result != 'success') {
         setState(() {
-          _statusMessage = result ?? 'Gagal memulai scanner';
+          _statusMessage =
+              result ??
+              AppLanguage.tr('attendance.fingerprint.failed_to_start');
           _isScannerReady = false;
         });
         return;
@@ -267,10 +281,17 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
         await _fingerprintService.loadTemplates(formatted);
         await _fingerprintService.startIdentification();
       } else {
-        setState(() => _statusMessage = 'Database sidik jari belum ada');
+        setState(
+          () => _statusMessage = AppLanguage.tr(
+            'attendance.fingerprint.no_database',
+          ),
+        );
       }
     } catch (e) {
-      setState(() => _statusMessage = 'Terjadi kesalahan sistem: $e');
+      setState(
+        () => _statusMessage =
+            '${AppLanguage.tr('attendance.fingerprint.system_error')}: $e',
+      );
     }
   }
 
@@ -317,8 +338,22 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
       final diff = DateTime.now().difference(lastTime);
       if (diff < _duplicateCooldown) {
         final remaining = 5 - diff.inMinutes;
+        final profile =
+            (info['organization_members'] as Map?)?['user_profiles'] as Map?;
+        final name =
+            profile?['display_name'] ?? profile?['first_name'] ?? 'Member';
+        String modeLabel = action.toUpperCase().replaceAll('_', ' ');
+        if (action == 'check_in')
+          modeLabel = AppLanguage.tr('attendance.fingerprint.in');
+        if (action == 'check_out')
+          modeLabel = AppLanguage.tr('attendance.fingerprint.out');
+        if (action == 'break_start')
+          modeLabel = AppLanguage.tr('attendance.fingerprint.break_in');
+        if (action == 'break_end')
+          modeLabel = AppLanguage.tr('attendance.fingerprint.break_out');
+
         _showDuplicateOverlay(
-          "${info['display_name'] ?? 'Member'} sudah absen $action. Coba lagi dalam $remaining menit.",
+          "$name ${AppLanguage.tr('attendance.fingerprint.already_attended')} $modeLabel. ${AppLanguage.tr('attendance.fingerprint.try_again_in')} $remaining ${AppLanguage.tr('attendance.fingerprint.minutes')}.",
         );
         return;
       }
@@ -345,6 +380,23 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
             ),
           );
           if (_entries.length > 50) _entries.removeRange(50, _entries.length);
+
+          final profile =
+              (info['organization_members'] as Map?)?['user_profiles'] as Map?;
+          final name =
+              profile?['display_name'] ?? profile?['first_name'] ?? 'Member';
+          String modeLabel = action.toUpperCase().replaceAll('_', ' ');
+          if (action == 'check_in')
+            modeLabel = AppLanguage.tr('attendance.fingerprint.in');
+          if (action == 'check_out')
+            modeLabel = AppLanguage.tr('attendance.fingerprint.out');
+          if (action == 'break_start')
+            modeLabel = AppLanguage.tr('attendance.fingerprint.break_in');
+          if (action == 'break_end')
+            modeLabel = AppLanguage.tr('attendance.fingerprint.break_out');
+
+          _statusMessage =
+              '${AppLanguage.tr('attendance.fingerprint.success_prefix')}: $name ($modeLabel)';
         });
       }
     } catch (e) {
@@ -360,13 +412,13 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     late OverlayEntry oe;
     oe = OverlayEntry(
       builder: (c) => Positioned(
-        top: 100,
-        left: 16,
-        right: 16,
+        top: MediaQuery.of(c).padding.top + 8,
+        left: 12,
+        right: 12,
         child: Material(
           color: Colors.transparent,
           child: Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [Colors.orange.shade500, Colors.orange.shade700],
@@ -382,20 +434,28 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.warning_rounded, color: Colors.white),
-                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.warning_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Text(
                     message,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  onPressed: () => oe.remove(),
                 ),
               ],
             ),
@@ -404,7 +464,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
       ),
     );
     overlay.insert(oe);
-    Future.delayed(const Duration(seconds: 3), () {
+    Future.delayed(const Duration(seconds: 4), () {
       if (oe.mounted) oe.remove();
     });
   }
@@ -449,21 +509,23 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
 
   String _formatTimeShort(DateTime time) =>
       '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  String _formatAmPm(DateTime time) => time.hour >= 12 ? 'PM' : 'AM';
+  String _formatAmPm(DateTime time) => time.hour >= 12
+      ? AppLanguage.tr('common.pm')
+      : AppLanguage.tr('common.am');
   String _formatDate(DateTime time) {
-    const months = [
-      'JAN',
-      'FEB',
-      'MAR',
-      'APR',
-      'MEI',
-      'JUN',
-      'JUL',
-      'AGU',
-      'SEP',
-      'OKT',
-      'NOV',
-      'DES',
+    final months = [
+      AppLanguage.tr('common.jan_short'),
+      AppLanguage.tr('common.feb_short'),
+      AppLanguage.tr('common.mar_short'),
+      AppLanguage.tr('common.apr_short'),
+      AppLanguage.tr('common.may_short'),
+      AppLanguage.tr('common.jun_short'),
+      AppLanguage.tr('common.jul_short'),
+      AppLanguage.tr('common.aug_short'),
+      AppLanguage.tr('common.sep_short'),
+      AppLanguage.tr('common.oct_short'),
+      AppLanguage.tr('common.nov_short'),
+      AppLanguage.tr('common.dec_short'),
     ];
     return '${time.day} ${months[time.month - 1]} ${time.year}';
   }
@@ -477,14 +539,14 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
           SafeArea(
             child: Column(
               children: [
-                const SizedBox(height: 20),
+                const SizedBox(height: 10),
                 _buildClockHeader(),
-                const SizedBox(height: 30),
+                const SizedBox(height: 10),
                 _buildShiftCard(),
-                const SizedBox(height: 20),
+                const SizedBox(height: 15),
                 // Fingerprint Preview Area Always Visible at Top
                 _buildFingerprintPreview(),
-                const SizedBox(height: 10),
+                const SizedBox(height: 20),
                 Expanded(child: _buildAttendanceList()),
               ],
             ),
@@ -535,7 +597,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
             Text(
               t,
               style: const TextStyle(
-                fontSize: 56,
+                fontSize: 72,
                 fontWeight: FontWeight.w400,
                 color: Colors.black87,
                 letterSpacing: -2,
@@ -555,7 +617,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
         Text(
           d,
           style: TextStyle(
-            fontSize: 12,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
             color: Colors.grey.shade600,
             letterSpacing: 1.2,
@@ -566,13 +628,17 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
   }
 
   Widget _buildShiftCard() {
-    String label = 'Select Shift';
+    String label = AppLanguage.tr('attendance.fingerprint.select_shift');
     if (_selectedMode != null) {
       String act = _attendanceMode.toUpperCase().replaceAll('_', ' ');
-      if (_attendanceMode == 'break_start') act = 'ISTIRAHAT MASUK';
-      if (_attendanceMode == 'break_end') act = 'ISTIRAHAT KELUAR';
-      if (_attendanceMode == 'check_in') act = 'IN';
-      if (_attendanceMode == 'check_out') act = 'OUT';
+      if (_attendanceMode == 'check_in')
+        act = AppLanguage.tr('attendance.fingerprint.in');
+      if (_attendanceMode == 'check_out')
+        act = AppLanguage.tr('attendance.fingerprint.out');
+      if (_attendanceMode == 'break_start')
+        act = AppLanguage.tr('attendance.fingerprint.break_in');
+      if (_attendanceMode == 'break_end')
+        act = AppLanguage.tr('attendance.fingerprint.break_out');
       label = '${_selectedMode!['name']} - $act';
     }
     return Padding(
@@ -581,7 +647,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
         onTap: _openShiftSelectionSheet,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [Color(0xFF9333EA), Color(0xFF7E22CE)],
@@ -608,7 +674,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                 child: const Icon(
                   Icons.swap_horiz,
                   color: Colors.white,
-                  size: 20,
+                  size: 24,
                 ),
               ),
               const SizedBox(width: 12),
@@ -617,12 +683,12 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                   label,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 16,
+                    fontSize: 18,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Colors.white, size: 20),
+              const Icon(Icons.chevron_right, color: Colors.white, size: 24),
             ],
           ),
         ),
@@ -636,8 +702,8 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
         Stack(
           alignment: Alignment.center,
           children: [
-            _buildPulseCircle(140, 0.1),
-            _buildPulseCircle(120, 0.05),
+            _buildPulseCircle(100, 0.1),
+            _buildPulseCircle(95, 0.05),
             Container(
               width: 100,
               height: 100,
@@ -682,13 +748,13 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
               ),
           ],
         ),
-        const SizedBox(height: 10),
         Text(
           _statusMessage,
           style: TextStyle(
             fontSize: 14,
             color: Colors.grey.shade600,
             fontWeight: FontWeight.w500,
+            height: _statusMessage.trim().isEmpty ? 0 : 1.2,
           ),
         ),
       ],
@@ -718,7 +784,7 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     if (_entries.isEmpty)
       return Center(
         child: Text(
-          "Belum ada data absen hari ini",
+          AppLanguage.tr('attendance.fingerprint.no_data_today'),
           style: TextStyle(color: Colors.grey.shade400),
         ),
       );
@@ -793,18 +859,18 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
 
   Widget _buildActionBadge(String action) {
     Color color = Colors.green;
-    String label = 'MASUK';
+    String label = AppLanguage.tr('attendance.fingerprint.in');
     if (action == 'check_out') {
       color = Colors.red;
-      label = 'KELUAR';
+      label = AppLanguage.tr('attendance.fingerprint.out');
     }
     if (action == 'break_start') {
       color = Colors.orange;
-      label = 'ISTIRAHAT MASUK';
+      label = AppLanguage.tr('attendance.fingerprint.break_in');
     }
     if (action == 'break_end') {
       color = Colors.blue;
-      label = 'ISTIRAHAT KELUAR';
+      label = AppLanguage.tr('attendance.fingerprint.break_out');
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -850,9 +916,9 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
               ),
             ),
             const SizedBox(height: 24),
-            const Text(
-              'Select Your Shift',
-              style: TextStyle(
+            Text(
+              AppLanguage.tr('attendance.fingerprint.select_shift'),
+              style: const TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFF9333EA),
@@ -867,7 +933,8 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 title: Text(
-                  mode['name'] ?? 'Shift',
+                  mode['name'] ??
+                      AppLanguage.tr('attendance.fingerprint.shift'),
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     color: sel ? Colors.black : Colors.black87,
@@ -922,7 +989,10 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       onPressed: () => Navigator.pop(context, 'check_in'),
-                      child: const Text('IN'),
+                      child: Text(
+                        AppLanguage.tr('attendance.fingerprint.in'),
+                        style: const TextStyle(fontSize: 14),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -934,7 +1004,10 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       onPressed: () => Navigator.pop(context, 'check_out'),
-                      child: const Text('OUT'),
+                      child: Text(
+                        AppLanguage.tr('attendance.fingerprint.out'),
+                        style: const TextStyle(fontSize: 14),
+                      ),
                     ),
                   ),
                 ],
@@ -963,7 +1036,10 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                                   ? () => Navigator.pop(context, 'break_start')
                                   : null,
                               child: Text(
-                                AppLanguage.tr('attendance.rfid.break_in'),
+                                AppLanguage.tr(
+                                  'attendance.fingerprint.break_in',
+                                ),
+                                style: const TextStyle(fontSize: 14),
                               ),
                             ),
                           ),
@@ -983,7 +1059,10 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
                                   ? () => Navigator.pop(context, 'break_end')
                                   : null,
                               child: Text(
-                                AppLanguage.tr('attendance.rfid.break_out'),
+                                AppLanguage.tr(
+                                  'attendance.fingerprint.break_out',
+                                ),
+                                style: const TextStyle(fontSize: 14),
                               ),
                             ),
                           ),

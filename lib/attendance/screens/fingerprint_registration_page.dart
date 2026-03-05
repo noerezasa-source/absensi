@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../services/fingerprint_service.dart';
 import '../services/biometric_service.dart';
+import '../../helpers/language_helper.dart';
 
 class FingerprintRegistrationPage extends StatefulWidget {
   final int organizationMemberId;
@@ -26,8 +27,9 @@ class _FingerprintRegistrationPageState
   final FingerprintService _fingerprintService = FingerprintService();
   final BiometricService _biometricService = BiometricService();
 
-  String _instructionText =
-      'Ketuk tombol Mulai untuk mendaftarkan sidik jari Anda.';
+  String _instructionText = AppLanguage.tr(
+    'attendance.fingerprint.start_instruction',
+  );
   Uint8List? _currentImage;
   bool _isScannerStarted = false;
   bool _isRegistering = false;
@@ -80,7 +82,9 @@ class _FingerprintRegistrationPageState
         setState(() {
           _registrationStep = 3;
           _isRegistering = false;
-          _instructionText = 'Pendaftaran Berhasil!';
+          _instructionText = AppLanguage.tr(
+            'attendance.fingerprint.berhasil_selesai',
+          );
         });
         await _saveFingerprintTemplate(template);
       }
@@ -119,34 +123,44 @@ class _FingerprintRegistrationPageState
     if (status.contains('Press finger')) {
       if (status.contains('1/3')) {
         _registrationStep = 1;
-        _instructionText = 'Tempelkan Jari Anda (Kali Pertama)';
+        _instructionText = AppLanguage.tr('attendance.fingerprint.step_1');
       } else if (status.contains('2/3')) {
         _registrationStep = 2;
-        _instructionText = 'Tempelkan Jari yang SAMA (Kali Kedua)';
+        _instructionText = AppLanguage.tr('attendance.fingerprint.step_2');
       } else if (status.contains('3/3')) {
         _registrationStep = 3;
-        _instructionText = 'Tempelkan Sekali Lagi (Terakhir)';
+        _instructionText = AppLanguage.tr('attendance.fingerprint.step_3');
       } else {
         if (_registrationStep == 0) _registrationStep = 1;
-        _instructionText = 'Tempelkan jari pada sensor...';
+        _instructionText = AppLanguage.tr(
+          'attendance.fingerprint.place_finger',
+        );
       }
     } else if (status.contains('Lift finger')) {
-      _instructionText = 'Angkat Jari Anda sebentar...';
+      _instructionText = AppLanguage.tr('attendance.fingerprint.lift_finger');
     } else if (status.contains('Registration successful')) {
-      _instructionText = 'Pendaftaran Selesai!';
+      _instructionText = AppLanguage.tr(
+        'attendance.fingerprint.berhasil_selesai',
+      );
       _registrationStep = 3;
     } else if (status.contains('already enrolled')) {
-      _instructionText = 'Sidik Jari ini sudah terdaftar sebelumnya.';
+      _instructionText = AppLanguage.tr(
+        'attendance.fingerprint.already_enrolled',
+      );
       _isRegistering = false;
     } else if (status.contains('Please press same finger')) {
-      _instructionText = 'Gagal: Harus menggunakan jari yang sama!';
+      _instructionText = AppLanguage.tr(
+        'attendance.fingerprint.not_same_finger',
+      );
       _isRegistering = false;
       _registrationStep = 0;
     } else if (lowerStatus.contains('failed')) {
       if (lowerStatus.contains('enroll') ||
           lowerStatus.contains('merge') ||
           lowerStatus.contains('save')) {
-        _instructionText = 'Registrasi Gagal. Silakan coba lagi.';
+        _instructionText = AppLanguage.tr(
+          'attendance.fingerprint.registration_failed',
+        );
         _isRegistering = false;
         _registrationStep = 0;
       }
@@ -158,21 +172,28 @@ class _FingerprintRegistrationPageState
     setState(() {
       _isRegistering = true;
       _registrationStep = 1;
-      _instructionText = 'Tempelkan Jari Anda (Langkah 1 dari 3)';
+      _instructionText = 'Scan jari anda pada scanner (Langkah 1 dari 3)';
     });
     await _fingerprintService.register(widget.organizationMemberId.toString());
   }
 
   Future<void> _saveFingerprintTemplate(String templateData) async {
     try {
-      setState(() => _instructionText = 'Menyimpan sidik jari...');
+      setState(
+        () =>
+            _instructionText = AppLanguage.tr('attendance.fingerprint.saving'),
+      );
       await _biometricService.registerFingerprintTemplate(
         organizationMemberId: widget.organizationMemberId,
         templateBase64: templateData,
       );
       if (mounted) _showSuccessDialog();
     } catch (e) {
-      if (mounted) setState(() => _instructionText = 'Gagal menyimpan: $e');
+      if (mounted)
+        setState(
+          () => _instructionText =
+              '${AppLanguage.tr('attendance.fingerprint.registration_failed')}: $e',
+        );
     }
   }
 
@@ -195,15 +216,15 @@ class _FingerprintRegistrationPageState
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
           ),
-          title: const Row(
-            children: [
-              Icon(Icons.check_circle, color: Colors.green),
-              SizedBox(width: 10),
-              Text('Berhasil'),
-            ],
-          ),
-          content: const Text(
-            'Sidik jari Anda telah berhasil didaftarkan ke sistem.',
+          title: Center(
+            child: Text(
+              AppLanguage.tr('attendance.fingerprint.success'),
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 22,
+                color: Colors.green,
+              ),
+            ),
           ),
         );
       },
@@ -215,9 +236,9 @@ class _FingerprintRegistrationPageState
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text(
-          'Registrasi Sidik Jari',
-          style: TextStyle(fontWeight: FontWeight.bold),
+        title: Text(
+          AppLanguage.tr('attendance.fingerprint.registration_title'),
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         backgroundColor: Colors.white,
         foregroundColor: const Color(0xFF4A1E79),
@@ -239,29 +260,26 @@ class _FingerprintRegistrationPageState
                     color: Color(0xFF2D1152),
                   ),
                 ),
-              const SizedBox(height: 8),
-              const Text(
-                'Ikuti langkah-langkah di bawah untuk mendaftarkan sidik jari Anda.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 14),
-              ),
 
               const Spacer(),
 
               // STEP INDICATOR
               if (_isRegistering) _buildStepIndicator(),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
 
               // FINGERPRINT PREVIEW AREA
               _buildFpPreview(),
 
-              const SizedBox(height: 30),
+              const SizedBox(height: 15),
 
               // INSTRUCTION TEXT (Large & Bold)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFF4A1E79).withOpacity(0.05),
                   borderRadius: BorderRadius.circular(20),
@@ -301,7 +319,9 @@ class _FingerprintRegistrationPageState
                     shadowColor: const Color(0xFF4A1E79).withOpacity(0.4),
                   ),
                   child: Text(
-                    _isRegistering ? 'Proses Scan...' : 'Mulai Scan Jari',
+                    _isRegistering
+                        ? AppLanguage.tr('attendance.fingerprint.processing')
+                        : AppLanguage.tr('attendance.fingerprint.begin_scan'),
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -313,7 +333,7 @@ class _FingerprintRegistrationPageState
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: Text(
-                  'Batal',
+                  AppLanguage.tr('attendance.fingerprint.cancel'),
                   style: TextStyle(
                     color: Colors.grey.shade600,
                     fontWeight: FontWeight.w500,
@@ -332,7 +352,7 @@ class _FingerprintRegistrationPageState
     return Column(
       children: [
         Text(
-          "Langkah $_registrationStep dari 3",
+          "${AppLanguage.tr('attendance.fingerprint.step_label')} $_registrationStep ${AppLanguage.tr('attendance.fingerprint.step_from')}",
           style: const TextStyle(
             fontWeight: FontWeight.bold,
             color: Color(0xFF4A1E79),
