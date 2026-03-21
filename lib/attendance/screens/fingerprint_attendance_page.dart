@@ -116,21 +116,23 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
   ({bool canBreakOut, bool canBreakIn, String? hint})
   _computeBreakButtonState() {
     final schedule = _dailySchedule;
-    if (schedule == null)
+    if (schedule == null) {
       return (
         canBreakOut: false,
         canBreakIn: false,
         hint: AppLanguage.tr('attendance.common.loading_schedule'),
       );
+    }
 
     final bStartStr = schedule.breakStart;
     final bEndStr = schedule.breakEnd;
-    if (bStartStr == null || bEndStr == null)
+    if (bStartStr == null || bEndStr == null) {
       return (
         canBreakOut: false,
         canBreakIn: false,
         hint: AppLanguage.tr('attendance.fingerprint.no_break_schedule'),
       );
+    }
 
     TimeOfDay? parseTime(String s) {
       try {
@@ -143,8 +145,9 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
 
     final bStart = parseTime(bStartStr);
     final bEnd = parseTime(bEndStr);
-    if (bStart == null || bEnd == null)
+    if (bStart == null || bEnd == null) {
       return (canBreakOut: true, canBreakIn: true, hint: null);
+    }
 
     final now = TimezoneHelper.convertUtcToOrgTimezone(
       DateTime.now().toUtc(),
@@ -222,8 +225,9 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     if (status.contains('Identification active') || status.contains('Ready')) {
       return AppLanguage.tr('attendance.fingerprint.place_finger');
     }
-    if (status.contains('connect success'))
+    if (status.contains('connect success')) {
       return AppLanguage.tr('attendance.fingerprint.connect_success');
+    }
     if (status.contains('connect failed') || status.contains('failed!')) {
       return AppLanguage.tr('attendance.fingerprint.connect_failed');
     }
@@ -235,8 +239,9 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     if (status.contains('Not recognized')) {
       return AppLanguage.tr('attendance.fingerprint.scan_failed');
     }
-    if (status.contains('Identify success'))
+    if (status.contains('Identify success')) {
       return AppLanguage.tr('attendance.fingerprint.scan_success');
+    }
     return status;
   }
 
@@ -420,11 +425,11 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
       return;
     }
 
-    debugPrint('👤 Identified member: ${mid} (Info found: ${info.isNotEmpty})');
+    debugPrint('👤 Identified member: $mid (Info found: ${info.isNotEmpty})');
 
     final action = _attendanceMode;
     final workMode = _selectedMode?['code'] ?? _selectedMode?['name'];
-    final cooldownKey = "${mid}_${action}_${workMode}";
+    final cooldownKey = "${mid}_${action}_$workMode";
 
     // Check Cooldown
     if (_lastAttendanceTime.containsKey(cooldownKey)) {
@@ -437,14 +442,18 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
         final name =
             profile?['display_name'] ?? profile?['first_name'] ?? 'Member';
         String modeLabel = action.toUpperCase().replaceAll('_', ' ');
-        if (action == 'check_in')
+        if (action == 'check_in') {
           modeLabel = AppLanguage.tr('attendance.fingerprint.in');
-        if (action == 'check_out')
+        }
+        if (action == 'check_out') {
           modeLabel = AppLanguage.tr('attendance.fingerprint.out');
-        if (action == 'break_start')
+        }
+        if (action == 'break_start') {
           modeLabel = AppLanguage.tr('attendance.fingerprint.break_in');
-        if (action == 'break_end')
+        }
+        if (action == 'break_end') {
           modeLabel = AppLanguage.tr('attendance.fingerprint.break_out');
+        }
 
         _showDuplicateOverlay(
           "$name ${AppLanguage.tr('attendance.fingerprint.already_attended')} $modeLabel. ${AppLanguage.tr('attendance.fingerprint.try_again_in')} $remaining ${AppLanguage.tr('attendance.fingerprint.minutes')}.",
@@ -480,14 +489,18 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
           final name =
               profile?['display_name'] ?? profile?['first_name'] ?? 'Member';
           String modeLabel = action.toUpperCase().replaceAll('_', ' ');
-          if (action == 'check_in')
+          if (action == 'check_in') {
             modeLabel = AppLanguage.tr('attendance.fingerprint.in');
-          if (action == 'check_out')
+          }
+          if (action == 'check_out') {
             modeLabel = AppLanguage.tr('attendance.fingerprint.out');
-          if (action == 'break_start')
+          }
+          if (action == 'break_start') {
             modeLabel = AppLanguage.tr('attendance.fingerprint.break_in');
-          if (action == 'break_end')
+          }
+          if (action == 'break_end') {
             modeLabel = AppLanguage.tr('attendance.fingerprint.break_out');
+          }
 
           _statusMessage =
               '${AppLanguage.tr('attendance.fingerprint.success_prefix')}: $name ($modeLabel)';
@@ -773,14 +786,18 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
     String label = AppLanguage.tr('attendance.fingerprint.select_shift');
     if (_selectedMode != null) {
       String act = _attendanceMode.toUpperCase().replaceAll('_', ' ');
-      if (_attendanceMode == 'check_in')
+      if (_attendanceMode == 'check_in') {
         act = AppLanguage.tr('attendance.fingerprint.in');
-      if (_attendanceMode == 'check_out')
+      }
+      if (_attendanceMode == 'check_out') {
         act = AppLanguage.tr('attendance.fingerprint.out');
-      if (_attendanceMode == 'break_start')
+      }
+      if (_attendanceMode == 'break_start') {
         act = AppLanguage.tr('attendance.fingerprint.break_in');
-      if (_attendanceMode == 'break_end')
+      }
+      if (_attendanceMode == 'break_end') {
         act = AppLanguage.tr('attendance.fingerprint.break_out');
+      }
       label = '${_selectedMode!['name']} - $act';
     }
     return Padding(
@@ -997,13 +1014,14 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
   }
 
   Widget _buildAttendanceList() {
-    if (_entries.isEmpty)
+    if (_entries.isEmpty) {
       return Center(
         child: Text(
           AppLanguage.tr('attendance.fingerprint.no_data_today'),
           style: TextStyle(color: Colors.grey.shade400),
         ),
       );
+    }
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(24, 10, 24, 20),
       itemCount: _entries.length,
@@ -1260,12 +1278,15 @@ class _FingerprintAttendancePageState extends State<FingerprintAttendancePage> {
 
   IconData _getIconForMode(String name) {
     name = name.toLowerCase();
-    if (name.contains('morning') || name.contains('pagi'))
+    if (name.contains('morning') || name.contains('pagi')) {
       return Icons.wb_sunny_outlined;
-    if (name.contains('afternoon') || name.contains('siang'))
+    }
+    if (name.contains('afternoon') || name.contains('siang')) {
       return Icons.wb_twilight;
-    if (name.contains('night') || name.contains('malam'))
+    }
+    if (name.contains('night') || name.contains('malam')) {
       return Icons.nights_stay_outlined;
+    }
     return Icons.schedule;
   }
 

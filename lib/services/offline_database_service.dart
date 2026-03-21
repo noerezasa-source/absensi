@@ -1459,21 +1459,14 @@ class OfflineDatabaseService {
 
       // Determine event_type and timestamp flexibly
       String? eventType = data['event_type'];
-      if (eventType == null) {
-        eventType = data['actual_check_in'] != null ? 'check_in' : 'check_out';
-      }
+      eventType ??= data['actual_check_in'] != null ? 'check_in' : 'check_out';
 
       String? timestamp = data['timestamp'];
-      if (timestamp == null) {
-        timestamp =
-            data['actual_check_in'] ??
+      timestamp ??= data['actual_check_in'] ??
             data['actual_check_out'] ??
             data['offline_timestamp'];
-      }
 
-      if (timestamp == null) {
-        timestamp = DateTime.now().toUtc().toIso8601String();
-      }
+      timestamp ??= DateTime.now().toUtc().toIso8601String();
 
       final method = data['method'] ?? 'manual';
       final memberId = data['organization_member_id'];

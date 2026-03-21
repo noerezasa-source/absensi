@@ -12,9 +12,7 @@ import '../../models/attendance_record.dart';
 import '../../helpers/rfid_mode_helper.dart';
 import '../../attendance/screens/face_registration_page.dart';
 import '../../auth/screens/login.dart';
-import 'petugas_dashboard.dart';
 import 'petugas_members_page.dart';
-import 'petugas_records_page.dart';
 import '../../helpers/language_helper.dart';
 
 class PetugasProfilePage extends StatefulWidget {

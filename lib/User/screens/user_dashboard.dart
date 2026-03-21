@@ -338,7 +338,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                         ),
                       ),
                     );
-                  }).toList(),
+                  }),
                   const Divider(height: 32),
                   SizedBox(
                     width: double.infinity,

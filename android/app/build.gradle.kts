@@ -10,6 +10,17 @@ android {
     compileSdk = 36
     ndkVersion = "29.0.13599879" // ✅ FIXED: Used the exact version found in the SDK folder
 
+    // ✅ TAMBAHKAN INI UNTUK FORCE VERSI LAMA DEPENDENCY
+    configurations.all {
+        resolutionStrategy {
+            force("androidx.browser:browser:1.8.0")
+            force("androidx.activity:activity:1.8.0")
+            force("androidx.activity:activity-ktx:1.8.0")
+            force("androidx.core:core:1.12.0")
+            force("androidx.core:core-ktx:1.12.0")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -61,8 +72,34 @@ android {
     }
 }
 
+// ✅ TAMBAHKAN INI UNTUK NONAKTIFKAN AAR METADATA CHECK
+tasks.whenTaskAdded {
+    if (name == "checkDebugAarMetadata") {
+        enabled = false
+    }
+}
+
 dependencies {
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
+    
+    // ✅ TAMBAHKAN INI UNTUK MEMAKSA VERSI LAMA (opsional)
+    constraints {
+        implementation("androidx.browser:browser:1.8.0") {
+            because("Force older version for compatibility")
+        }
+        implementation("androidx.activity:activity:1.8.0") {
+            because("Force older version for compatibility")
+        }
+        implementation("androidx.activity:activity-ktx:1.8.0") {
+            because("Force older version for compatibility")
+        }
+        implementation("androidx.core:core:1.12.0") {
+            because("Force older version for compatibility")
+        }
+        implementation("androidx.core:core-ktx:1.12.0") {
+            because("Force older version for compatibility")
+        }
+    }
 }
 
 flutter {

@@ -61,7 +61,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
   List<Map<String, dynamic>> _allAttendanceRecords = [];
   List<Map<String, dynamic>> _filteredRecords = [];
   Map<int, String> _deviceLocations = {};
-  Map<int, dynamic> _memberProfiles = {}; // Changed key type to int
+  final Map<int, dynamic> _memberProfiles = {}; // Changed key type to int
 
   DateTime _focusedDay = DateTime.now();
   DateTime _selectedDay = DateTime.now();
@@ -157,7 +157,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
           .eq('id', organizationId)
           .single();
 
-      if (mounted && org != null) {
+      if (mounted) {
         setState(() {
           _organization = org;
           if (org['timezone'] != null) {
@@ -1418,9 +1418,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
   }
 
   Widget _buildRecordListItem(
-    Map<String, dynamic> record, {
-    bool isCompact = false,
-  }) {
+    Map<String, dynamic> record) {
     final memberName = _getMemberName(record);
     final employeeId = _getEmployeeId(record);
     final memberPhoto = _getMemberPhotoUrl(record);

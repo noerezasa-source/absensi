@@ -2,7 +2,6 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' show Rect;
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
@@ -65,7 +64,9 @@ class FaceRecognitionTFLiteService {
   List<double> l2Normalize(List<double> vector) {
     if (vector.isEmpty) return [];
     double sum = 0.0;
-    for (var x in vector) sum += x * x;
+    for (var x in vector) {
+      sum += x * x;
+    }
     final norm = sqrt(sum);
     if (norm == 0) return vector;
     return vector.map((x) => x / norm).toList();
@@ -182,11 +183,12 @@ class FaceRecognitionTFLiteService {
     final landmarks = <String, dynamic>{};
     void addLandmark(FaceLandmarkType type, String key) {
       final l = face.landmarks[type];
-      if (l != null)
+      if (l != null) {
         landmarks[key] = {
           'x': l.position.x.toDouble(),
           'y': l.position.y.toDouble(),
         };
+      }
     }
 
     // Add essential landmarks
@@ -222,8 +224,9 @@ class FaceRecognitionTFLiteService {
     );
 
     if (response.error != null) throw Exception(response.error);
-    if (response.embedding == null)
+    if (response.embedding == null) {
       throw Exception('Failed to generate embedding');
+    }
 
     // ✅ CRITICAL: L2 Normalize embedding immediately
     final normalizedEmbedding = l2Normalize(response.embedding!);
@@ -247,11 +250,12 @@ class FaceRecognitionTFLiteService {
     // ... [Same landmark extraction logic can be simplified or delegated] ...
     void addLandmark(FaceLandmarkType type, String key) {
       final l = face.landmarks[type];
-      if (l != null)
+      if (l != null) {
         landmarks[key] = {
           'x': l.position.x.toDouble(),
           'y': l.position.y.toDouble(),
         };
+      }
     }
 
     addLandmark(FaceLandmarkType.leftEye, 'leftEye');
@@ -278,8 +282,9 @@ class FaceRecognitionTFLiteService {
     );
 
     if (response.error != null) throw Exception(response.error);
-    if (response.embedding == null)
+    if (response.embedding == null) {
       throw Exception('Failed to generate embedding');
+    }
 
     // ✅ CRITICAL: L2 Normalize embedding immediately
     final normalizedEmbedding = l2Normalize(response.embedding!);
@@ -457,7 +462,7 @@ class FaceRecognitionTFLiteService {
     }
 
     final imageFile = File(imagePath);
-    final decoded = await img.decodeImage(await imageFile.readAsBytes());
+    final decoded = img.decodeImage(await imageFile.readAsBytes());
     if (decoded != null) {
       final faceArea = face.boundingBox.width * face.boundingBox.height;
       final imgArea = decoded.width * decoded.height;

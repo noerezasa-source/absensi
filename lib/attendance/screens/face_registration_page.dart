@@ -292,53 +292,63 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final double leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
     final double rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
 
-    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4)
+    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4) {
       return {'isValid': false, 'message': 'Buka mata Anda'};
+    }
 
     final double headY = face.headEulerAngleY ?? 0.0;
     final double headX = face.headEulerAngleX ?? 0.0;
     final double headZ = (face.headEulerAngleZ ?? 0.0).abs();
 
-    if (headZ > 45.0)
+    if (headZ > 45.0) {
       return {
         'isValid': false,
         'message': 'Jangan miringkan kepala',
       }; // Relaxed from 35
+    }
 
     // Angle specific validation
     switch (_currentAngle) {
       case CaptureAngle.front:
-        if (headY.abs() > 10.0)
+        if (headY.abs() > 10.0) {
           return {
             'isValid': false,
             'message': 'Lihat Lurus ke Depan',
           }; // Relaxed from 10 to 15? No, keep 10 for front but provide clear feedback
-        if (headX.abs() > 10.0)
+        }
+        if (headX.abs() > 10.0) {
           return {'isValid': false, 'message': 'Wajah sejajar kamera'};
+        }
         break;
       case CaptureAngle.left:
         // Range: 15 to 45 degrees (User turns to THEIR left - sign swapped for this device)
-        if (headY < -10.0)
+        if (headY < -10.0) {
           return {'isValid': false, 'message': '← Salah Arah! Toleh KIRI'};
-        if (headY < 15.0)
+        }
+        if (headY < 15.0) {
           return {'isValid': false, 'message': '← Toleh ke KIRI'};
-        if (headY > 45.0)
+        }
+        if (headY > 45.0) {
           return {
             'isValid': false,
             'message': 'Terlalu miring! Kembali sedikit',
           };
+        }
         break;
       case CaptureAngle.right:
         // Range: -15 to -45 degrees (User turns to THEIR right - sign swapped for this device)
-        if (headY > 10.0)
+        if (headY > 10.0) {
           return {'isValid': false, 'message': 'Salah Arah! Toleh KANAN →'};
-        if (headY > -15.0)
+        }
+        if (headY > -15.0) {
           return {'isValid': false, 'message': 'Toleh ke KANAN →'};
-        if (headY < -45.0)
+        }
+        if (headY < -45.0) {
           return {
             'isValid': false,
             'message': 'Terlalu miring! Kembali sedikit',
           };
+        }
         break;
       default:
         break;
@@ -438,12 +448,15 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     try {
       // 1. Combine templates
       final List<Map<String, dynamic>> combinedList = [];
-      if (_capturedTemplates.containsKey(CaptureAngle.front))
+      if (_capturedTemplates.containsKey(CaptureAngle.front)) {
         combinedList.add(_capturedTemplates[CaptureAngle.front]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.left))
+      }
+      if (_capturedTemplates.containsKey(CaptureAngle.left)) {
         combinedList.add(_capturedTemplates[CaptureAngle.left]!);
-      if (_capturedTemplates.containsKey(CaptureAngle.right))
+      }
+      if (_capturedTemplates.containsKey(CaptureAngle.right)) {
         combinedList.add(_capturedTemplates[CaptureAngle.right]!);
+      }
 
       final multiTemplate = {
         'version': 4, // Aligned with high-standard container version

@@ -1985,12 +1985,15 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   IconData _getIconForMode(String name) {
     name = name.toLowerCase();
-    if (name.contains('morning') || name.contains('pagi'))
+    if (name.contains('morning') || name.contains('pagi')) {
       return Icons.wb_sunny_outlined;
-    if (name.contains('afternoon') || name.contains('siang'))
+    }
+    if (name.contains('afternoon') || name.contains('siang')) {
       return Icons.wb_twilight;
-    if (name.contains('night') || name.contains('malam'))
+    }
+    if (name.contains('night') || name.contains('malam')) {
       return Icons.nights_stay_outlined;
+    }
     return Icons.schedule;
   }
 
@@ -2163,7 +2166,7 @@ class _AttendanceEntry {
   final String action;
   final DateTime timestamp;
   final String? workTimeMode;
-  final String method;
+  final String method = 'RFID';
 
   _AttendanceEntry({
     required this.memberId,
@@ -2172,6 +2175,5 @@ class _AttendanceEntry {
     required this.action,
     required this.timestamp,
     this.workTimeMode,
-    this.method = 'RFID',
   });
 }

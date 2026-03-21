@@ -30,7 +30,7 @@ class MemberPerformanceService {
           .eq('organization_id', organizationId)
           .eq('is_active', true);
 
-      final memberCount = memberCountResponse?.length ?? 0;
+      final memberCount = memberCountResponse.length ?? 0;
       debugPrint('Active members count: $memberCount');
 
       // Test 3: Count attendance records for current month
@@ -52,7 +52,7 @@ class MemberPerformanceService {
           .gte('attendance_date', startDateStr)
           .lte('attendance_date', endDateStr);
 
-      final attendanceCount = attendanceResponse?.length ?? 0;
+      final attendanceCount = attendanceResponse.length ?? 0;
       debugPrint('Attendance records this month: $attendanceCount');
 
       // Test 4: Check user_profiles
@@ -61,14 +61,14 @@ class MemberPerformanceService {
           .select('id, display_name')
           .limit(5);
 
-      debugPrint('User profiles count: ${userProfileResponse?.length ?? 0}');
+      debugPrint('User profiles count: ${userProfileResponse.length ?? 0}');
 
       return {
         'organization_exists': orgResponse != null,
         'organization_data': orgResponse,
         'active_members_count': memberCount,
         'attendance_records_count': attendanceCount,
-        'user_profiles_count': userProfileResponse?.length ?? 0,
+        'user_profiles_count': userProfileResponse.length ?? 0,
         'test_date': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
       };
     } catch (e) {
@@ -267,23 +267,6 @@ class MemberPerformanceService {
 
       final response = await query;
 
-      if (response == null) {
-        return {
-          'total_days': 0,
-          'present_days': 0,
-          'late_days': 0,
-          'absent_days': 0,
-          'total_work_minutes': 0,
-          'total_late_minutes': 0,
-          'total_overtime_minutes': 0,
-          'attendance_rate': 0.0,
-          'punctuality_rate': 0.0,
-          'productivity_score': 0.0,
-          'avg_work_hours': 0.0,
-          'avg_overtime_hours': 0.0,
-        };
-      }
-
       return _calculatePerformanceMetrics(response);
     } catch (e) {
       throw Exception('Failed to load performance stats: $e');
@@ -335,21 +318,19 @@ class MemberPerformanceService {
           .lte('attendance_date', end);
 
       debugPrint(
-        'Total attendance records found: ${attendanceRecords?.length ?? 0}',
+        'Total attendance records found: ${attendanceRecords.length ?? 0}',
       );
 
       // Group records by member
       final memberRecordsCheck = <int, List<Map<String, dynamic>>>{};
-      if (attendanceRecords != null) {
-        for (final record in attendanceRecords) {
-          final mId = record['organization_member_id'] as int;
-          if (!memberRecordsCheck.containsKey(mId)) {
-            memberRecordsCheck[mId] = [];
-          }
-          memberRecordsCheck[mId]!.add(record);
+      for (final record in attendanceRecords) {
+        final mId = record['organization_member_id'] as int;
+        if (!memberRecordsCheck.containsKey(mId)) {
+          memberRecordsCheck[mId] = [];
         }
+        memberRecordsCheck[mId]!.add(record);
       }
-
+    
       // Create performance data
       final performers = <Map<String, dynamic>>[];
 
@@ -483,7 +464,7 @@ class MemberPerformanceService {
           .eq('attendance_date', today);
 
       debugPrint(
-        'Today global organization attendance records: ${todayAttendance?.length ?? 0}',
+        'Today global organization attendance records: ${todayAttendance.length ?? 0}',
       );
 
       // Calculate real stats from today's data
@@ -493,7 +474,7 @@ class MemberPerformanceService {
       double attendanceRate = 0.0;
       double punctualityRate = 0.0;
 
-      if (todayAttendance != null && todayAttendance.isNotEmpty) {
+      if (todayAttendance.isNotEmpty) {
         final presentCount = todayAttendance
             .where((r) => r['status'] == 'present')
             .length;
@@ -740,10 +721,10 @@ class MemberPerformanceService {
           .limit(limit);
 
       debugPrint(
-        'Found ${recordsResponse?.length ?? 0} today attendance records organization-wide',
+        'Found ${recordsResponse.length ?? 0} today attendance records organization-wide',
       );
 
-      if (recordsResponse == null || recordsResponse.isEmpty) {
+      if (recordsResponse.isEmpty) {
         return [];
       }
 
@@ -969,7 +950,7 @@ class MemberPerformanceService {
           .lte('attendance_date', endDateStr)
           .order('attendance_date', ascending: true);
 
-      if (records == null || records.isEmpty) return [];
+      if (records.isEmpty) return [];
 
       // Group by period
       final Map<String, List<Map<String, dynamic>>> groupedData = {};
@@ -993,7 +974,7 @@ class MemberPerformanceService {
         if (!groupedData.containsKey(periodKey)) {
           groupedData[periodKey] = [];
         }
-        groupedData[periodKey]!.add(record as Map<String, dynamic>);
+        groupedData[periodKey]!.add(record);
       }
 
       // Calculate metrics for each period
@@ -1148,7 +1129,7 @@ class MemberPerformanceService {
           .gte('attendance_date', startDateStr)
           .lte('attendance_date', endDateStr);
 
-      if (records == null || records.isEmpty) return {};
+      if (records.isEmpty) return {};
 
       // Group records by member
       final Map<int, List<Map<String, dynamic>>> memberRecords = {};
@@ -1157,7 +1138,7 @@ class MemberPerformanceService {
         if (!memberRecords.containsKey(memberId)) {
           memberRecords[memberId] = [];
         }
-        memberRecords[memberId]!.add(record as Map<String, dynamic>);
+        memberRecords[memberId]!.add(record);
       }
 
       // Calculate achievements for each member

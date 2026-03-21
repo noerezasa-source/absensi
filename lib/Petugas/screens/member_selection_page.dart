@@ -123,7 +123,7 @@ class _MemberSelectionPageState extends State<MemberSelectionPage> {
 
       // Server-side filtering if search query exists
       if (_lastSearchQuery.isNotEmpty) {
-        final searchTerm = '%${_lastSearchQuery}%';
+        final searchTerm = '%$_lastSearchQuery%';
         // Note: PostgREST doesn't support cross-table OR easily with dots in one string.
         // We focus on searching name components in the joined user_profiles table.
         // User requested search only by name.

@@ -62,11 +62,15 @@ List<double> _computeWeightedAverage(Map<String, dynamic> args) {
 
   if (totalWeight == 0) return averaged;
 
-  for (int i = 0; i < embeddingSize; i++) averaged[i] /= totalWeight;
+  for (int i = 0; i < embeddingSize; i++) {
+    averaged[i] /= totalWeight;
+  }
 
   // Re-normalize
   double sumSquares = 0.0;
-  for (var v in averaged) sumSquares += v * v;
+  for (var v in averaged) {
+    sumSquares += v * v;
+  }
   final double magnitude = sqrt(sumSquares);
   return magnitude < 1e-6
       ? averaged
@@ -104,7 +108,7 @@ class _FaceAttendanceMultiUserPageState
 
   bool _isCameraInitialized = false;
   bool _isProcessing = false;
-  bool _isTakingPicture = false; // ✅ NEW: Prevent concurrent camera captures
+  final bool _isTakingPicture = false; // ✅ NEW: Prevent concurrent camera captures
   String? _currentMessage;
   MessageType _messageType = MessageType.idle;
   Position? _currentPosition;
@@ -137,7 +141,7 @@ class _FaceAttendanceMultiUserPageState
 
   // ✅ Store face data with user info for better UI
   final Map<int, Map<String, dynamic>> _faceDataMap = {};
-  int _faceIdCounter = 0;
+  final int _faceIdCounter = 0;
 
   // ✅ NEW: Persistent Face Tracking
   // Map<trackingId, {name, similarity, memberId, timestamp}>
@@ -830,7 +834,7 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  int _lastProcessingTime = 0;
+  final int _lastProcessingTime = 0;
   bool _isIdleMode = true; // Start in idle
   int _consecutiveNoFaceFrames = 0;
 
@@ -1196,7 +1200,7 @@ class _FaceAttendanceMultiUserPageState
     int id,
   ) async {
     debugPrint(
-      '🎬 Starting HIGH-PERFORMANCE multi-frame capture for face $id (${_multiFrameCount} frames)',
+      '🎬 Starting HIGH-PERFORMANCE multi-frame capture for face $id ($_multiFrameCount frames)',
     );
 
     final List<_FrameSnapshot> snapshots = [];
@@ -1350,7 +1354,7 @@ class _FaceAttendanceMultiUserPageState
       }
 
       final frameCount = template['frame_count'] ?? 1;
-      debugPrint('✅ Using ${frameCount}-frame averaged embedding for matching');
+      debugPrint('✅ Using $frameCount-frame averaged embedding for matching');
 
       final matchStart = stopwatch.elapsedMilliseconds;
       final result = template.containsKey('matched_user')
@@ -1531,8 +1535,9 @@ class _FaceAttendanceMultiUserPageState
             'type': attendanceType,
             'timestamp': now,
           });
-          if (_recentAttendanceList.length > 10)
+          if (_recentAttendanceList.length > 10) {
             _recentAttendanceList.removeLast();
+          }
         });
       }
 
@@ -1954,7 +1959,7 @@ class _FaceAttendanceMultiUserPageState
       setState(() {
         _selectedMode = bestMatch;
         _workTimeMode =
-            bestMatch!['code'] as String? ?? bestMatch!['name'] as String?;
+            bestMatch!['code'] as String? ?? bestMatch['name'] as String?;
       });
     }
   }

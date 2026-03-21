@@ -203,8 +203,9 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     final profile = employee['user_profiles'] as Map<String, dynamic>?;
     if (profile == null) return 'Unknown Employee';
     final displayName = profile['display_name'] as String?;
-    if (displayName != null && displayName.trim().isNotEmpty)
+    if (displayName != null && displayName.trim().isNotEmpty) {
       return displayName.trim();
+    }
     final first = profile['first_name'] as String? ?? '';
     final last = profile['last_name'] as String? ?? '';
     return '$first $last'.trim();
@@ -405,10 +406,11 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
       }
     } catch (e) {
       debugPrint('Error: $e');
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
         );
+      }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }

@@ -803,7 +803,9 @@ class BiometricService {
 
       // 2. Normalize unit vector (Very Important for Cosine Similarity)
       double sumSquares = 0.0;
-      for (var value in nextEmbedding) sumSquares += value * value;
+      for (var value in nextEmbedding) {
+        sumSquares += value * value;
+      }
       final magnitude = math.sqrt(sumSquares);
       final normalizedEmbedding = magnitude < 1e-6
           ? nextEmbedding

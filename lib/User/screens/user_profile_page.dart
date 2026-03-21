@@ -274,8 +274,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final profile = _userProfile ?? widget.userProfile;
     if (profile == null) return 'User';
     final displayName = profile['display_name'] as String?;
-    if (displayName != null && displayName.trim().isNotEmpty)
+    if (displayName != null && displayName.trim().isNotEmpty) {
       return displayName.trim();
+    }
     final firstName = profile['first_name'] as String? ?? '';
     final lastName = profile['last_name'] as String? ?? '';
     return '$firstName $lastName'.trim().isEmpty

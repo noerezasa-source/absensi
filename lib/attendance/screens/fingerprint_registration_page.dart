@@ -189,11 +189,12 @@ class _FingerprintRegistrationPageState
       );
       if (mounted) _showSuccessDialog();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _instructionText =
               '${AppLanguage.tr('attendance.fingerprint.registration_failed')}: $e',
         );
+      }
     }
   }
 

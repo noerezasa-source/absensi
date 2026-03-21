@@ -75,7 +75,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   // Enhancement features state
   String _selectedTimePeriod = 'today';
   String _selectedSortBy = 'score';
-  bool _isLoadingComparison = false;
+  final bool _isLoadingComparison = false;
 
   // Pagination
   final ScrollController _scrollController = ScrollController();
@@ -287,7 +287,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           .eq('id', organizationId)
           .single();
 
-      if (mounted && org != null) {
+      if (mounted) {
         setState(() {
           _organization = org;
           if (org['timezone'] != null) {
@@ -1427,8 +1427,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   }
 
   Widget _buildPaginationControls() {
-    if (_totalMembers == 0 && !_isContentLoading)
+    if (_totalMembers == 0 && !_isContentLoading) {
       return const SizedBox.shrink();
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -2705,8 +2706,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                           ),
                         ),
                       ).then((refresh) {
-                        if (refresh == true)
+                        if (refresh == true) {
                           _loadOrganizationMembersOptimized();
+                        }
                       });
                     },
                   ),
@@ -2886,8 +2888,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           _loadOrganizationMembersOptimized();
         }
       } catch (e) {
-        if (mounted)
+        if (mounted) {
           Navigator.of(context).pop(); // Close processing overlay on error
+        }
         _showErrorDialog('Gagal: $e');
       }
     } catch (e) {
@@ -3463,7 +3466,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      '${workHours}${AppLanguage.tr('hrs_short')}',
+                      '$workHours${AppLanguage.tr('hrs_short')}',
                       style: TextStyle(
                         fontSize: 11,
                         color: widget.isDarkMode

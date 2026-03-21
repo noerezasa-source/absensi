@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
-import 'dart:typed_data';
-import 'dart:convert';
 
 class FingerprintService {
   static const MethodChannel _channel = MethodChannel(

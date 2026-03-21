@@ -138,11 +138,12 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
         final existingMemberData = await _roleService
             .getOrganizationMemberWithRole(user.id);
         if (existingMemberData != null) {
-          if (mounted)
+          if (mounted) {
             _navigateToDashboard(
               existingMemberData['id'] as int,
               existingMemberData,
             );
+          }
           return;
         }
       }

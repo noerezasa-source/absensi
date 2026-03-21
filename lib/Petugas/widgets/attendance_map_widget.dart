@@ -284,8 +284,9 @@ class AttendanceMapWidgetState extends State<AttendanceMapWidget>
   );
 
   double? _calculateDistance() {
-    if (widget.userPosition == null || widget.officePosition == null)
+    if (widget.userPosition == null || widget.officePosition == null) {
       return null;
+    }
     return Geolocator.distanceBetween(
       widget.userPosition!.latitude,
       widget.userPosition!.longitude,

@@ -390,9 +390,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           }
         }
         // Also try schedule name
-        if (shiftName == null) {
-          shiftName = rawData['schedule_name']?.toString();
-        }
+        shiftName ??= rawData['schedule_name']?.toString();
 
         final memberId =
             member['id']?.toString() ??
@@ -918,7 +916,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         ),
                       ),
                     );
-                  }).toList(),
+                  }),
                   const Divider(height: 32),
                   SizedBox(
                     width: double.infinity,

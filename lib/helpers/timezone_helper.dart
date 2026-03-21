@@ -89,7 +89,7 @@ class TimezoneHelper {
   /// Example: 2026-01-13 05:58:26+00
   static String formatUtcForSupabase(DateTime dateTime) {
     final utc = dateTime.toUtc();
-    return DateFormat('yyyy-MM-dd HH:mm:ss').format(utc) + '+00';
+    return '${DateFormat('yyyy-MM-dd HH:mm:ss').format(utc)}+00';
   }
 
   /// Get current time in organization timezone

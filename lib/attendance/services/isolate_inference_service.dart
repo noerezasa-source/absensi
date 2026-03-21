@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
@@ -290,10 +289,6 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
       */
     }
 
-    if (recognitionInterpreter == null) {
-      throw Exception('Failed to initialize interpreters even with fallback');
-    }
-
     // Configure Recognition Model
     final recInTensor = recognitionInterpreter.getInputTensor(0);
     final recOutTensor = recognitionInterpreter.getOutputTensor(0);
@@ -577,8 +572,9 @@ img.Image _normalizeLighting(img.Image image) {
   // Clamp adjustment to prevent extreme artifacts
   adjustmentFactor = adjustmentFactor.clamp(0.5, 2.0);
 
-  if ((adjustmentFactor - 1.0).abs() < 0.05)
+  if ((adjustmentFactor - 1.0).abs() < 0.05) {
     return image; // No significant adjustment needed
+  }
 
   return img.adjustColor(
     image,
