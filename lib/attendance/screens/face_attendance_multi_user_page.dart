@@ -101,7 +101,6 @@ class _FaceAttendanceMultiUserPageState
   _faceService; // ✅ Use SHARED instance from BiometricService
   final BiometricService _biometricService = BiometricService();
   final AttendanceService _attendanceService = AttendanceService();
-  final SupabaseStorageService _storageService = SupabaseStorageService();
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
   final AttendanceSyncService _attendanceSyncService = AttendanceSyncService();
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -137,11 +136,9 @@ class _FaceAttendanceMultiUserPageState
   bool _isLoadingModes = false;
 
   List<Map<String, dynamic>> _detectedFaces = [];
-  bool _hasFacesInView = false;
 
   // ✅ Store face data with user info for better UI
   final Map<int, Map<String, dynamic>> _faceDataMap = {};
-  final int _faceIdCounter = 0;
 
   // ✅ NEW: Persistent Face Tracking
   // Map<trackingId, {name, similarity, memberId, timestamp}>
@@ -284,14 +281,16 @@ class _FaceAttendanceMultiUserPageState
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
-    setState(() {
-      _isOnline = result != ConnectivityResult.none;
-    });
+    if (mounted) {
+      setState(() {
+        _isOnline = result.isNotEmpty && !result.contains(ConnectivityResult.none);
+      });
+    }
 
     Connectivity().onConnectivityChanged.listen((results) {
       if (mounted) {
         setState(() {
-          _isOnline = results != ConnectivityResult.none;
+          _isOnline = results.isNotEmpty && !results.contains(ConnectivityResult.none);
         });
       }
     });
@@ -502,115 +501,6 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  void _showOverlayNotification(
-    String message, {
-    MessageType type = MessageType.warning,
-  }) {
-    if (!mounted) return;
-
-    final overlay = Overlay.of(context);
-    late OverlayEntry overlayEntry;
-
-    Color primaryColor = Colors.orange;
-    Color secondaryColor = Colors.orange.shade600;
-    IconData iconData = Icons.warning_rounded;
-
-    switch (type) {
-      case MessageType.success:
-        primaryColor = Colors.green;
-        secondaryColor = Colors.green.shade600;
-        iconData = Icons.check_circle_rounded;
-        break;
-      case MessageType.error:
-        primaryColor = Colors.red;
-        secondaryColor = Colors.red.shade600;
-        iconData = Icons.error_rounded;
-        break;
-      case MessageType.info:
-        primaryColor = Colors.blue;
-        secondaryColor = Colors.blue.shade600;
-        iconData = Icons.info_rounded;
-        break;
-      default:
-        primaryColor = Colors.orange;
-        secondaryColor = Colors.orange.shade600;
-        iconData = Icons.warning_rounded;
-    }
-
-    overlayEntry = OverlayEntry(
-      builder: (context) => Positioned(
-        top: 100,
-        left: 16,
-        right: 16,
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [primaryColor.withOpacity(0.9), secondaryColor],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: primaryColor.withOpacity(0.3),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(iconData, color: Colors.white, size: 24),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Text(
-                    message,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    overlayEntry.remove();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    child: Icon(
-                      Icons.close,
-                      color: Colors.white.withOpacity(0.8),
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-
-    overlay.insert(overlayEntry);
-
-    // Auto remove after 2 seconds
-    Future.delayed(const Duration(seconds: 2), () {
-      if (overlayEntry.mounted) {
-        overlayEntry.remove();
-      }
-    });
-  }
 
   Future<void> _loadOrganizationData() async {
     final orgId = widget.organizationId;
@@ -834,7 +724,6 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  final int _lastProcessingTime = 0;
   bool _isIdleMode = true; // Start in idle
   int _consecutiveNoFaceFrames = 0;
 
@@ -988,25 +877,6 @@ class _FaceAttendanceMultiUserPageState
     DeviceOrientation.landscapeRight: 270,
   };
 
-  // ✅ OPTIMIZED: Get image size without full decode (much faster)
-  Future<Size?> _getImageSize(File imageFile) async {
-    try {
-      // Use camera preview size directly instead of decoding image
-      if (_cameraController != null &&
-          _cameraController!.value.previewSize != null) {
-        final previewSize = _cameraController!.value.previewSize!;
-        // Camera preview is rotated, so swap width/height
-        return Size(
-          previewSize.height.toDouble(),
-          previewSize.width.toDouble(),
-        );
-      }
-      return null;
-    } catch (e) {
-      debugPrint('Failed to get image size: $e');
-      return null;
-    }
-  }
 
   // ✅ REFACTORED: State Machine Core Logic
   Future<void> _handleStreamFaces(List<Face> faces, Size imageSize) async {
@@ -1034,12 +904,10 @@ class _FaceAttendanceMultiUserPageState
     });
 
     if (faces.isEmpty) {
-      _hasFacesInView = false;
       if (mounted) setState(() => _detectedFaces = []);
       return;
     }
 
-    _hasFacesInView = true;
     final displayFaces = <Map<String, dynamic>>[];
 
     for (final face in faces) {
@@ -2292,7 +2160,7 @@ class _FaceAttendanceMultiUserPageState
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E26).withOpacity(0.8),
+                      color: const Color(0xFF1E1E26).withValues(alpha: 0.8),
                       borderRadius: BorderRadius.circular(30),
                       border: Border.all(color: Colors.white10),
                     ),
@@ -2582,7 +2450,7 @@ class _FaceAttendanceMultiUserPageState
                                             border: Border.all(
                                               color: const Color(
                                                 0xFF8E44AD,
-                                              ).withOpacity(0.15),
+                                              ).withValues(alpha: 0.15),
                                             ),
                                           ),
                                           child: CircleAvatar(
@@ -2672,7 +2540,7 @@ class _FaceAttendanceMultiUserPageState
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF8938DF).withOpacity(0.1),
+                color: const Color(0xFF8938DF).withValues(alpha: 0.1),
               ),
               child: const Icon(
                 Icons.face_retouching_natural_rounded,
@@ -2744,7 +2612,7 @@ class _FaceAttendanceMultiUserPageState
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.4),
+          color: Colors.black.withValues(alpha: 0.4),
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white12),
         ),
@@ -2806,7 +2674,7 @@ class FaceDetectorPainter extends CustomPainter {
       final mappedRect = Rect.fromLTRB(left, top, right, bottom);
 
       // 1. Draw main rounded box with low opacity
-      boxPaint.color = color.withOpacity(0.4);
+      boxPaint.color = color.withValues(alpha: 0.4);
       canvas.drawRRect(
         RRect.fromRectAndRadius(mappedRect, const Radius.circular(12)),
         boxPaint,
@@ -2880,7 +2748,7 @@ class FaceDetectorPainter extends CustomPainter {
           textDirection: TextDirection.ltr,
         )..layout();
 
-        final labelBgPaint = Paint()..color = color.withOpacity(0.8);
+        final labelBgPaint = Paint()..color = color.withValues(alpha: 0.8);
         final labelRect = Rect.fromLTWH(
           left,
           top - textPainter.height - 8,

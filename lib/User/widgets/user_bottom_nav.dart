@@ -37,17 +37,17 @@ class CustomBottomNav extends StatelessWidget {
     final hasAttendanceButton = onAttendanceTap != null;
 
     return Container(
-      height: 70 + bottomPadding,
+      height: 60 + bottomPadding, // 🔥 DIPERKECIL dari 70
       decoration: BoxDecoration(
         color: isDarkMode ? const Color(0xFF1F0B38) : Colors.white,
         borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
+          topLeft: Radius.circular(20), // 🔥 DIPERKECIL dari 24
+          topRight: Radius.circular(20),
         ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDarkMode ? 0.3 : 0.05),
-            blurRadius: 16,
+            blurRadius: 12,
             offset: const Offset(0, -2),
           ),
         ],
@@ -58,10 +58,10 @@ class CustomBottomNav extends StatelessWidget {
           // Navigation Items
           Padding(
             padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 8,
-              bottom: 8 + bottomPadding,
+              left: 12, // 🔥 KURANGI dari 16
+              right: 12, // 🔥 KURANGI dari 16
+              top: 4, // 🔥 KURANGI dari 8
+              bottom: 4 + bottomPadding, // 🔥 KURANGI dari 8
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -72,7 +72,8 @@ class CustomBottomNav extends StatelessWidget {
                   AppLanguage.tr('home'),
                   0,
                 ),
-                if (hasAttendanceButton) const SizedBox(width: 80),
+                if (hasAttendanceButton)
+                  const SizedBox(width: 70), // 🔥 KURANGI dari 80
                 _buildNavItem(
                   context,
                   Icons.person_rounded,
@@ -85,16 +86,18 @@ class CustomBottomNav extends StatelessWidget {
           // Floating Attendance Button
           if (hasAttendanceButton)
             Positioned(
-              left: MediaQuery.of(context).size.width / 2 - 35,
-              top: -32,
+              left:
+                  MediaQuery.of(context).size.width / 2 -
+                  30, // 🔥 DIPERKECIL dari 35
+              top: -28, // 🔥 DIPERKECIL dari -32
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: onAttendanceTap,
-                  borderRadius: BorderRadius.circular(35),
+                  borderRadius: BorderRadius.circular(30),
                   child: Container(
-                    width: 70,
-                    height: 70,
+                    width: 60, // 🔥 DIPERKECIL dari 70
+                    height: 60, // 🔥 DIPERKECIL dari 70
                     decoration: BoxDecoration(
                       color: isDarkMode
                           ? const Color(0xFF9E77F1)
@@ -104,7 +107,7 @@ class CustomBottomNav extends StatelessWidget {
                         color: isDarkMode
                             ? const Color(0xFF1F0B38)
                             : Colors.white,
-                        width: 5,
+                        width: 4, // 🔥 KURANGI dari 5
                       ),
                       boxShadow: [
                         BoxShadow(
@@ -113,15 +116,15 @@ class CustomBottomNav extends StatelessWidget {
                                       ? const Color(0xFF9E77F1)
                                       : const Color(0xFF4A1E79))
                                   .withValues(alpha: isDarkMode ? 0.3 : 0.4),
-                          blurRadius: 15,
-                          offset: const Offset(0, 4),
+                          blurRadius: 12,
+                          offset: const Offset(0, 3),
                         ),
                       ],
                     ),
                     child: Icon(
                       _getAttendanceIcon(),
                       color: Colors.white,
-                      size: 30,
+                      size: 26, // 🔥 DIPERKECIL dari 30
                     ),
                   ),
                 ),
@@ -148,34 +151,34 @@ class CustomBottomNav extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: () => onTap?.call(index),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: MainAxisSize.min, // 🔥 TAMBAHKAN INI
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               // Indicator Line
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                height: 3,
-                width: isSelected ? 24 : 0,
+                height: 2, // 🔥 DIPERKECIL dari 3
+                width: isSelected ? 20 : 0, // 🔥 DIPERKECIL dari 24
                 decoration: BoxDecoration(
                   color: accentColor,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6), // 🔥 KURANGI dari 8
               Icon(
                 icon,
                 color: isSelected
                     ? accentColor
                     : (isDarkMode ? Colors.white54 : Colors.grey.shade600),
-                size: 26,
+                size: 22, // 🔥 DIPERKECIL dari 26
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2), // 🔥 KURANGI dari 4
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 10, // 🔥 DIPERKECIL dari 12
                   color: isSelected
                       ? accentColor
                       : (isDarkMode ? Colors.white54 : Colors.grey.shade600),

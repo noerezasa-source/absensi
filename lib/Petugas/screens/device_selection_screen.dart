@@ -12,7 +12,7 @@ class DeviceSelectionScreen extends StatefulWidget {
   final String organizationName;
   final bool isRequired;
   final bool allowCurrentLocation;
-  final int? memberId; // NEW: Member ID for shift selection
+  final int? memberId;
 
   const DeviceSelectionScreen({
     super.key,
@@ -34,12 +34,12 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
 
   List<AttendanceDevice> _devices = [];
   List<AttendanceDevice> _filteredDevices = [];
-  List<Map<String, dynamic>> _shifts = []; // NEW: Available shifts
+  List<Map<String, dynamic>> _shifts = [];
   AttendanceDevice? _selectedDevice;
   AttendanceDevice? _previouslySelectedDevice;
-  Map<String, dynamic>? _selectedShift; // NEW: Selected shift
+  Map<String, dynamic>? _selectedShift;
   bool _isLoading = true;
-  bool _isLoadingShifts = false; // NEW: Loading state for shifts
+  bool _isLoadingShifts = false;
   bool _isSelecting = false;
   geolocator.Position? _currentPosition;
   Map<String, double> _distances = {};
@@ -48,14 +48,14 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   static const Color pageBackground = Color(0xFFF8FAFC);
   static const Color titleColor = Color(0xFF1E293B);
   static const Color subtitleColor = Color(0xFF64748B);
-  static const Color searchBarBg = Color(0xFFFFFFFF); // White in the mockup
+  static const Color searchBarBg = Color(0xFFFFFFFF);
   static const Color cardBg = Color(0xFFFFFFFF);
 
   @override
   void initState() {
     super.initState();
     _loadDevices();
-    _loadShifts(); // NEW: Load shifts
+    _loadShifts();
     _getCurrentLocation();
     _searchController.addListener(_filterDevices);
   }
@@ -96,17 +96,12 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
 
       if (mounted) {
         final shiftList = List<Map<String, dynamic>>.from(response);
-
-        // ✅ Priority 1: Match user's assigned shift from member_schedules
         Map<String, dynamic>? autoSelected = await _findUserAssignedShift(
           supabase,
           shiftList,
         );
 
-        // ✅ Priority 2: Fallback to time-range match
         autoSelected ??= _findShiftForCurrentTime(shiftList);
-
-        // ✅ Priority 3: Fallback to first shift
         autoSelected ??= shiftList.isNotEmpty ? shiftList.first : null;
 
         setState(() {
@@ -123,7 +118,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     }
   }
 
-  /// Finds the shift that is personally assigned to the logged-in member today
   Future<Map<String, dynamic>?> _findUserAssignedShift(
     dynamic supabase,
     List<Map<String, dynamic>> shiftList,
@@ -307,7 +301,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   Future<void> _selectDevice(AttendanceDevice device) async {
     if (_isSelecting) return;
 
-    // Check if within range
     final distance = _distances[device.id];
     if (distance != null && distance > device.radiusMeters) {
       if (mounted) {
@@ -346,7 +339,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
           'deviceChanged': deviceChanged,
           'selectedDevice': device,
           'previousDevice': _previouslySelectedDevice,
-          'selectedShift': _selectedShift, // NEW: Pass selected shift
+          'selectedShift': _selectedShift,
           'latitude': device.latitude,
           'longitude': device.longitude,
         });
@@ -429,7 +422,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
           child: SizedBox.expand(
             child: Stack(
               children: [
-                // === FULL MAP ===
                 Positioned.fill(
                   child: AttendanceMapWidget(
                     key: mapKey,
@@ -456,8 +448,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                     hideOverlays: true,
                   ),
                 ),
-
-                // === HEADER CARD ===
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 20,
                   left: 20,
@@ -529,8 +519,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                     ),
                   ),
                 ),
-
-                // === STATUS BADGE ===
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 104,
                   left: 20,
@@ -598,8 +586,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                     ),
                   ),
                 ),
-
-                // === MAP CONTROLS ===
                 Positioned(
                   right: 20,
                   bottom: 120,
@@ -623,15 +609,13 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                     ],
                   ),
                 ),
-
-                // === FOOTER BUTTON ===
                 Positioned(
                   bottom: MediaQuery.of(context).padding.bottom + 20,
                   left: 20,
                   right: 20,
                   child: ElevatedButton(
                     onPressed: (officePosition != null && !isInRange)
-                        ? null // Disable if out of range
+                        ? null
                         : () => Navigator.pop(context, true),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: (officePosition != null && !isInRange)
@@ -774,8 +758,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     );
   }
 
-  // Removed _buildLoadingView in favor of LinearProgressIndicator in _buildDeviceList
-
   Widget _buildDeviceList() {
     return RefreshIndicator(
       onRefresh: _handleRefresh,
@@ -785,7 +767,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       strokeWidth: 2,
       child: CustomScrollView(
         slivers: [
-          // NEW: Linear Loading Bar "Above Shift"
           if (_isLoading || _isLoadingShifts)
             SliverToBoxAdapter(
               child: LinearProgressIndicator(
@@ -794,8 +775,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                 minHeight: 3,
               ),
             ),
-
-          // NEW: Shift Selection Section (Relocated to top)
           if (widget.memberId != null)
             SliverToBoxAdapter(
               child: Padding(
@@ -803,8 +782,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                 child: _buildShiftSection(),
               ),
             ),
-
-          // NEW: Search Bar Section
           SliverToBoxAdapter(
             child: SafeArea(
               bottom: false,
@@ -823,8 +800,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
               ),
             ),
           ),
-
-          // NEW: Current Location Card
           if (widget.allowCurrentLocation && _currentPosition != null)
             SliverToBoxAdapter(
               child: Padding(
@@ -832,7 +807,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                 child: _buildCurrentLocationCard(),
               ),
             ),
-
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
@@ -852,7 +826,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
               ),
             ),
           ),
-
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
             sliver: _devices.isEmpty
@@ -1095,7 +1068,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                // Icon Container
                 Container(
                   width: 48,
                   height: 48,
@@ -1110,7 +1082,6 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                // Location Info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1140,7 +1111,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                         children: [
                           _buildBadge(
                             '${(device.radiusMeters).toInt()}m ${AppLanguage.tr('attendance.device_selection.radius')}',
-                            const Color(0xFFA855F7), // Purple dot
+                            const Color(0xFFA855F7),
                           ),
                           if (distance != null)
                             _buildBadge(
@@ -1228,9 +1199,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   );
 
   Widget _buildShiftSection() {
-    // Hidden loading state handled by global LinearProgressIndicator
     if (_shifts.isEmpty && _isLoadingShifts) return const SizedBox.shrink();
-
     if (_shifts.isEmpty) return const SizedBox.shrink();
 
     return Container(

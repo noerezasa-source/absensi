@@ -22,7 +22,7 @@ class AttendanceSyncService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
   Timer? _autoSyncTimer;
-  StreamSubscription<ConnectivityResult>? _connectivitySubscription;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   bool _isSyncing = false;
   Completer<SyncResult>? _activeSyncCompleter;
   int _currentIntervalSeconds = 10;
@@ -63,9 +63,9 @@ class AttendanceSyncService {
 
     // Listen to connectivity so the queue ships immediately after back online
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
-      result,
+      results,
     ) {
-      if (result != ConnectivityResult.none) {
+      if (results.isNotEmpty && !results.contains(ConnectivityResult.none)) {
         // Reset interval when coming back online
         _currentIntervalSeconds = _baseIntervalSeconds;
         _triggerSync(reason: 'connectivity');
@@ -106,7 +106,7 @@ class AttendanceSyncService {
   Future<bool> _checkConnectivity() async {
     try {
       final connectivityResult = await Connectivity().checkConnectivity();
-      if (connectivityResult == ConnectivityResult.none) {
+      if (connectivityResult.isEmpty || connectivityResult.contains(ConnectivityResult.none)) {
         return false;
       }
 

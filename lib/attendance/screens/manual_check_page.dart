@@ -31,7 +31,6 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
   final SupabaseClient _supabase = Supabase.instance.client;
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
   final AttendanceService _attendanceService = AttendanceService();
-  final _formKey = GlobalKey<FormState>();
 
   // Form fields
   int? _selectedEmployeeId;
@@ -49,7 +48,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
   bool _isSubmitting = false;
 
   bool _isOnline = true;
-  StreamSubscription<ConnectivityResult>? _connectivitySub;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   int? _organizationId;
   final TextEditingController _searchController = TextEditingController();
@@ -66,14 +65,14 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     final result = await Connectivity().checkConnectivity();
     if (mounted) {
       setState(() {
-        _isOnline = result != ConnectivityResult.none;
+        _isOnline = result.isNotEmpty && !result.contains(ConnectivityResult.none);
       });
     }
 
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       if (mounted) {
         setState(() {
-          _isOnline = result != ConnectivityResult.none;
+          _isOnline = results.isNotEmpty && !results.contains(ConnectivityResult.none);
         });
       }
     });
@@ -424,7 +423,6 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
     final bgColor = isDark ? const Color(0xFF130F26) : const Color(0xFFFBFBFF);
     final cardColor = isDark ? const Color(0xFF1E1E2C) : Colors.white;
     final textColor = isDark ? Colors.white : const Color(0xFF1E1E2C);
-    final secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
     final accentColor = const Color(0xFF9333EA);
 
     return Scaffold(
@@ -616,7 +614,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
         if (isOptional)
           Text(
             '(Optional)',
-            style: TextStyle(color: color.withOpacity(0.5), fontSize: 12),
+            style: TextStyle(color: color.withValues(alpha: 0.5), fontSize: 12),
           ),
       ],
     );
@@ -635,10 +633,10 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
         decoration: BoxDecoration(
           color: cardColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: textColor.withOpacity(0.1)),
+          border: Border.all(color: textColor.withValues(alpha: 0.1)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.03),
+              color: Colors.black.withValues(alpha: 0.03),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
@@ -652,8 +650,8 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
               child: Text(
                 _selectedEmployeeName ?? 'Choose an employee',
                 style: TextStyle(
-                  color: textColor.withOpacity(
-                    _selectedEmployeeName == null ? 0.5 : 1.0,
+                  color: textColor.withValues(
+                    alpha: _selectedEmployeeName == null ? 0.5 : 1.0,
                   ),
                   fontSize: 15,
                 ),
@@ -661,7 +659,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
             ),
             Icon(
               Icons.keyboard_arrow_down_rounded,
-              color: textColor.withOpacity(0.5),
+              color: textColor.withValues(alpha: 0.5),
             ),
           ],
         ),
@@ -747,7 +745,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
         decoration: BoxDecoration(
           color: cardColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: textColor.withOpacity(0.1)),
+          border: Border.all(color: textColor.withValues(alpha: 0.1)),
         ),
         child: Row(
           children: [
@@ -783,7 +781,7 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
       decoration: BoxDecoration(
         color: cardColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: textColor.withOpacity(0.1)),
+        border: Border.all(color: textColor.withValues(alpha: 0.1)),
       ),
       child: TextField(
         controller: controller,
@@ -791,8 +789,8 @@ class _ManualCheckPageState extends State<ManualCheckPage> {
         style: TextStyle(color: textColor),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: TextStyle(color: textColor.withOpacity(0.3)),
-          prefixIcon: Icon(icon, color: textColor.withOpacity(0.4)),
+          hintStyle: TextStyle(color: textColor.withValues(alpha: 0.3)),
+          prefixIcon: Icon(icon, color: textColor.withValues(alpha: 0.4)),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 16,

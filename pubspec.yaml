@@ -2,7 +2,7 @@ name: absensimassal
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
 # A version number is three numbers separated by dots, like 1.2.43
@@ -31,11 +31,11 @@ dependencies:
   flutter:
     sdk: flutter
   supabase_flutter: ^2.10.1
-  google_sign_in: ^6.1.5  # Tambahkan ini
+  google_sign_in: ^6.1.5 # Tambahkan ini
   shared_preferences: ^2.2.2
   camera: ^0.10.5+9
   image: ^4.3.0
-  image_picker: ^1.1.2 
+  image_picker: ^1.1.2
   google_mlkit_face_detection: ^0.10.0
   geolocator: ^13.0.2
   path_provider: ^2.1.5
@@ -43,11 +43,10 @@ dependencies:
   table_calendar: ^3.0.9
   cached_network_image: ^3.3.0
   intl: any
-  connectivity_plus: ^5.0.2
   tflite_flutter: ^0.12.1
   audioplayers: ^6.0.0
-  sqflite: ^2.3.0  # Local SQLite database
-  fl_chart: ^0.68.0  # Chart visualization
+  sqflite: ^2.3.0 # Local SQLite database
+  fl_chart: ^0.68.0 # Chart visualization
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
   flutter_localizations:
@@ -59,6 +58,9 @@ dependencies:
   google_fonts: ^6.3.2
   app_settings: ^7.0.0
   android_intent_plus: ^6.0.0
+  google_maps_flutter: ^2.17.0
+  location: ^8.0.1
+  connectivity_plus: ^6.1.1
 
 dev_dependencies:
   flutter_test:
@@ -84,7 +86,6 @@ flutter_icons:
 
 # The following section is specific to Flutter packages.
 flutter:
-
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.

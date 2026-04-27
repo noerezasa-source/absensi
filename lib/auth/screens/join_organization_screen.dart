@@ -8,7 +8,7 @@ import 'login.dart';
 import 'package:absensimassal/helpers/language_helper.dart';
 
 class JoinOrganizationScreen extends StatefulWidget {
-  final bool fromDashboard; // ✅ Added to support joining multiple orgs
+  final bool fromDashboard;
   const JoinOrganizationScreen({super.key, this.fromDashboard = false});
 
   @override
@@ -16,13 +16,10 @@ class JoinOrganizationScreen extends StatefulWidget {
 }
 
 class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
-  // Colors extracted from design
-  static const Color backgroundColor = Color(
-    0xFF050011,
-  ); // Very dark purple/black
+  static const Color backgroundColor = Color(0xFF050011);
   static const Color cardColor = Colors.white;
-  static const Color primaryPurple = Color(0xFF9747FF); // Bright purple
-  static const Color darkPurple = Color(0xFF6200EE); // Deep purple
+  static const Color primaryPurple = Color(0xFF9747FF);
+  static const Color darkPurple = Color(0xFF6200EE);
   static const Color textBlack = Color(0xFF1A1A1A);
   static const Color textGrey = Color(0xFF888888);
   static const Color inputFill = Color(0xFFF5F5F5);
@@ -71,7 +68,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
         return;
       }
 
-      // Load user profile
       final profile = await Supabase.instance.client
           .from('user_profiles')
           .select(
@@ -97,17 +93,14 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
         });
       }
 
-      // Check if user already has organization
-      // ✅ Only auto-navigate if NOT coming from dashboard
       if (!widget.fromDashboard) {
         final memberData = await _roleService.getOrganizationMemberWithRole(
           user.id,
         );
-
         if (memberData != null && mounted) {
           final organizationMemberId = memberData['id'] as int;
           _navigateToDashboard(organizationMemberId, memberData);
-          return; // Skip initialization if we are auto-navigating
+          return;
         }
       }
 
@@ -132,8 +125,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
       final user = Supabase.instance.client.auth.currentUser;
       if (user == null) throw Exception('User tidak terautentikasi');
 
-      // Check membership
-      // ✅ Only block if not coming from dashboard (allow multiple orgs)
       if (!widget.fromDashboard) {
         final existingMemberData = await _roleService
             .getOrganizationMemberWithRole(user.id);
@@ -150,7 +141,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
 
       debugPrint('🔍 Validating Inv Code: "$invCode"');
 
-      // Validate code
       final orgResponse = await Supabase.instance.client
           .from('organizations')
           .select('id, name, inv_code')
@@ -165,7 +155,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
       final orgId = orgResponse['id'];
       final orgName = orgResponse['name'];
 
-      // Check existing membership in this specific org
       final existingMemberInOrg = await Supabase.instance.client
           .from('organization_members')
           .select('id, is_active')
@@ -177,14 +166,12 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
 
       if (existingMemberInOrg != null) {
         if (existingMemberInOrg['is_active'] == true) {
-          // ✅ If already joined and from dashboard, just switch to it (don't error)
           if (widget.fromDashboard) {
             organizationMemberId = existingMemberInOrg['id'] as int;
           } else {
             throw Exception('Anda sudah tergabung di organisasi ini');
           }
         } else {
-          // Reactivate
           await Supabase.instance.client
               .from('organization_members')
               .update({
@@ -196,7 +183,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
           organizationMemberId = existingMemberInOrg['id'] as int;
         }
       } else {
-        // New member
         final newMember = await Supabase.instance.client
             .from('organization_members')
             .insert({
@@ -261,7 +247,6 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
     );
 
     if (widget.fromDashboard) {
-      // ✅ Clear stack for fresh start on switch
       Navigator.of(context).pushAndRemoveUntil(route, (route) => false);
     } else {
       Navigator.of(context).pushReplacement(route);
@@ -354,321 +339,313 @@ class _JoinOrganizationScreenState extends State<JoinOrganizationScreen> {
     }
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.white,
-              Color(0xFFE3F2FD), // Light Blue
-            ],
+      resizeToAvoidBottomInset: true, // 🔥 TAMBAHKAN INI
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(), // 🔥 TUTUP KEYBOARD
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.white, Color(0xFFE3F2FD)],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              children: [
-                // Header Row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: SafeArea(
+            child: SingleChildScrollView(
+              // 🔥 TAMBAHKAN SCROLLVIEW
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
                   children: [
-                    if (widget.fromDashboard)
-                      IconButton(
-                        icon: const Icon(
-                          Icons.arrow_back,
-                          color: Colors.black87,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                      ),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.blue.withOpacity(0.2),
-                              width: 1,
+                        if (widget.fromDashboard)
+                          IconButton(
+                            icon: const Icon(
+                              Icons.arrow_back,
+                              color: Colors.black87,
                             ),
+                            onPressed: () => Navigator.pop(context),
                           ),
-                          child: CircleAvatar(
-                            radius: 18,
-                            backgroundColor: Colors.grey.shade200,
-                            backgroundImage: _profilePhotoUrl != null
-                                ? NetworkImage(_profilePhotoUrl!)
-                                : null,
-                            child: _profilePhotoUrl == null
-                                ? const Icon(
-                                    Icons.person,
-                                    color: Colors.grey,
-                                    size: 20,
-                                  )
-                                : null,
-                          ),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.blue.withOpacity(0.2),
+                                  width: 1,
+                                ),
+                              ),
+                              child: CircleAvatar(
+                                radius: 18,
+                                backgroundColor: Colors.grey.shade200,
+                                backgroundImage: _profilePhotoUrl != null
+                                    ? NetworkImage(_profilePhotoUrl!)
+                                    : null,
+                                child: _profilePhotoUrl == null
+                                    ? const Icon(
+                                        Icons.person,
+                                        color: Colors.grey,
+                                        size: 20,
+                                      )
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              _displayName ?? 'User',
+                              style: const TextStyle(
+                                color: Colors.black87,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
-                        Text(
-                          _displayName ?? 'User',
-                          style: const TextStyle(
-                            color: Colors
-                                .black87, // Fixed to Black for Light Theme
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                        TextButton(
+                          onPressed: _handleLogout,
+                          style: TextButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                              side: BorderSide(color: Colors.grey.shade200),
+                            ),
+                            elevation: 2,
+                            shadowColor: Colors.black.withOpacity(0.05),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                'LOGOUT',
+                                style: TextStyle(
+                                  color: Colors.red.shade600,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.logout,
+                                size: 14,
+                                color: Colors.red.shade600,
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
-
-                    // Logout Button
-                    TextButton(
-                      onPressed: _handleLogout,
-                      style: TextButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(color: Colors.grey.shade200),
-                        ),
-                        elevation: 2,
-                        shadowColor: Colors.black.withOpacity(0.05),
+                    const SizedBox(
+                      height: 20,
+                    ), // 🔥 GANTI Spacer dengan SizedBox
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 40,
+                        horizontal: 24,
                       ),
-                      child: Row(
+                      decoration: BoxDecoration(
+                        color: cardColor,
+                        borderRadius: BorderRadius.circular(32),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            'LOGOUT',
+                          Image.asset(
+                            'assets/logo/app_logo_new.png',
+                            height: 60,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const SizedBox.shrink(),
+                          ),
+                          const SizedBox(height: 24),
+                          const Text(
+                            'Enter Access Key',
                             style: TextStyle(
-                              color: Colors.red.shade600,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: textBlack,
+                              letterSpacing: -0.5,
                             ),
                           ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.logout,
-                            size: 14,
-                            color: Colors.red.shade600,
+                          const SizedBox(height: 8),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16),
+                            child: Text(
+                              'Enter the invitation code provided\nby your HR or Admin.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: textGrey,
+                                height: 1.5,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                left: 4,
+                                bottom: 8,
+                              ),
+                              child: Text(
+                                'ORGANIZATION CODE',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: textBlack.withOpacity(0.7),
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: inputFill,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: TextField(
+                              controller: _invCodeController,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: textBlack,
+                                letterSpacing: 2.0,
+                              ),
+                              decoration: InputDecoration(
+                                hintText: '•••• - •••• - ••••',
+                                hintStyle: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  letterSpacing: 2.0,
+                                ),
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                              ),
+                              inputFormatters: [UpperCaseTextFormatter()],
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 54,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF9747FF),
+                                    Color(0xFF6200EE),
+                                  ],
+                                  begin: Alignment.centerLeft,
+                                  end: Alignment.centerRight,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFF6200EE,
+                                    ).withOpacity(0.3),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 5),
+                                  ),
+                                ],
+                              ),
+                              child: ElevatedButton(
+                                onPressed: _isJoining
+                                    ? null
+                                    : _joinOrganizationWithCode,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.transparent,
+                                  shadowColor: Colors.transparent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                child: _isJoining
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            'Join Organization',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                          SizedBox(width: 8),
+                                          Icon(
+                                            Icons.arrow_forward_rounded,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                        ],
+                                      ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          GestureDetector(
+                            onTap: () {
+                              _showSnackBar(
+                                'Contact your administrator for code',
+                                true,
+                              );
+                            },
+                            child: const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Need verification help? ',
+                                  style: TextStyle(
+                                    color: primaryPurple,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.help_outline_rounded,
+                                  size: 14,
+                                  color: primaryPurple,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(
+                      height: 20,
+                    ), // 🔥 GANTI Spacer dengan SizedBox
                   ],
                 ),
-
-                const Spacer(),
-
-                // Central Card
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 40,
-                    horizontal: 24,
-                  ),
-                  decoration: BoxDecoration(
-                    color: cardColor,
-                    borderRadius: BorderRadius.circular(32),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // LOGO - Fixed: Using app_logo_new.png as requested
-                      Image.asset(
-                        'assets/logo/app_logo_new.png',
-                        height: 60,
-                        fit: BoxFit.contain,
-                      ),
-
-                      const SizedBox(height: 24),
-
-                      const Text(
-                        'Enter Access Key',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: textBlack,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          'Enter the invitation code provided\nby your HR or Admin.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: textGrey,
-                            height: 1.5,
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 32),
-
-                      // Input Label
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 4, bottom: 8),
-                          child: Text(
-                            'ORGANIZATION CODE',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: textBlack.withOpacity(0.7),
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Input Field
-                      Container(
-                        decoration: BoxDecoration(
-                          color: inputFill,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: TextField(
-                          controller: _invCodeController,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: textBlack,
-                            letterSpacing: 2.0,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: '•••• - •••• - ••••',
-                            hintStyle: TextStyle(
-                              color: Colors.grey.shade400,
-                              letterSpacing: 2.0,
-                            ),
-                            border: InputBorder.none,
-                            contentPadding: const EdgeInsets.symmetric(
-                              vertical: 16,
-                            ),
-                          ),
-                          inputFormatters: [UpperCaseTextFormatter()],
-                        ),
-                      ),
-
-                      const SizedBox(height: 24),
-
-                      // Join Button
-                      SizedBox(
-                        width: double.infinity,
-                        height: 54,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [
-                                Color(0xFF9747FF),
-                                Color(0xFF6200EE),
-                              ], // Purple gradient
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                            ),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF6200EE).withOpacity(0.3),
-                                blurRadius: 10,
-                                offset: const Offset(0, 5),
-                              ),
-                            ],
-                          ),
-                          child: ElevatedButton(
-                            onPressed: _isJoining
-                                ? null
-                                : _joinOrganizationWithCode,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              shadowColor: Colors.transparent,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            child: _isJoining
-                                ? const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        'Join Organization',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      SizedBox(width: 8),
-                                      Icon(
-                                        Icons.arrow_forward_rounded,
-                                        color: Colors.white,
-                                        size: 20,
-                                      ),
-                                    ],
-                                  ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 24),
-
-                      GestureDetector(
-                        onTap: () {
-                          // Help action
-                          _showSnackBar(
-                            'Contact your administrator for code',
-                            true,
-                          );
-                        },
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              'Need verification help? ',
-                              style: TextStyle(
-                                color: primaryPurple,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            Icon(
-                              Icons.help_outline_rounded,
-                              size: 14,
-                              color: primaryPurple,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const Spacer(),
-              ],
+              ),
             ),
           ),
         ),

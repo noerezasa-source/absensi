@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:absensimassal/helpers/language_helper.dart';
 import 'package:absensimassal/auth/screens/login.dart';
 import 'package:absensimassal/auth/screens/join_organization_screen.dart';
@@ -10,10 +12,51 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:absensimassal/attendance/services/attendance_sync_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:sqflite/sqflite.dart';
 
+// ==============================================
+// FUNGSI UNTUK MENGHAPUS DATABASE LAMA
+// ==============================================
+Future<void> forceDeleteDatabase() async {
+  try {
+    // Dapatkan direktori database
+    var databasesPath = await getDatabasesPath();
+
+    // Path ke file database (sesuaikan dengan nama database yang Anda gunakan)
+    String path = p.join(databasesPath, 'attendance.db');
+
+    // Cek apakah file database ada
+    final dbFile = File(path);
+    if (await dbFile.exists()) {
+      // Hapus database dengan aman menggunakan sqflite
+      await deleteDatabase(path);
+      debugPrint('✅ Database LAMA berhasil DIHAPUS!');
+    } else {
+      debugPrint('ℹ️ Tidak ada database lama yang ditemukan');
+    }
+
+    // Hapus juga kemungkinan database dengan nama lain
+    String pathV2 = p.join(databasesPath, 'attendance_v2.db');
+    final dbFileV2 = File(pathV2);
+    if (await dbFileV2.exists()) {
+      await deleteDatabase(pathV2);
+      debugPrint('✅ Database attendance_v2.db juga dihapus');
+    }
+  } catch (e) {
+    debugPrint('⚠️ Error saat hapus database: $e');
+  }
+}
+
+// ==============================================
+// MAIN FUNCTION
+// ==============================================
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // HAPUS DATABASE LAMA SEBELUM APLIKASI JALAN
+  await forceDeleteDatabase();
+
+  // Backend API atau bisa juga inisialisasi supobase
   await Supabase.initialize(
     url: 'https://oxkuxwkehinhyxfsauqe.supabase.co',
     anonKey:
@@ -29,6 +72,9 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+// ==============================================
+// MY APP
+// ==============================================
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -61,6 +107,9 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ==============================================
+// SPLASH SCREEN
+// ==============================================
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -96,8 +145,6 @@ class _SplashScreenState extends State<SplashScreen>
       ),
     );
 
-    // Hapus rotasi animasi yang berlebihan
-
     _animationController.forward();
     _navigateToNextScreen();
   }
@@ -108,7 +155,9 @@ class _SplashScreenState extends State<SplashScreen>
     super.dispose();
   }
 
-  // ... (keep _checkAuthAndNavigate and _navigateToNextScreen as is)
+  // ==============================================
+  // CEK AUTH DAN NAVIGASI (SUDAH DIPERBAIKI)
+  // ==============================================
   Future<void> _checkAuthAndNavigate() async {
     if (!mounted) return;
 
@@ -118,7 +167,9 @@ class _SplashScreenState extends State<SplashScreen>
     if (session == null) {
       debugPrint('❌ No active session - navigating to Login');
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
+      // ✅ DIPERBAIKI: menggunakan pushReplacement dengan context langsung
+      Navigator.pushReplacement(
+        context,
         MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
       );
       return;
@@ -137,31 +188,39 @@ class _SplashScreenState extends State<SplashScreen>
 
       if (memberships.isEmpty) {
         // No memberships -> Join Organization
-        Navigator.of(context).pushReplacement(
+        // ✅ DIPERBAIKI: menggunakan pushReplacement dengan context langsung
+        Navigator.pushReplacement(
+          context,
           MaterialPageRoute(
             builder: (context) => const JoinOrganizationScreen(),
           ),
         );
       } else {
         // If 1 or more memberships, pick the first one and go to dashboard
-        // SKIP: OrganizationSelectionPage
         final memberData = memberships.first;
         _navigateToDashboard(memberData);
       }
     } catch (e) {
       debugPrint('❌ Error checking organization membership: $e');
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
+      // ✅ DIPERBAIKI: menggunakan pushReplacement dengan context langsung
+      Navigator.pushReplacement(
+        context,
         MaterialPageRoute(builder: (context) => const ModernLoginScreen()),
       );
     }
   }
 
+  // ==============================================
+  // NAVIGASI KE DASHBOARD (SUDAH DIPERBAIKI)
+  // ==============================================
   void _navigateToDashboard(Map<String, dynamic> memberData) {
     final organizationMemberId = memberData['id'] as int;
 
     if (_roleService.isPetugas(memberData)) {
-      Navigator.of(context).pushReplacement(
+      // ✅ DIPERBAIKI: menggunakan pushReplacement dengan context langsung
+      Navigator.pushReplacement(
+        context,
         MaterialPageRoute(
           builder: (context) => PetugasDashboardPage(
             organizationMemberId: organizationMemberId,
@@ -172,7 +231,9 @@ class _SplashScreenState extends State<SplashScreen>
       );
     } else {
       // Default to User Dashboard for other roles
-      Navigator.of(context).pushReplacement(
+      // ✅ DIPERBAIKI: menggunakan pushReplacement dengan context langsung
+      Navigator.pushReplacement(
+        context,
         MaterialPageRoute(
           builder: (context) => UserDashboardPage(
             organizationMemberId: organizationMemberId,
@@ -187,7 +248,7 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _navigateToNextScreen() async {
     await Future.delayed(
       const Duration(milliseconds: 2500),
-    ); // Sedikit lebih lama untuk menikmati splash
+    );
     if (!mounted) return;
     await _checkAuthAndNavigate();
   }
@@ -195,8 +256,7 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          Colors.white, // Background putih bersih lebih professional
+      backgroundColor: Colors.white,
       body: Center(
         child: FadeTransition(
           opacity: _fadeAnimation,
@@ -206,14 +266,11 @@ class _SplashScreenState extends State<SplashScreen>
               ScaleTransition(
                 scale: _scaleAnimation,
                 child: Container(
-                  padding: const EdgeInsets.all(
-                    20,
-                  ), // Add padding for the image
+                  padding: const EdgeInsets.all(20),
                   width: 120,
                   height: 120,
                   decoration: BoxDecoration(
-                    color: Colors
-                        .white, // White background for the transparent logo
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
                       BoxShadow(
@@ -231,9 +288,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                 ),
               ),
-
               const SizedBox(height: 32),
-
               Column(
                 children: [
                   Text(
@@ -241,11 +296,11 @@ class _SplashScreenState extends State<SplashScreen>
                     style: GoogleFonts.montserrat(
                       fontSize: 28,
                       fontWeight: FontWeight.w900,
-                      color: const Color(0xFF1F2937), // Dark grey text
-                      letterSpacing: 4.0, // Wide spacing for luxury feel
+                      color: const Color(0xFF1F2937),
+                      letterSpacing: 4.0,
                       height: 1.2,
-                      shadows: [
-                        const BoxShadow(
+                      shadows: const [
+                        BoxShadow(
                           color: Colors.black12,
                           offset: Offset(2, 2),
                           blurRadius: 4,
@@ -268,16 +323,14 @@ class _SplashScreenState extends State<SplashScreen>
                       style: GoogleFonts.montserrat(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: const Color(0xFF6366F1), // Brand color
+                        color: const Color(0xFF6366F1),
                         letterSpacing: 2.0,
                       ),
                     ),
                   ),
                 ],
               ),
-
-              const SizedBox(height: 80), // Space sebelum loading indicator
-
+              const SizedBox(height: 80),
               SizedBox(
                 width: 24,
                 height: 24,

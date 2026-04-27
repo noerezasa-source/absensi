@@ -106,6 +106,26 @@ class OfflineDatabaseService {
         }
         debugPrint('✅ UPGRADE: offline_attendances columns added.');
       }
+
+      // 3. 🔥 CEK DAN TAMBAHKAN KOLOM NOTES JIKA BELUM ADA (SELF-HEALING)
+      try {
+        final attTableCheck = await db.rawQuery(
+          "PRAGMA table_info(offline_attendances)",
+        );
+        final hasNotes = attTableCheck.any((col) => col['name'] == 'notes');
+
+        if (!hasNotes) {
+          debugPrint('🛠️ REPAIR: notes column missing. Adding...');
+          await db.execute(
+            'ALTER TABLE offline_attendances ADD COLUMN notes TEXT',
+          );
+          debugPrint('✅ REPAIR: notes column added successfully.');
+        } else {
+          debugPrint('✅ REPAIR: notes column already exists.');
+        }
+      } catch (e) {
+        debugPrint('⚠️ Error checking/adding notes column: $e');
+      }
     } catch (e) {
       debugPrint('⚠️ Error during self-healing check: $e');
     }
@@ -133,6 +153,7 @@ class OfflineDatabaseService {
         user_name TEXT,
         is_synced INTEGER DEFAULT 0,
         sync_error TEXT,
+        notes TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -442,17 +463,10 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       final map = attendance.toMap();
-      // debugPrint('📝 Inserting attendance: method=${attendance.method}, memberId=${attendance.organizationMemberId}, eventType=${attendance.eventType}');
       final id = await db.insert('offline_attendances', map);
-      // debugPrint('✅ Attendance inserted with ID: $id');
       return id;
     } catch (e) {
       debugPrint('❌ Error inserting offline attendance: $e');
-      /*
-      debugPrint('   Method: ${attendance.method}');
-      debugPrint('   Member ID: ${attendance.organizationMemberId}');
-      debugPrint('   Event Type: ${attendance.eventType}');
-      */
       rethrow;
     }
   }
@@ -461,7 +475,6 @@ class OfflineDatabaseService {
   Future<List<OfflineAttendance>> getUnsyncedAttendances() async {
     try {
       final db = await database;
-      // Include RFID and Face Recognition records
       final results = await db.query(
         'offline_attendances',
         where: 'is_synced = ?',
@@ -534,8 +547,6 @@ class OfflineDatabaseService {
   Future<int> deleteSuccessfullySyncedAttendances() async {
     try {
       final db = await database;
-      // Only delete records that are synced AND have no sync error
-      // This ensures failed records are kept for retry
       return await db.delete(
         'offline_attendances',
         where: 'is_synced = ? AND (sync_error IS NULL OR sync_error = ?)',
@@ -566,8 +577,6 @@ class OfflineDatabaseService {
   Future<int> deleteDuplicateRecords() async {
     try {
       final db = await database;
-      // Delete records that are marked as synced but have duplicate error
-      // These are records that were detected as duplicate during sync
       return await db.delete(
         'offline_attendances',
         where: 'is_synced = ? AND sync_error LIKE ?',
@@ -583,7 +592,6 @@ class OfflineDatabaseService {
   Future<int> getUnsyncedCount() async {
     try {
       final db = await database;
-      // Count RFID and face recognition records
       final result = await db.rawQuery(
         'SELECT COUNT(*) as count FROM offline_attendances WHERE is_synced = 0',
       );
@@ -688,8 +696,6 @@ class OfflineDatabaseService {
         dataToCache,
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
-
-      // debugPrint('✅ Cached member: ${displayName ?? '$firstName $lastName'} (Card: $cardNumber)');
     } catch (e) {
       debugPrint('❌ Error caching member data: $e');
     }
@@ -706,7 +712,6 @@ class OfflineDatabaseService {
     try {
       await db.transaction((txn) async {
         // Step 1: Delete all stale entries for this org + type
-        // This ensures deleted fingerprints in Supabase are removed from cache too
         if (organizationId != null) {
           final deleted = await txn.delete(
             'biometric_data',
@@ -758,19 +763,15 @@ class OfflineDatabaseService {
   ) async {
     try {
       final db = await database;
-      // Normalize card number for search
       final normalizedCardNumber = cardNumber.trim();
 
-      // Try exact match first
       var results = await db.query(
         'cached_members',
         where: 'card_number = ? AND organization_id = ? AND is_active = 1',
         whereArgs: [normalizedCardNumber, organizationId],
       );
 
-      // If not found, try case-insensitive search
       if (results.isEmpty) {
-        // debugPrint('🔍 Trying case-insensitive search in cache...');
         final allCached = await db.query(
           'cached_members',
           where: 'organization_id = ? AND is_active = 1',
@@ -784,15 +785,11 @@ class OfflineDatabaseService {
       }
 
       if (results.isEmpty) {
-        // debugPrint('❌ Card "$normalizedCardNumber" not found in cache');
         return null;
       }
 
       final cachedMember = results.first;
 
-      // debugPrint('✅ Found cached member: ${cachedMember['display_name'] ?? '${cachedMember['first_name']} ${cachedMember['last_name']}'}');
-
-      // Return in same format as Supabase query
       return {
         'id': cachedMember['id'],
         'card_number': cachedMember['card_number'],
@@ -906,7 +903,6 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       await db.delete('cached_members');
-      // debugPrint('✅ Cleared all cached members');
     } catch (e) {
       debugPrint('❌ Error clearing cached members: $e');
     }
@@ -921,7 +917,6 @@ class OfflineDatabaseService {
         where: 'card_number = ?',
         whereArgs: [cardNumber],
       );
-      // debugPrint('✅ Deleted member from cache: $cardNumber');
     } catch (e) {
       debugPrint('❌ Error deleting member from cache: $e');
     }
@@ -960,12 +955,12 @@ class OfflineDatabaseService {
     }
   }
 
-  // Check for duplicate attendance (debounced by 2 minutes to prevent double-taps)
+  // Check for duplicate attendance
   Future<bool> hasDuplicateAttendance({
     required int organizationMemberId,
     required String eventType,
     required String attendanceDate,
-    String? workTimeMode, // ✅ NEW: Check shift-specific duplicates
+    String? workTimeMode,
   }) async {
     try {
       final db = await database;
@@ -983,7 +978,6 @@ class OfflineDatabaseService {
         twoMinutesAgo,
       ];
 
-      // ✅ ENHANCED: For multi-shift, also check work_time_mode
       if (workTimeMode != null && workTimeMode.isNotEmpty) {
         whereClause += ' AND work_time_mode = ?';
         whereArgs.add(workTimeMode);
@@ -1037,14 +1031,11 @@ class OfflineDatabaseService {
         'created_at': now,
         'updated_at': now,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
-
-      // debugPrint('✅ Cached biometric data for member $organizationMemberId, type: $biometricType');
     } catch (e) {
       debugPrint('❌ Error caching biometric data: $e');
     }
   }
 
-  // ✅ NEW: Update specific biometric template data
   Future<void> updateBiometricTemplate({
     required int biometricId,
     required String templateData,
@@ -1057,7 +1048,6 @@ class OfflineDatabaseService {
         where: 'id = ?',
         whereArgs: [biometricId],
       );
-      // debugPrint('✅ Updated cached biometric template ID: $biometricId');
     } catch (e) {
       debugPrint('❌ Error updating cached biometric data: $e');
     }
@@ -1069,14 +1059,12 @@ class OfflineDatabaseService {
   }) async {
     try {
       final db = await database;
-
       final result = await db.query(
         'biometric_data',
         where:
             'organization_member_id = ? AND biometric_type = ? AND is_active = 1',
         whereArgs: [organizationMemberId, biometricType],
       );
-
       return result.isNotEmpty;
     } catch (e) {
       debugPrint('Error checking biometric data: $e');
@@ -1090,7 +1078,6 @@ class OfflineDatabaseService {
   }) async {
     try {
       final db = await database;
-
       final result = await db.query(
         'biometric_data',
         where:
@@ -1098,7 +1085,6 @@ class OfflineDatabaseService {
         whereArgs: [organizationMemberId, biometricType],
         limit: 1,
       );
-
       if (result.isNotEmpty) {
         return result.first['template_data'] as String?;
       }
@@ -1116,7 +1102,6 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       final now = TimezoneHelper.formatUtcForSupabase(DateTime.now());
-
       await db.update(
         'biometric_data',
         {'last_used_at': now, 'updated_at': now},
@@ -1132,22 +1117,18 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       await db.delete('biometric_data');
-      // debugPrint('✅ Cleared all biometric data');
     } catch (e) {
       debugPrint('Error clearing biometric data: $e');
     }
   }
 
-  // ✅ NEW: Get all biometric data with user info from SQLite for offline use
+  // Get all biometric data with user info from SQLite for offline use
   Future<List<Map<String, dynamic>>> getAllBiometricDataWithUserInfo({
     required int organizationId,
     String biometricType = 'face_recognition',
   }) async {
     try {
       final db = await database;
-
-      // Get all biometric data for the organization
-      // Join with cached_members to get user info (using direct columns, not JSON)
       final biometricResults = await db.rawQuery(
         '''
         SELECT 
@@ -1182,7 +1163,6 @@ class OfflineDatabaseService {
 
       for (var row in biometricResults) {
         try {
-          // Build result in same format as Supabase query
           final result = {
             'id': row['id'],
             'organization_member_id': row['organization_member_id'],
@@ -1198,8 +1178,7 @@ class OfflineDatabaseService {
                     'department_id': row['department_id'],
                     'user_profiles': row['first_name'] != null
                         ? {
-                            'id':
-                                row['cm_id'], // Use cached_members id as proxy
+                            'id': row['cm_id'],
                             'first_name': row['first_name'],
                             'last_name': row['last_name'],
                             'display_name':
@@ -1231,15 +1210,12 @@ class OfflineDatabaseService {
                     'departments': null,
                   },
           };
-
           results.add(result);
         } catch (e) {
           debugPrint('Error parsing biometric row: $e');
           continue;
         }
       }
-
-      // debugPrint('✅ Retrieved ${results.length} biometric templates from SQLite for offline use');
       return results;
     } catch (e) {
       debugPrint('❌ Error getting biometric data from SQLite: $e');
@@ -1247,7 +1223,7 @@ class OfflineDatabaseService {
     }
   }
 
-  // ✅ NEW: Prune old records (Auto-Cleanup)
+  // Prune old records (Auto-Cleanup)
   Future<int> pruneOldRecords({int days = 7}) async {
     try {
       final db = await database;
@@ -1255,21 +1231,19 @@ class OfflineDatabaseService {
           .toUtc()
           .subtract(Duration(days: days))
           .toIso8601String();
-      // debugPrint('🧹 Pruning records older than $days days (Cutoff: $cutoffDate)');
       final deletedCount = await db.delete(
         'offline_attendances',
         where: 'created_at < ?',
         whereArgs: [cutoffDate],
       );
-      // if (deletedCount > 0) debugPrint('✅ Auto-Pruning: Deleted $deletedCount old records');
       return deletedCount;
     } catch (e) {
       debugPrint('❌ Error during pruning: $e');
       return 0;
     }
   }
-  // --- NEW: Organization Caching ---
 
+  // Organization Caching
   Future<void> cacheOrganizationData(Map<String, dynamic> orgData) async {
     try {
       final db = await database;
@@ -1300,14 +1274,12 @@ class OfflineDatabaseService {
     }
   }
 
-  // --- NEW: Shift Caching ---
-
+  // Shift Caching
   Future<void> cacheShifts(int orgId, List<Map<String, dynamic>> shifts) async {
     try {
       final db = await database;
       final batch = db.batch();
 
-      // Clear old shifts for this org
       batch.delete(
         'cached_shifts',
         where: 'organization_id = ?',
@@ -1350,8 +1322,7 @@ class OfflineDatabaseService {
     }
   }
 
-  // --- NEW: Schedule Caching ---
-
+  // Schedule Caching
   Future<void> cacheSchedule(
     int memberId,
     Map<String, dynamic> scheduleData,
@@ -1373,14 +1344,12 @@ class OfflineDatabaseService {
     try {
       final db = await database;
       final todayStr = DateTime.now().toIso8601String().split('T')[0];
-
       final results = await db.query(
         'cached_schedules',
         where: 'organization_member_id = ? AND cached_date = ?',
         whereArgs: [memberId, todayStr],
         limit: 1,
       );
-
       if (results.isNotEmpty) {
         return jsonDecode(results.first['schedule_data'] as String);
       }
@@ -1391,7 +1360,7 @@ class OfflineDatabaseService {
     }
   }
 
-  // ✅ Manual Check Page Fallbacks
+  // Manual Check Page Fallbacks
   Future<void> cacheOrganizationMembers(
     int organizationId,
     List<Map<String, dynamic>> members,
@@ -1433,7 +1402,6 @@ class OfflineDatabaseService {
         where: 'organization_id = ? AND is_active = 1',
         whereArgs: [organizationId],
       );
-
       return results.map((row) {
         return {
           'id': row['organization_member_id'],
@@ -1456,22 +1424,16 @@ class OfflineDatabaseService {
   Future<int?> cacheAttendance(Map<String, dynamic> data) async {
     try {
       final db = await database;
-
-      // Determine event_type and timestamp flexibly
       String? eventType = data['event_type'];
       eventType ??= data['actual_check_in'] != null ? 'check_in' : 'check_out';
-
       String? timestamp = data['timestamp'];
-      timestamp ??= data['actual_check_in'] ??
-            data['actual_check_out'] ??
-            data['offline_timestamp'];
-
+      timestamp ??=
+          data['actual_check_in'] ??
+          data['actual_check_out'] ??
+          data['offline_timestamp'];
       timestamp ??= DateTime.now().toUtc().toIso8601String();
-
       final method = data['method'] ?? 'manual';
       final memberId = data['organization_member_id'];
-
-      // Map to the offline attendance table format
       return await db.insert('offline_attendances', {
         'organization_member_id': memberId,
         'event_type': eventType,
