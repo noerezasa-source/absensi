@@ -695,7 +695,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF9333EA).withOpacity(0.04),
+            color: const Color(0xFF9333EA).withValues(alpha: 0.04),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -712,7 +712,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                 Icons.check_circle,
               ),
             ),
-            VerticalDivider(color: Colors.grey.withOpacity(0.2), thickness: 1),
+            VerticalDivider(color: Colors.grey.withValues(alpha: 0.2), thickness: 1),
             Expanded(
               child: _buildNewStatItem(
                 absentCount.toString(),
@@ -721,7 +721,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                 Icons.cancel,
               ),
             ),
-            VerticalDivider(color: Colors.grey.withOpacity(0.2), thickness: 1),
+            VerticalDivider(color: Colors.grey.withValues(alpha: 0.2), thickness: 1),
             Expanded(
               child: _buildNewStatItem(
                 lateCount.toString(),
@@ -823,7 +823,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
           boxShadow: isSelected && !widget.isDarkMode
               ? [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 4,
                     offset: const Offset(0, 2),
                   ),
@@ -898,7 +898,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: widget.isDarkMode
-              ? Colors.white.withOpacity(0.05)
+              ? Colors.white.withValues(alpha: 0.05)
               : Colors.white,
           borderRadius: BorderRadius.circular(50),
           border: Border.all(
@@ -995,7 +995,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: primaryColor.withOpacity(0.05),
+        color: primaryColor.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -1060,7 +1060,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1130,14 +1130,14 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: primaryColor.withOpacity(0.3),
+                color: primaryColor.withValues(alpha: 0.3),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
             ],
           ),
           todayDecoration: BoxDecoration(
-            color: primaryColor.withOpacity(0.2),
+            color: primaryColor.withValues(alpha: 0.2),
             shape: BoxShape.circle,
           ),
           todayTextStyle: TextStyle(
@@ -1438,7 +1438,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1570,9 +1570,9 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: chipColor.withOpacity(0.2),
+            color: chipColor.withValues(alpha: 0.2),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: chipColor.withOpacity(0.5), width: 1),
+            border: Border.all(color: chipColor.withValues(alpha: 0.5), width: 1),
           ),
           child: Text(
             displayStatus,
@@ -1624,9 +1624,9 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: chipColor.withOpacity(0.15),
+        color: chipColor.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: chipColor.withOpacity(0.3)),
+        border: Border.all(color: chipColor.withValues(alpha: 0.3)),
       ),
       child: Text(
         displayStatus,
@@ -1702,7 +1702,7 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                             shape: BoxShape.circle,
                             color: Colors.grey.shade200,
                             border: Border.all(
-                              color: _getStatusColor(status).withOpacity(0.3),
+                              color: _getStatusColor(status).withValues(alpha: 0.3),
                               width: 2,
                             ),
                           ),
@@ -1770,10 +1770,10 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
+                        color: Colors.blue.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                          color: Colors.blue.withOpacity(0.3),
+                          color: Colors.blue.withValues(alpha: 0.3),
                           width: 1,
                         ),
                       ),
@@ -1803,10 +1803,10 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: primaryColor.withOpacity(0.05),
+                        color: primaryColor.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: primaryColor.withOpacity(0.1),
+                          color: primaryColor.withValues(alpha: 0.1),
                           width: 1,
                         ),
                       ),

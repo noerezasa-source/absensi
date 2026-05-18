@@ -1036,7 +1036,7 @@ class _FaceAttendanceMultiUserPageState
             boxColor = Colors.red;
             statusText = AppLanguage.tr('attendance.face.unknown');
           } else if (name == 'Error') {
-            boxColor = Colors.red.withOpacity(0.5);
+            boxColor = Colors.red.withValues(alpha: 0.5);
             statusText = AppLanguage.tr('attendance.face.error');
           } else {
             boxColor = Colors.green;

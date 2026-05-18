@@ -8,12 +8,13 @@ import '../../attendance/services/biometric_service.dart';
 import '../../auth/services/role_service.dart';
 import '../widgets/user_bottom_nav.dart';
 import 'user_profile_page.dart';
-import '../../auth/screens/join_organization_screen.dart'; // ✅ Added for Join Organization option
-import 'dart:async'; // ✅ Added for Clock Timer
+import '../../auth/screens/join_organization_screen.dart';
+import 'dart:async';
 import 'package:absensimassal/Petugas/screens/petugas_dashboard.dart';
 import '../../helpers/timezone_helper.dart';
 import '../../Petugas/screens/selfie_attendance_flow_page.dart';
 import '../../helpers/language_helper.dart';
+import '../../services/timezone_service.dart';
 
 class UserDashboardPage extends StatefulWidget {
   final int organizationMemberId;
@@ -38,6 +39,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   final BiometricService _biometricService = BiometricService();
   final RoleService _roleService = RoleService();
   final _supabase = Supabase.instance.client;
+  final TimezoneService _timezoneService = TimezoneService();
 
   bool _hasRegisteredFace = false;
   bool _isCheckingFace = false;
@@ -62,8 +64,10 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   // Real-time updates
   Timer? _clockTimer;
   String _organizationTimezone = 'Asia/Jakarta';
+  String _userTimezone = 'Asia/Jakarta';
   Map<String, dynamic>? _organization;
   DateTime _nowUtc = DateTime.now().toUtc();
+  DateTime? _currentOrgTime;
 
   @override
   void initState() {
@@ -76,15 +80,13 @@ class _UserDashboardPageState extends State<UserDashboardPage>
         setState(() {});
       }
     });
-    // print('=== USER DASHBOARD INIT ===');
-    // print('Organization Member ID: ${widget.organizationMemberId}');
-    // print('Role: ${_roleService.getRoleName(widget.memberData)}');
     _loadUserProfile();
     _checkFaceRegistration();
     _loadWeeklyOverview();
     _loadAttendanceData(_focusedDay);
     _loadRecentActivities();
     _loadOrganizationTimezone();
+    _loadUserTimezone();
     _loadOrganizationInfo();
     _initRealTimeClock();
   }
@@ -94,9 +96,41 @@ class _UserDashboardPageState extends State<UserDashboardPage>
       if (mounted) {
         setState(() {
           _nowUtc = DateTime.now().toUtc();
+          final timezoneToUse = _userTimezone.isNotEmpty
+              ? _userTimezone
+              : _organizationTimezone;
+          _currentOrgTime = TimezoneHelper.convertUtcToOrgTimezone(
+            _nowUtc,
+            timezoneToUse,
+          );
         });
       }
     });
+  }
+
+  Future<void> _loadUserTimezone() async {
+    try {
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final response = await _supabase
+          .from('user_profiles')
+          .select('timezone')
+          .eq('id', userId)
+          .maybeSingle();
+
+      if (response != null && response['timezone'] != null) {
+        setState(() {
+          _userTimezone = response['timezone'];
+        });
+        debugPrint('User timezone loaded: $_userTimezone');
+      } else {
+        _userTimezone = _organizationTimezone;
+      }
+    } catch (e) {
+      debugPrint('Error loading user timezone: $e');
+      _userTimezone = _organizationTimezone;
+    }
   }
 
   @override
@@ -160,34 +194,41 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     if (!mounted) return;
     if (selectedMembership == null) return;
 
-    // Skip jika sudah di organisasi yang sama
     if (selectedMembership['id'] == widget.organizationMemberId) {
       debugPrint('Already on this organization dashboard');
       return;
     }
 
-    // Navigasi berdasarkan role — dilakukan di context dashboard (valid)
-    if (_roleService.isPetugas(selectedMembership)) {
+    final roleCode = _roleService.getRoleCode(selectedMembership);
+    if (_roleService.isPetugas(selectedMembership) || roleCode == 'SA001') {
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(
-          builder: (context) => PetugasDashboardPage(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              PetugasDashboardPage(
             organizationMemberId: selectedMembership['id'] as int,
             memberData: selectedMembership,
             isDarkMode: _isDarkMode,
           ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
         ),
         (route) => false,
       );
     } else {
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(
-          builder: (context) => UserDashboardPage(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              UserDashboardPage(
             organizationMemberId: selectedMembership['id'] as int,
             memberData: selectedMembership,
             isDarkMode: _isDarkMode,
           ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
         ),
         (route) => false,
       );
@@ -305,21 +346,25 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(
                                       organization['name'] ?? 'Unknown Org',
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.bold,
+                                        height: 1.1,
                                         color: _isDarkMode
                                             ? Colors.white
                                             : const Color(0xFF1F2937),
                                       ),
                                     ),
+                                    const SizedBox(height: 2),
                                     Text(
                                       roleName.toUpperCase(),
                                       style: TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 11,
+                                        height: 1.0,
                                         color: Colors.grey.shade500,
                                         fontWeight: FontWeight.w500,
                                       ),
@@ -344,7 +389,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: () {
-                        Navigator.pop(context); // Close switcher
+                        Navigator.pop(context);
                         Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -405,6 +450,26 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     }
   }
 
+  // ========== EXTRACT PHOTO URL HELPER ==========
+  String? _extractPhotoUrl(Map<String, dynamic> event) {
+    if (event['photo_url'] != null &&
+        event['photo_url'].toString().isNotEmpty) {
+      return event['photo_url'];
+    }
+    if (event['checkInPhoto'] != null &&
+        event['checkInPhoto'].toString().isNotEmpty) {
+      return event['checkInPhoto'];
+    }
+    if (event['checkOutPhoto'] != null &&
+        event['checkOutPhoto'].toString().isNotEmpty) {
+      return event['checkOutPhoto'];
+    }
+    if (event['location'] is Map && event['location']['photo_url'] != null) {
+      return event['location']['photo_url'];
+    }
+    return null;
+  }
+
   Future<void> _loadRecentActivities() async {
     if (!mounted) return;
     setState(() => _isLoadingActivities = true);
@@ -432,9 +497,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
         for (final log in response) {
           final eventTimeStr = log['event_time'] as String;
+          final timezoneToUse = _userTimezone.isNotEmpty
+              ? _userTimezone
+              : _organizationTimezone;
           final eventTime = TimezoneHelper.parseAndConvert(
             eventTimeStr,
-            _organizationTimezone,
+            timezoneToUse,
           );
           if (eventTime == null) continue;
 
@@ -449,7 +517,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
           final rawData = log['raw_data'] as Map<String, dynamic>? ?? {};
 
-          // Safe parsing for photo_url from location string or Map
           Map<String, dynamic> parsedLocation = {};
           try {
             if (log['location'] is Map) {
@@ -457,8 +524,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
             } else if (log['location'] is String) {
               final decoded = Uri.decodeFull(log['location']);
               if (decoded.startsWith('{')) {
-                // If it's a JSON string, try to extract photo_url if possible without full JSON parser
-                // (Usually Supabase handles it if selected correctly, but as fallback:)
                 if (decoded.contains('"photo_url"')) {
                   final start = decoded.indexOf('"photo_url"') + 12;
                   final end = decoded.indexOf('"', start + 1);
@@ -482,6 +547,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
               'checkOutMethod': null,
               'checkInPhoto': null,
               'checkOutPhoto': null,
+              'photo_url': null,
               'status': record['status'],
               'shiftName': rawData['work_time_mode']?.toString(),
               'lastUpdated': eventTime,
@@ -494,10 +560,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
             entry['checkInTime'] = eventTime;
             entry['checkInMethod'] = log['method'];
             entry['checkInPhoto'] = photoUrl;
+            entry['photo_url'] = photoUrl;
           } else if (log['event_type'] == 'check_out') {
             entry['checkOutTime'] ??= eventTime;
             entry['checkOutMethod'] = log['method'];
             entry['checkOutPhoto'] = photoUrl;
+            entry['photo_url'] = photoUrl;
           }
 
           if (eventTime.isAfter(entry['lastUpdated'] as DateTime)) {
@@ -526,7 +594,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   }
 
   Future<void> _loadAttendanceData(DateTime focusedMonth) async {
-    _loadUserProfile(); // ✅ Added to ensure profile is updated
+    _loadUserProfile();
     setState(() {
       _isLoadingAttendance = true;
     });
@@ -543,7 +611,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
         0,
       );
 
-      // Load attendance records untuk calendar - REMOVED check_in_method filter to show all
       final records = await _supabase
           .from('attendance_records')
           .select(
@@ -589,7 +656,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
         groupedData[dateOnly] ??= [];
 
-        // Add check-in event
         if (record['actual_check_in'] != null) {
           groupedData[dateOnly]!.add({
             'type': 'check_in',
@@ -602,7 +668,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           });
         }
 
-        // Add check-out event
         if (record['actual_check_out'] != null) {
           groupedData[dateOnly]!.add({
             'type': 'check_out',
@@ -619,7 +684,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
       }
     }
 
-    // Sort events by time
     for (final dateEvents in groupedData.values) {
       dateEvents.sort((a, b) {
         final timeA = DateTime.parse(a['event_time']);
@@ -641,25 +705,17 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     });
 
     try {
-      // Get current week (Monday to Friday)
       final now = DateTime.now();
-      final currentWeekday = now.weekday; // 1 = Monday, 7 = Sunday
-
-      // Calculate Monday of current week
+      final currentWeekday = now.weekday;
       final monday = now.subtract(Duration(days: currentWeekday - 1));
       final mondayStr = monday.toIso8601String().split('T')[0];
-
-      // Calculate Friday of current week
       final friday = monday.add(const Duration(days: 4));
       final fridayStr = friday.toIso8601String().split('T')[0];
-
-      // Get last week's Monday and Friday for comparison
       final lastMonday = monday.subtract(const Duration(days: 7));
       final lastMondayStr = lastMonday.toIso8601String().split('T')[0];
       final lastFriday = lastMonday.add(const Duration(days: 4));
       final lastFridayStr = lastFriday.toIso8601String().split('T')[0];
 
-      // Fetch current week's attendance records for THIS MEMBER
       final currentWeekRecords = await _supabase
           .from('attendance_records')
           .select('attendance_date, work_duration_minutes')
@@ -667,7 +723,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           .gte('attendance_date', mondayStr)
           .lte('attendance_date', fridayStr);
 
-      // Fetch last week's attendance records for THIS MEMBER
       final lastWeekRecords = await _supabase
           .from('attendance_records')
           .select('work_duration_minutes')
@@ -675,24 +730,21 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           .gte('attendance_date', lastMondayStr)
           .lte('attendance_date', lastFridayStr);
 
-      // Calculate daily hours for current week
       final dailyHoursMap = <int, double>{
-        1: 0.0, // Monday
-        2: 0.0, // Tuesday
-        3: 0.0, // Wednesday
-        4: 0.0, // Thursday
-        5: 0.0, // Friday
+        1: 0.0,
+        2: 0.0,
+        3: 0.0,
+        4: 0.0,
+        5: 0.0,
       };
 
       double totalMinutes = 0.0;
       for (final record in currentWeekRecords as List) {
         final dateStr = record['attendance_date'] as String?;
         final minutes = record['work_duration_minutes'] as int?;
-
         if (dateStr != null && minutes != null && minutes > 0) {
           final date = DateTime.parse(dateStr);
           final weekday = date.weekday;
-
           if (weekday >= 1 && weekday <= 5) {
             dailyHoursMap[weekday] =
                 (dailyHoursMap[weekday] ?? 0.0) + (minutes / 60.0);
@@ -701,7 +753,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
         }
       }
 
-      // Calculate last week's total
       double lastWeekMinutes = 0.0;
       for (final record in lastWeekRecords as List) {
         final minutes = record['work_duration_minutes'] as int?;
@@ -710,7 +761,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
         }
       }
 
-      // Calculate percentage change
       double percentageChange = 0.0;
       if (lastWeekMinutes > 0) {
         percentageChange =
@@ -750,13 +800,9 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     });
 
     try {
-      // print('=== CHECKING FACE REGISTRATION ===');
-
       final hasRegistered = await _biometricService.hasRegisteredFace(
         widget.organizationMemberId,
       );
-
-      // print('Face registration check result: $hasRegistered');
 
       if (mounted) {
         setState(() {
@@ -802,7 +848,9 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           isDarkMode: _isDarkMode,
         ),
       ),
-    );
+    ).then((_) {
+      _loadUserTimezone();
+    });
   }
 
   Future<void> _handleSelfieAttendance() async {
@@ -830,9 +878,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   }
 
   String _getCurrentDate() {
+    final timezoneToUse = _userTimezone.isNotEmpty
+        ? _userTimezone
+        : _organizationTimezone;
     final nowOrg = TimezoneHelper.convertUtcToOrgTimezone(
       _nowUtc,
-      _organizationTimezone,
+      timezoneToUse,
     );
     return DateFormat(
       'EEEE, dd MMM yyyy',
@@ -845,7 +896,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     final firstName = _userProfile!['first_name'] ?? '';
     final middleName = _userProfile!['middle_name'] ?? '';
     final lastName = _userProfile!['last_name'] ?? '';
-
     if (middleName.isNotEmpty) {
       return '$firstName $middleName $lastName'.trim();
     }
@@ -857,11 +907,9 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     if (storedPath.startsWith('http://') || storedPath.startsWith('https://')) {
       return storedPath;
     }
-
     final normalizedPath = storedPath.startsWith('mass-profile/')
         ? storedPath
         : 'mass-profile/$storedPath';
-
     try {
       return Supabase.instance.client.storage
           .from('profile-photos')
@@ -874,7 +922,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   String? _getProfilePhotoUrl() {
     final profile = _userProfile ?? widget.userProfile;
     if (profile == null) return null;
-
     final photoPath = profile['profile_photo_url'] as String?;
     return _resolveProfilePhotoUrl(photoPath);
   }
@@ -895,7 +942,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   void _onDaySelected(DateTime selectedDay, DateTime focusedDay) {
     if (!mounted) return;
-
     setState(() {
       _selectedDay = selectedDay;
       _focusedDay = focusedDay;
@@ -937,28 +983,23 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   String _formatEventTime(DateTime? time) {
     if (time == null) return 'Unknown time';
-
-    final nowUtc = DateTime.now().toUtc();
-    final nowOrg =
-        TimezoneHelper.parseAndConvert(
-          nowUtc.toIso8601String(),
-          _organizationTimezone,
-        ) ??
-        nowUtc;
-
+    final timezoneToUse = _userTimezone.isNotEmpty
+        ? _userTimezone
+        : _organizationTimezone;
+    final nowOrg = TimezoneHelper.convertUtcToOrgTimezone(
+      _nowUtc,
+      timezoneToUse,
+    );
     final isToday =
         nowOrg.year == time.year &&
         nowOrg.month == time.month &&
         nowOrg.day == time.day;
-
     final hour = time.hour.toString().padLeft(2, '0');
     final minute = time.minute.toString().padLeft(2, '0');
     final timeStr = '$hour:$minute';
-
     if (isToday) {
       return '${AppLanguage.tr('User.dashboard.today')} • $timeStr';
     }
-
     final dateStr = '${time.day}/${time.month}/${time.year}';
     return '$dateStr • $timeStr';
   }
@@ -986,9 +1027,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   String _formatTime(String? dateTimeStr) {
     if (dateTimeStr == null) return '--:--';
     try {
+      final timezoneToUse = _userTimezone.isNotEmpty
+          ? _userTimezone
+          : _organizationTimezone;
       final convertedTime = TimezoneHelper.parseAndConvert(
         dateTimeStr,
-        _organizationTimezone,
+        timezoneToUse,
       );
       if (convertedTime == null) return '--:--';
       return DateFormat('HH:mm').format(convertedTime);
@@ -1000,11 +1044,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   Future<void> _showEventDetails(Map<String, dynamic> event) async {
     if (!mounted) return;
 
+    final photoUrl = _extractPhotoUrl(event);
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
         final eventTime = DateTime.parse(event['event_time']);
-
         return Dialog(
           backgroundColor: Colors.transparent,
           child: Container(
@@ -1067,14 +1112,13 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                       ],
                     ),
                     const SizedBox(height: 20),
-                    if (event['photo_url'] != null) ...[
+                    if (photoUrl != null && photoUrl.isNotEmpty) ...[
                       GestureDetector(
-                        onTap: () =>
-                            _showFullImage(context, event['photo_url']),
+                        onTap: () => _showFullImage(context, photoUrl),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(16),
                           child: CachedNetworkImage(
-                            imageUrl: event['photo_url'],
+                            imageUrl: photoUrl,
                             width: double.infinity,
                             height: 220,
                             fit: BoxFit.cover,
@@ -1229,13 +1273,11 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   @override
   Widget build(BuildContext context) {
-    final nowOrg = TimezoneHelper.convertUtcToOrgTimezone(
-      _nowUtc,
-      _organizationTimezone,
-    );
-    final hourFormat = nowOrg.hour.toString().padLeft(2, '0');
-    final minuteFormat = nowOrg.minute.toString().padLeft(2, '0');
+    final displayTime = _currentOrgTime ?? DateTime.now();
+    final hourFormat = displayTime.hour.toString().padLeft(2, '0');
+    final minuteFormat = displayTime.minute.toString().padLeft(2, '0');
     final currentTime = '$hourFormat:$minuteFormat';
+    final isAmPm = displayTime.hour < 12;
 
     return Scaffold(
       backgroundColor: _isDarkMode
@@ -1245,6 +1287,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
         onRefresh: () async {
           await Future.wait([
             _loadUserProfile(),
+            _loadUserTimezone(),
             _checkFaceRegistration(),
             _loadWeeklyOverview(),
             _loadAttendanceData(_focusedDay),
@@ -1255,7 +1298,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           physics: const AlwaysScrollableScrollPhysics(),
           child: Column(
             children: [
-              // ---------- HEADER SECTION ----------
+              // HEADER SECTION
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(8, 8, 12, 32),
@@ -1270,7 +1313,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                 ),
                 child: Column(
                   children: [
-                    // Logo and Action Row
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: Row(
@@ -1307,12 +1349,10 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                         ],
                       ),
                     ),
-                    // Profile Section
                     Transform.translate(
                       offset: const Offset(0, -60),
                       child: Column(
                         children: [
-                          // Profile Photo
                           GestureDetector(
                             onTap: _navigateToProfile,
                             child: Container(
@@ -1361,7 +1401,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                             ),
                           ),
                           const SizedBox(height: 12),
-                          // Name
                           GestureDetector(
                             onTap: _navigateToProfile,
                             child: Text(
@@ -1374,7 +1413,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                             ),
                           ),
                           const SizedBox(height: 6),
-                          // Role & Org Switcher
                           Material(
                             color: Colors.transparent,
                             child: InkWell(
@@ -1382,8 +1420,8 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                               borderRadius: BorderRadius.circular(12),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
+                                  horizontal: 10,
+                                  vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
                                   color: Colors.white.withOpacity(0.12),
@@ -1401,7 +1439,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                       child: Text(
                                         '${_roleService.getRoleName(widget.memberData)}${_organization != null ? ' - ${_organization!['name']}' : ''}',
                                         style: TextStyle(
-                                          fontSize: 13,
+                                          fontSize: 12,
                                           fontWeight: FontWeight.w500,
                                           color: Colors.white.withOpacity(0.95),
                                         ),
@@ -1413,7 +1451,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                     Icon(
                                       Icons.keyboard_arrow_down_rounded,
                                       color: Colors.white.withOpacity(0.8),
-                                      size: 18,
+                                      size: 16,
                                     ),
                                   ],
                                 ),
@@ -1421,11 +1459,10 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                             ),
                           ),
                           const SizedBox(height: 8),
-                          // Date Card
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
+                              horizontal: 12,
+                              vertical: 5,
                             ),
                             decoration: BoxDecoration(
                               color: Colors.white.withOpacity(0.2),
@@ -1444,7 +1481,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                   _getCurrentDate(),
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize: 12,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
@@ -1457,8 +1494,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                   ],
                 ),
               ),
-
-              // ---------- CONTENT AREA ----------
+              // CONTENT AREA
               Container(
                 width: double.infinity,
                 decoration: BoxDecoration(
@@ -1472,7 +1508,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                 ),
                 child: Column(
                   children: [
-                    // COMBINED TIME & STATS CARD (OVERLAPPING)
                     Transform.translate(
                       offset: const Offset(0, -80),
                       child: Padding(
@@ -1494,7 +1529,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                           ),
                           child: Column(
                             children: [
-                              // Time and Location Row
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -1516,7 +1550,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
-                                          '$currentTime ${nowOrg.hour < 12 ? AppLanguage.tr('am') : AppLanguage.tr('pm')}',
+                                          '$currentTime ${isAmPm ? AppLanguage.tr('am') : AppLanguage.tr('pm')}',
                                           style: TextStyle(
                                             fontSize: 28,
                                             fontWeight: FontWeight.bold,
@@ -1590,8 +1624,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                         ),
                       ),
                     ),
-
-                    // Main Content
                     Transform.translate(
                       offset: const Offset(0, -70),
                       child: Padding(
@@ -1602,9 +1634,8 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                               const Center(child: CircularProgressIndicator())
                             else if (!_hasRegisteredFace)
                               _buildFaceRegistrationCard()
-                            else ...[
+                            else
                               _buildMainContent(),
-                            ],
                           ],
                         ),
                       ),
@@ -1738,7 +1769,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   Widget _buildMainContent() {
     return Column(
       children: [
-        // Tab Bar
         Container(
           decoration: BoxDecoration(
             color: _isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
@@ -1772,8 +1802,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           ),
         ),
         const SizedBox(height: 16),
-
-        // Tab Content (Replaced TabBarView with conditional rendering for seamless scrolling)
         _tabController.index == 0 ? _buildStatisticsTab() : _buildCalendarTab(),
       ],
     );
@@ -1782,7 +1810,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   Widget _buildStatisticsTab() {
     return Column(
       children: [
-        // Weekly Overview Card (Matches Petugas Dashboard)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Column(
@@ -1935,7 +1962,6 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                         ],
                       ),
                     const SizedBox(height: 24),
-                    // Bar Chart
                     if (!_isLoadingWeeklyData)
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -1981,10 +2007,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
             ],
           ),
         ),
-
         const SizedBox(height: 8),
-
-        // Recent Activity Section
         _buildRecentActivitySection(),
       ],
     );
@@ -2009,9 +2032,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
               ),
               if (_recentActivities.isNotEmpty)
                 TextButton(
-                  onPressed: () {
-                    _tabController.animateTo(1);
-                  },
+                  onPressed: () => _tabController.animateTo(1),
                   child: Text(
                     AppLanguage.tr('User.dashboard.view_all'),
                     style: TextStyle(
@@ -2089,13 +2110,14 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     );
   }
 
+  // ========== RECENT ACTIVITY ITEM WITH PHOTO ==========
   Widget _buildModernActivityItem(Map<String, dynamic> activity) {
-    // Note: User dashboard structure is slightly different from Petugas
     final checkInTime = activity['checkInTime'] as DateTime?;
     final checkOutTime = activity['checkOutTime'] as DateTime?;
     final lastUpdated = activity['lastUpdated'] as DateTime?;
     final status = activity['status']?.toString().toUpperCase();
     final shiftName = activity['shiftName']?.toString().toUpperCase();
+    final photoUrl = _extractPhotoUrl(activity);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2113,297 +2135,377 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           ),
         ],
       ),
-      child: Column(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (checkInTime != null)
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? Colors.white10 : Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.login,
-                    color: _isDarkMode ? Colors.green : Colors.green.shade600,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        AppLanguage.tr('User.dashboard.check_in'),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: _isDarkMode ? Colors.white : Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        lastUpdated != null
-                            ? _formatEventTime(lastUpdated)
-                            : AppLanguage.tr('User.dashboard.today'),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _isDarkMode
-                              ? Colors.white54
-                              : Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _formatShortTime(checkInTime),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: _isDarkMode ? Colors.white : Colors.black87,
+          // PHOTO SECTION
+          if (photoUrl != null && photoUrl.isNotEmpty)
+            GestureDetector(
+              onTap: () => _showFullImage(context, photoUrl),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: CachedNetworkImage(
+                  imageUrl: photoUrl,
+                  width: 60,
+                  height: 60,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(
+                    width: 60,
+                    height: 60,
+                    color: Colors.grey.shade200,
+                    child: const Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (activity['checkInMethod'] != null)
-                          Container(
-                            margin: const EdgeInsets.only(top: 4, right: 4),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _isDarkMode
-                                  ? Colors.white10
-                                  : Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                color: _isDarkMode
-                                    ? Colors.white12
-                                    : Colors.grey.shade300,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _getMethodIcon(activity['checkInMethod']),
-                                  size: 10,
-                                  color: _isDarkMode
-                                      ? Colors.white70
-                                      : Colors.grey.shade700,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _formatMethodName(activity['checkInMethod']),
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    color: _isDarkMode
-                                        ? Colors.white70
-                                        : Colors.grey.shade700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        if (status != null)
-                          Container(
-                            margin: const EdgeInsets.only(top: 4),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color:
-                                  (status.contains('LATE')
-                                          ? Colors.orange
-                                          : Colors.green)
-                                      .withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              status,
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: status.contains('LATE')
-                                    ? Colors.orange.shade700
-                                    : Colors.green.shade700,
-                              ),
-                            ),
-                          ),
-                      ],
+                  ),
+                  errorWidget: (context, url, error) => Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: _isDarkMode
+                          ? Colors.white10
+                          : Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                  ],
+                    child: Icon(
+                      Icons.camera_alt,
+                      size: 30,
+                      color: _isDarkMode
+                          ? Colors.white38
+                          : Colors.grey.shade400,
+                    ),
+                  ),
                 ),
-              ],
-            ),
-          if (checkInTime != null && checkOutTime != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Divider(
-                height: 1,
-                color: _isDarkMode ? Colors.white24 : Colors.grey.shade200,
               ),
             ),
-          if (checkOutTime != null)
-            Row(
+          if (photoUrl != null && photoUrl.isNotEmpty)
+            const SizedBox(width: 12),
+          // CONTENT COLUMN
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? Colors.white10 : Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.logout,
-                    color: _isDarkMode ? Colors.red : Colors.red.shade600,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                if (checkInTime != null)
+                  Row(
                     children: [
-                      Text(
-                        AppLanguage.tr('User.dashboard.check_out'),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: _isDarkMode ? Colors.white : Colors.black87,
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _isDarkMode
+                              ? Colors.white10
+                              : Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.login,
+                          color: _isDarkMode
+                              ? Colors.green
+                              : Colors.green.shade600,
+                          size: 20,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        lastUpdated != null
-                            ? _formatEventTime(lastUpdated)
-                            : AppLanguage.tr('User.dashboard.today'),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _isDarkMode
-                              ? Colors.white54
-                              : Colors.grey.shade600,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              AppLanguage.tr('User.dashboard.check_in'),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: _isDarkMode
+                                    ? Colors.white
+                                    : Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              lastUpdated != null
+                                  ? _formatEventTime(lastUpdated)
+                                  : AppLanguage.tr('User.dashboard.today'),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _isDarkMode
+                                    ? Colors.white54
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
                         ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            _formatShortTime(checkInTime),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: _isDarkMode
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (activity['checkInMethod'] != null)
+                                Container(
+                                  margin: const EdgeInsets.only(
+                                    top: 4,
+                                    right: 4,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _isDarkMode
+                                        ? Colors.white10
+                                        : Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: _isDarkMode
+                                          ? Colors.white12
+                                          : Colors.grey.shade300,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _getMethodIcon(
+                                          activity['checkInMethod'],
+                                        ),
+                                        size: 10,
+                                        color: _isDarkMode
+                                            ? Colors.white70
+                                            : Colors.grey.shade700,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        _formatMethodName(
+                                          activity['checkInMethod'],
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                          color: _isDarkMode
+                                              ? Colors.white70
+                                              : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              if (status != null)
+                                Container(
+                                  margin: const EdgeInsets.only(top: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        (status.contains('LATE')
+                                                ? Colors.orange
+                                                : Colors.green)
+                                            .withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    status,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: status.contains('LATE')
+                                          ? Colors.orange.shade700
+                                          : Colors.green.shade700,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _formatShortTime(checkOutTime),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: _isDarkMode ? Colors.white : Colors.black87,
-                      ),
+                if (checkInTime != null && checkOutTime != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Divider(
+                      height: 1,
+                      color: _isDarkMode
+                          ? Colors.white24
+                          : Colors.grey.shade200,
                     ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (activity['checkOutMethod'] != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            margin: const EdgeInsets.only(right: 4),
-                            decoration: BoxDecoration(
-                              color: _isDarkMode
-                                  ? Colors.white10
-                                  : Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
+                  ),
+                if (checkOutTime != null)
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _isDarkMode
+                              ? Colors.white10
+                              : Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.logout,
+                          color: _isDarkMode ? Colors.red : Colors.red.shade600,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              AppLanguage.tr('User.dashboard.check_out'),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
                                 color: _isDarkMode
-                                    ? Colors.white12
-                                    : Colors.grey.shade300,
+                                    ? Colors.white
+                                    : Colors.black87,
                               ),
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _getMethodIcon(activity['checkOutMethod']),
-                                  size: 10,
-                                  color: _isDarkMode
-                                      ? Colors.white70
-                                      : Colors.grey.shade700,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _formatMethodName(activity['checkOutMethod']),
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
+                            const SizedBox(height: 2),
+                            Text(
+                              lastUpdated != null
+                                  ? _formatEventTime(lastUpdated)
+                                  : AppLanguage.tr('User.dashboard.today'),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _isDarkMode
+                                    ? Colors.white54
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            _formatShortTime(checkOutTime),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: _isDarkMode
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (activity['checkOutMethod'] != null)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  margin: const EdgeInsets.only(right: 4),
+                                  decoration: BoxDecoration(
                                     color: _isDarkMode
-                                        ? Colors.white70
-                                        : Colors.grey.shade700,
+                                        ? Colors.white10
+                                        : Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: _isDarkMode
+                                          ? Colors.white12
+                                          : Colors.grey.shade300,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _getMethodIcon(
+                                          activity['checkOutMethod'],
+                                        ),
+                                        size: 10,
+                                        color: _isDarkMode
+                                            ? Colors.white70
+                                            : Colors.grey.shade700,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        _formatMethodName(
+                                          activity['checkOutMethod'],
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                          color: _isDarkMode
+                                              ? Colors.white70
+                                              : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
+                              if (shiftName != null)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _isDarkMode
+                                        ? Colors.white10
+                                        : const Color(
+                                            0xFF4A1E79,
+                                          ).withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: const Color(
+                                        0xFF4A1E79,
+                                      ).withOpacity(0.1),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    shiftName,
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w600,
+                                      color: _isDarkMode
+                                          ? Colors.white70
+                                          : const Color(0xFF4A1E79),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                        if (shiftName != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _isDarkMode
-                                  ? Colors.white10
-                                  : const Color(0xFF4A1E79).withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: const Color(0xFF4A1E79).withOpacity(0.1),
-                              ),
-                            ),
-                            child: Text(
-                              shiftName,
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w600,
-                                color: _isDarkMode
-                                    ? Colors.white70
-                                    : const Color(0xFF4A1E79),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
+                        ],
+                      ),
+                    ],
+                  ),
               ],
             ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildBarChart(String day, double hours, int dayIndex) {
-    // Find max hours for normalization
     final maxHours = _dailyHours.isEmpty
         ? 0.0
         : _dailyHours.reduce((a, b) => a > b ? a : b);
-
-    // Calculate height (normalize to 0-1 range, with minimum 20% for visibility)
-    double normalizedHeight = 0.2; // Minimum height for empty days
+    double normalizedHeight = 0.2;
     if (maxHours > 0 && hours > 0) {
       normalizedHeight = (hours / maxHours).clamp(0.2, 1.0);
     }
-
-    // Check if this is the current day
     final now = DateTime.now();
     final isCurrentDay = now.weekday == dayIndex + 1;
 
@@ -2723,6 +2825,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   Widget _buildEventListItem(Map<String, dynamic> event) {
     final eventColor = _getEventColor(event['type']);
+    final photoUrl = _extractPhotoUrl(event);
 
     return Container(
       decoration: BoxDecoration(
@@ -2817,11 +2920,13 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   }
 
   Widget _buildEventLeadingWidget(Map<String, dynamic> event, Color iconColor) {
-    if (event['photo_url'] != null) {
+    final photoUrl = _extractPhotoUrl(event);
+
+    if (photoUrl != null && photoUrl.isNotEmpty) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: CachedNetworkImage(
-          imageUrl: event['photo_url'],
+          imageUrl: photoUrl,
           width: 48,
           height: 48,
           fit: BoxFit.cover,

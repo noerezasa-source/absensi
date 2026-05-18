@@ -24,12 +24,19 @@ subprojects {
     val newSubprojectBuildDir = file(newBuildDir.resolve(project.name))
     project.layout.buildDirectory.set(newSubprojectBuildDir)
     
-    // FORCE NDK VERSION UNTUK SEMUA SUBPROJECTS
+    // FORCE NDK DAN SDK VERSION UNTUK SEMUA SUBPROJECTS
     afterEvaluate {
         if (project.hasProperty("android")) {
             project.extensions.findByName("android")?.let { android ->
                 try {
+                    // Force NDK
                     android.javaClass.getMethod("setNdkVersion", String::class.java).invoke(android, "27.2.12479018")
+                    // Force Compile SDK
+                    android.javaClass.getMethod("setCompileSdkVersion", Int::class.javaPrimitiveType ?: Int::class.java).invoke(android, 36)
+                    
+                    // Force Target SDK via defaultConfig if it exists
+                    val defaultConfig = android.javaClass.getMethod("getDefaultConfig").invoke(android)
+                    defaultConfig.javaClass.getMethod("setTargetSdkVersion", Int::class.javaPrimitiveType ?: Int::class.java).invoke(defaultConfig, 36)
                 } catch (e: Exception) {
                     // Ignore if method doesn't exist
                 }
@@ -45,11 +52,4 @@ subprojects {
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
-
-// ========== CARA SIMPLE NONAKTIFKAN CHECK AAR ==========
-tasks.matching { it.name.contains("checkDebugAarMetadata") }.all {
-    enabled = false
-}
-tasks.matching { it.name.contains("checkReleaseAarMetadata") }.all {
-    enabled = false
-}
+

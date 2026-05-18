@@ -336,8 +336,8 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
           organizationId: widget.organizationId.toString(),
           organizationName: widget.organizationName,
           isRequired: false,
-          allowCurrentLocation: true, // Enable manual location selection
-          memberId: memberId, // NEW: Pass memberId for shift selection
+          allowCurrentLocation: true,
+          memberId: memberId,
         ),
       ),
     );
@@ -345,7 +345,6 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
 
   Future<String?> _takeSelfie() async {
     try {
-      // Initialize cameras
       final cameras = await CameraService.initializeCameras();
       if (cameras.isEmpty) {
         throw Exception('No cameras available');
@@ -422,13 +421,17 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
 
       // 1. Upload photo to Supabase Storage
       final photoUrl = await _uploadPhoto(photoPath, member['id']);
+      debugPrint('Photo URL: $photoUrl'); // DEBUG
 
-      // 2. Prepare location data
+      // 2. Prepare location data with photo_url (FIX: Pastikan photo_url tersimpan)
       final latitude = locationData['latitude'] as double?;
       final longitude = locationData['longitude'] as double?;
       final accuracy = locationData['accuracy'] as double?;
 
-      final location = {
+      // ========== PERBAIKAN UTAMA ==========
+      // Location Map HARUS berisi photo_url agar foto muncul di database
+      final locationMap = {
+        'photo_url': photoUrl, // ← INI YANG PALING PENTING!
         'latitude': latitude,
         'longitude': longitude,
         if (accuracy != null) 'accuracy': accuracy,
@@ -438,13 +441,31 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
         if (locationData['reason'] != null) 'reason': locationData['reason'],
       };
 
-      final memberId = member['id'] as int;
+      // Raw data sebagai backup
       final rawData = {
+        'photo_url': photoUrl, // ← Backup juga di raw_data
         if (selectedShift != null) 'selected_shift_id': selectedShift['id'],
         if (selectedShift != null) 'selected_shift_name': selectedShift['name'],
       };
 
-      // 3. Submit attendance based on selected action
+      final memberId = member['id'] as int;
+      final nowUtc = DateTime.now().toUtc();
+
+      // 3. Langsung insert ke attendance_logs (memastikan data tersimpan)
+      final supabase = Supabase.instance.client;
+
+      await supabase.from('attendance_logs').insert({
+        'organization_member_id': memberId,
+        'event_type': selectedAction,
+        'event_time': nowUtc.toIso8601String(),
+        'method': 'selfie',
+        'location': locationMap, // ← Sekarang berisi photo_url!
+        'raw_data': rawData,
+      });
+
+      debugPrint('Attendance log inserted with photo_url in location');
+
+      // 4. Submit ke AttendanceService untuk update records
       switch (selectedAction) {
         case 'check_in':
           await _attendanceService.checkIn(
@@ -452,7 +473,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
             photoUrl: photoUrl,
             method: 'selfie',
             organizationTimezone: 'Asia/Jakarta',
-            location: location,
+            location: locationMap,
             deviceId: locationData['type'] == 'device'
                 ? int.tryParse(
                     (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
@@ -468,7 +489,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
             photoUrl: photoUrl,
             method: 'selfie',
             organizationTimezone: 'Asia/Jakarta',
-            location: location,
+            location: locationMap,
             deviceId: locationData['type'] == 'device'
                 ? int.tryParse(
                     (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
@@ -484,7 +505,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
             photoUrl: photoUrl,
             method: 'selfie',
             organizationTimezone: 'Asia/Jakarta',
-            location: location,
+            location: locationMap,
             deviceId: locationData['type'] == 'device'
                 ? int.tryParse(
                     (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
@@ -500,7 +521,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
             photoUrl: photoUrl,
             method: 'selfie',
             organizationTimezone: 'Asia/Jakarta',
-            location: location,
+            location: locationMap,
             deviceId: locationData['type'] == 'device'
                 ? int.tryParse(
                     (locationData['selectedDevice'] as AttendanceDevice?)?.id ??
@@ -562,7 +583,6 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
   }) async {
     if (!mounted) return;
 
-    // Show the dialog
     final dialogFuture = showDialog(
       context: context,
       barrierDismissible: true,
@@ -572,20 +592,15 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
           backgroundColor: Colors.transparent,
           child: Stack(
             children: [
-              // 1. Captured Photo Backdrop
               Positioned.fill(
                 child: Image.file(File(photoPath), fit: BoxFit.cover),
               ),
-
-              // 2. Dark Overlay with Blur
               Positioned.fill(
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
                   child: Container(color: Colors.black.withOpacity(0.6)),
                 ),
               ),
-
-              // 3. Success Card (Centered)
               Center(
                 child: Container(
                   width: MediaQuery.of(context).size.width * 0.85,
@@ -594,9 +609,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
                     horizontal: 24,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(
-                      0xFF1E1B2E,
-                    ).withOpacity(0.95), // Dark modern purple/black
+                    color: const Color(0xFF1E1B2E).withOpacity(0.95),
                     borderRadius: BorderRadius.circular(32),
                     border: Border.all(
                       color: Colors.white.withOpacity(0.1),
@@ -613,12 +626,11 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Checkbox Icon
                       Container(
                         width: 80,
                         height: 80,
                         decoration: const BoxDecoration(
-                          color: Color(0xFF8B5CF6), // Purple
+                          color: Color(0xFF8B5CF6),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(
@@ -638,8 +650,6 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
                         ),
                       ),
                       const SizedBox(height: 32),
-
-                      // Info Rows
                       _buildInfoRow(
                         icon: Icons.person_rounded,
                         label: AppLanguage.tr('attendance.selfie.member'),
@@ -681,10 +691,8 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
       },
     );
 
-    // Auto-dismiss after 3 seconds
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
-        // Only pop if the dialog is still showing (dialogFuture is still active)
         Navigator.of(context, rootNavigator: true).pop();
       }
     });
@@ -767,11 +775,10 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
         throw Exception('Photo file not found at $photoPath');
       }
 
-      // Use the centralized storage service
       final publicUrl = await _storageService.uploadAttendancePhoto(
         photoFile,
         memberId,
-        'selfie', // Standard type for this flow
+        'selfie',
       );
 
       debugPrint('Photo uploaded via storage service: $publicUrl');
@@ -783,7 +790,6 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
   }
 
   String _getMemberName(Map<String, dynamic> member) {
-    // Resilience: Check user_profiles but also fallback to employee_id or ID
     final userProfile = member['user_profiles'] as Map<String, dynamic>?;
 
     if (userProfile != null) {
@@ -798,7 +804,6 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
       if (fullName.isNotEmpty) return fullName;
     }
 
-    // Fallbacks
     if (member['employee_id'] != null) return 'Member ${member['employee_id']}';
     return 'Member #${member['id']}';
   }

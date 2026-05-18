@@ -6,9 +6,13 @@ import 'package:absensimassal/auth/screens/join_organization_screen.dart';
 import 'package:absensimassal/Petugas/screens/petugas_dashboard.dart';
 import 'package:absensimassal/User/screens/user_dashboard.dart';
 import 'package:absensimassal/auth/services/role_service.dart';
+import 'package:absensimassal/auth/services/location_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:provider/provider.dart';
+import 'package:absensimassal/providers/timezone_provider.dart';
+import 'package:absensimassal/providers/theme_provider.dart';
 import 'package:absensimassal/attendance/services/attendance_sync_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -16,7 +20,7 @@ import 'package:sqflite/sqflite.dart';
 
 // ==============================================
 // FUNGSI UNTUK MENGHAPUS DATABASE LAMA
-// ==============================================
+// ==============================================3
 Future<void> forceDeleteDatabase() async {
   try {
     // Dapatkan direktori database
@@ -69,7 +73,17 @@ Future<void> main() async {
   // Start background sync service globally
   AttendanceSyncService().startAutoSync();
 
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(
+          create: (_) => TimezoneProvider()..loadSettings(),
+        ),
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 // ==============================================
@@ -80,6 +94,8 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeProvider = Provider.of<ThemeProvider>(context);
+
     return ValueListenableBuilder<String>(
       valueListenable: LanguageHelper.languageNotifier,
       builder: (context, languageCode, _) {
@@ -87,9 +103,21 @@ class MyApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           title: 'Absensi',
           locale: Locale(languageCode),
+          themeMode: themeProvider.isDarkMode
+              ? ThemeMode.dark
+              : ThemeMode.light,
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: const Color(0xFF6366F1),
+              brightness: Brightness.light,
+            ),
+            useMaterial3: true,
+            fontFamily: 'Roboto',
+          ),
+          darkTheme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF6366F1),
+              brightness: Brightness.dark,
             ),
             useMaterial3: true,
             fontFamily: 'Roboto',
@@ -99,7 +127,11 @@ class MyApp extends StatelessWidget {
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
-          supportedLocales: const [Locale('id', 'ID'), Locale('en', 'US')],
+          supportedLocales: const [
+            Locale('id', 'ID'),
+            Locale('en', 'US'),
+            Locale('ar', 'SA'),
+          ],
           home: const SplashScreen(),
         );
       },
@@ -217,7 +249,8 @@ class _SplashScreenState extends State<SplashScreen>
   void _navigateToDashboard(Map<String, dynamic> memberData) {
     final organizationMemberId = memberData['id'] as int;
 
-    if (_roleService.isPetugas(memberData)) {
+    final roleCode = _roleService.getRoleCode(memberData);
+    if (_roleService.isPetugas(memberData) || roleCode == 'SA001') {
       // ✅ DIPERBAIKI: menggunakan pushReplacement dengan context langsung
       Navigator.pushReplacement(
         context,
@@ -246,9 +279,7 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _navigateToNextScreen() async {
-    await Future.delayed(
-      const Duration(milliseconds: 2500),
-    );
+    await Future.delayed(const Duration(milliseconds: 2500));
     if (!mounted) return;
     await _checkAuthAndNavigate();
   }

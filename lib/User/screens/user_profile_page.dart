@@ -8,6 +8,8 @@ import '../../auth/services/role_service.dart';
 import '../widgets/user_bottom_nav.dart';
 import '../../auth/screens/login.dart';
 import '../../helpers/language_helper.dart';
+import '../../attendance/screens/timezone_settings_screen.dart';
+import '../../services/timezone_service.dart'; // Tambahkan import ini
 
 class UserProfilePage extends StatefulWidget {
   final int organizationMemberId;
@@ -41,6 +43,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
   Map<String, dynamic>? _userProfile;
   Map<String, dynamic>? _organization;
 
+  // Timezone state
+  String _selectedTimezone = 'Asia/Jakarta';
+  String _timezoneDisplay = 'Jakarta (WIB)';
+  bool _isLoadingTimezone = true;
+
   // Form controllers
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _displayNameController;
@@ -49,7 +56,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
   DateTime? _selectedDateOfBirth;
 
   static const Color primaryColor = Color(0xFF4A1E79); // Indigo
-  static const Color accentColor = Color(0xFF8938DF); // Purple
 
   @override
   void initState() {
@@ -59,6 +65,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     _userProfile = widget.userProfile;
     _checkFaceRegistration();
     _loadOrganizationInfo();
+    _loadTimezone(); // Load timezone from database
     if (_userProfile == null) {
       _loadUserProfile();
     } else {
@@ -119,6 +126,77 @@ class _UserProfilePageState extends State<UserProfilePage> {
       }
     } catch (e) {
       debugPrint('Error loading organization info: $e');
+    }
+  }
+
+  // Load timezone from database
+  Future<void> _loadTimezone() async {
+    try {
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final response = await _supabase
+          .from('user_profiles')
+          .select('timezone')
+          .eq('id', userId)
+          .maybeSingle();
+
+      if (mounted) {
+        String tz = 'Asia/Jakarta';
+        if (response != null && response['timezone'] != null) {
+          tz = response['timezone'];
+        }
+
+        final info = TimezoneService.getTimezoneInfo(tz);
+        setState(() {
+          _selectedTimezone = tz;
+          _timezoneDisplay = info?['display'] ?? tz;
+          _isLoadingTimezone = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading timezone: $e');
+      if (mounted) {
+        setState(() => _isLoadingTimezone = false);
+      }
+    }
+  }
+
+  // Save timezone to database
+  Future<void> _saveTimezone(String timezone, String display) async {
+    try {
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      await _supabase
+          .from('user_profiles')
+          .update({'timezone': timezone})
+          .eq('id', userId);
+
+      if (mounted) {
+        setState(() {
+          _selectedTimezone = timezone;
+          _timezoneDisplay = display;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Timezone diubah ke $display'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving timezone: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal menyimpan timezone: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -298,19 +376,19 @@ class _UserProfilePageState extends State<UserProfilePage> {
   void _showLogoutDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Text(AppLanguage.tr('logout_confirm_title')),
         content: Text(AppLanguage.tr('logout_confirm_message')),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: Text(AppLanguage.tr('cancel')),
           ),
           TextButton(
             onPressed: () async {
               await _supabase.auth.signOut();
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pushAndRemoveUntil(
                   MaterialPageRoute(
                     builder: (context) => const ModernLoginScreen(),
                   ),
@@ -647,6 +725,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     const SizedBox(height: 16),
                     _buildSecurityCard(),
                     const SizedBox(height: 16),
+
+                    // Timezone Settings Card
+                    _buildTimezoneSettingsCard(),
+                    const SizedBox(height: 16),
+
                     _buildLanguageSettingsCard(),
 
                     const SizedBox(height: 48),
@@ -659,10 +742,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.redAccent,
                           backgroundColor: widget.isDarkMode
-                              ? Colors.red.withOpacity(0.1)
-                              : Colors.red.shade50.withOpacity(0.3),
+                              ? Colors.red.withValues(alpha: 0.1)
+                              : Colors.red.shade50.withValues(alpha: 0.3),
                           side: BorderSide(
-                            color: Colors.redAccent.withOpacity(0.5),
+                            color: Colors.redAccent.withValues(alpha: 0.5),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
@@ -723,43 +806,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
       height: 1,
       thickness: 1,
       color: widget.isDarkMode
-          ? Colors.white.withOpacity(0.05)
-          : Colors.grey.withOpacity(0.1),
-    );
-  }
-
-  Widget _buildSectionHeader(String label, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: primaryColor),
-        const SizedBox(width: 8),
-        Text(
-          label.toUpperCase(),
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: Colors.grey,
-            letterSpacing: 1.1,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCard(List<Widget> children) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(children: children),
+          ? Colors.white.withValues(alpha: 0.05)
+          : Colors.grey.withValues(alpha: 0.1),
     );
   }
 
@@ -805,8 +853,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(
-                    widget.isDarkMode ? 0.2 : 0.04,
+                  color: Colors.black.withValues(
+                    alpha: widget.isDarkMode ? 0.2 : 0.04,
                   ),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
@@ -820,7 +868,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF8938DF).withOpacity(0.1),
+                        color: const Color(0xFF8938DF).withValues(alpha: 0.1),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -874,8 +922,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
                       ),
                       decoration: BoxDecoration(
                         color: _hasRegisteredFace
-                            ? Colors.green.withOpacity(0.1)
-                            : Colors.orange.withOpacity(0.1),
+                            ? Colors.green.withValues(alpha: 0.1)
+                            : Colors.orange.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
@@ -921,7 +969,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           );
   }
 
-  Widget _buildLanguageSettingsCard() {
+  Widget _buildTimezoneSettingsCard() {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -929,7 +977,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(widget.isDarkMode ? 0.2 : 0.04),
+            color: Colors.black.withValues(
+              alpha: widget.isDarkMode ? 0.2 : 0.04,
+            ),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -943,7 +993,199 @@ class _UserProfilePageState extends State<UserProfilePage> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF8938DF).withOpacity(0.1),
+                  color: const Color(0xFF8938DF).withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.access_time,
+                  color: Color(0xFF8938DF),
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  AppLanguage.tr('User.profile.timezone_settings'),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: widget.isDarkMode
+                        ? Colors.white54
+                        : Colors.grey.shade700,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          InkWell(
+            onTap: () async {
+              // Navigasi ke TimezoneSettingsScreen dengan mengirim current timezone
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TimezoneSettingsScreen(
+                    currentTimezone: _selectedTimezone,
+                  ),
+                ),
+              );
+
+              // Tangkap hasil yang dikembalikan
+              if (result != null && result is Map<String, dynamic>) {
+                final newTimezone = result['timezone'] as String;
+                final newDisplay = result['display'] as String;
+
+                if (newTimezone != _selectedTimezone) {
+                  await _saveTimezone(newTimezone, newDisplay);
+                }
+              }
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: widget.isDarkMode
+                      ? Colors.white12
+                      : Colors.grey.shade200,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.public_rounded,
+                    color: Color(0xFF8938DF),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      AppLanguage.tr('User.profile.current_timezone'),
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: widget.isDarkMode
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                  ),
+                  if (_isLoadingTimezone)
+                    const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Text(
+                      _timezoneDisplay,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: widget.isDarkMode
+                            ? Colors.white70
+                            : Colors.grey.shade600,
+                      ),
+                    ),
+                  const SizedBox(width: 8),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Colors.grey,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Preview current time based on selected timezone
+          Row(
+            children: [
+              Icon(Icons.schedule, size: 16, color: Colors.grey.shade500),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FutureBuilder<DateTime>(
+                  future: _getCurrentTimeInTimezone(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData) {
+                      final time = snapshot.data!;
+                      final formattedTime =
+                          '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}';
+                      return Text(
+                        '${AppLanguage.tr('User.profile.current_time_preview')}: $formattedTime',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: widget.isDarkMode
+                              ? Colors.white54
+                              : Colors.grey.shade500,
+                        ),
+                      );
+                    }
+                    return Text(
+                      _timezoneDisplay,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: widget.isDarkMode
+                            ? Colors.white54
+                            : Colors.grey.shade500,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper method to get current time in selected timezone
+  Future<DateTime> _getCurrentTimeInTimezone() async {
+    final now = DateTime.now().toUtc();
+    final offset = await _getTimezoneOffset();
+    return now.add(Duration(hours: offset));
+  }
+
+  // Helper method to get timezone offset
+  Future<int> _getTimezoneOffset() async {
+    final timezoneService = TimezoneService();
+    // Set the selected timezone in service temporarily
+    await timezoneService.setSelectedTimezone(_selectedTimezone);
+    final time = await timezoneService.getCurrentTimeInTimezone();
+    final utcNow = DateTime.now().toUtc();
+    return time.difference(utcNow).inHours;
+  }
+
+  Widget _buildLanguageSettingsCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: widget.isDarkMode ? 0.2 : 0.04,
+            ),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8938DF).withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
@@ -974,10 +1216,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
             builder: (context, currentLang, _) {
               String langName = currentLang == LanguageHelper.indonesian
                   ? 'Bahasa Indonesia'
-                  : 'English';
+                  : (currentLang == LanguageHelper.english ? 'English' : 'العربية');
               String flag = currentLang == LanguageHelper.indonesian
                   ? '🇮🇩'
-                  : '🇺🇸';
+                  : (currentLang == LanguageHelper.english ? '🇺🇸' : '🇸🇦');
 
               return InkWell(
                 onTap: _showLanguageBottomSheet,
@@ -989,7 +1231,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   ),
                   decoration: BoxDecoration(
                     color: widget.isDarkMode
-                        ? Colors.white.withOpacity(0.05)
+                        ? Colors.white.withValues(alpha: 0.05)
                         : Colors.grey.shade50,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
@@ -1051,6 +1293,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
             subtitle: 'International',
             isSelected: currentLang == LanguageHelper.english,
           ),
+          _buildLanguageSelectOption(
+            code: LanguageHelper.arabic,
+            title: 'العربية',
+            subtitle: 'Arabic',
+            isSelected: currentLang == LanguageHelper.arabic,
+          ),
         ],
       ),
     );
@@ -1075,9 +1323,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: isSelected
-                ? const Color(0xFF8938DF).withOpacity(0.1)
+                ? const Color(0xFF8938DF).withValues(alpha: 0.1)
                 : (widget.isDarkMode
-                      ? Colors.white.withOpacity(0.05)
+                      ? Colors.white.withValues(alpha: 0.05)
                       : Colors.grey.shade50),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
@@ -1092,13 +1340,15 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 height: 44,
                 decoration: BoxDecoration(
                   color: widget.isDarkMode
-                      ? Colors.white.withOpacity(0.1)
-                      : Colors.grey.withOpacity(0.1),
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : Colors.grey.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Center(
                   child: Text(
-                    code == 'id' ? '🇮🇩' : '🇺🇸',
+                    code == 'id'
+                        ? '🇮🇩'
+                        : (code == 'en' ? '🇺🇸' : '🇸🇦'),
                     style: const TextStyle(fontSize: 24),
                   ),
                 ),
@@ -1161,7 +1411,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.grey.withOpacity(0.3),
+              color: Colors.grey.withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(2),
             ),
           ),

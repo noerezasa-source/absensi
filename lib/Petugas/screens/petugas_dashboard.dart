@@ -42,20 +42,13 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   final AttendanceService _attendanceService = AttendanceService();
   final RoleService _roleService = RoleService();
 
-  bool _isLoadingStats = true;
   bool _isLoadingActivities = true;
-  String? _errorMessage;
   int _currentNavIndex = 0;
   String _attendanceMode = 'face';
   String _organizationTimezone = 'Asia/Jakarta';
   Map<String, dynamic>? _organization;
   Map<String, dynamic>? _userProfile;
   bool _isDarkMode = false;
-
-  int _checkedInCount = 0;
-  int _checkedOutCount = 0;
-  int _pendingCount = 0;
-  int _lateCount = 0;
 
   List<Map<String, dynamic>> _recentActivities = [];
 
@@ -254,58 +247,19 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   Future<void> _loadTodayStats() async {
     final organizationId = widget.memberData['organization_id'] as int?;
-    if (organizationId == null) {
-      setState(() {
-        _isLoadingStats = false;
-        _errorMessage = AppLanguage.tr('organization_data_not_found');
-      });
-      return;
-    }
-
-    setState(() {
-      _isLoadingStats = true;
-      _errorMessage = null;
-    });
+    if (organizationId == null) return;
 
     try {
       debugPrint(
         'Loading today statistics for organization $organizationId...',
       );
 
-      final stats = await _attendanceService.getOrganizationTodayStats(
+      await _attendanceService.getOrganizationTodayStats(
         organizationId,
         organizationTimezone: _organizationTimezone,
       );
-
-      if (mounted) {
-        setState(() {
-          _checkedInCount = stats['checked_in'] ?? 0;
-          _checkedOutCount = stats['checked_out'] ?? 0;
-          _pendingCount = stats['pending'] ?? 0;
-          _lateCount = stats['late'] ?? 0;
-          _isLoadingStats = false;
-        });
-      }
     } catch (e) {
       debugPrint('!!! ERROR loading stats: $e');
-      if (mounted) {
-        setState(() {
-          _isLoadingStats = false;
-          // Check if it's a network/connection error
-          final errorString = e.toString().toLowerCase();
-          if (errorString.contains('socketexception') ||
-              errorString.contains('failed host lookup') ||
-              errorString.contains('no address associated with hostname') ||
-              errorString.contains('network is unreachable') ||
-              errorString.contains('connection refused') ||
-              errorString.contains('connection timed out')) {
-            _errorMessage = AppLanguage.tr('no_internet_connection');
-          } else {
-            _errorMessage =
-                '${AppLanguage.tr('failed_to_load_statistics')}: $e';
-          }
-        });
-      }
     }
   }
 
@@ -353,7 +307,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     if (organizationId == null) {
       setState(() {
         _isLoadingActivities = false;
-        _errorMessage = AppLanguage.tr('organization_data_not_found');
       });
       return;
     }
@@ -471,30 +424,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       debugPrint('!!! ERROR loading recent activities: $e');
       if (!mounted) return;
 
-      // Check if it's a network/connection error
-      final errorString = e.toString().toLowerCase();
-      final isNetworkError =
-          errorString.contains('socketexception') ||
-          errorString.contains('failed host lookup') ||
-          errorString.contains('no address associated with hostname') ||
-          errorString.contains('network is unreachable') ||
-          errorString.contains('connection refused') ||
-          errorString.contains('connection timed out');
-
-      setState(() {
-        _isLoadingActivities = false;
-        if (isNetworkError) {
-          _errorMessage ??= AppLanguage.tr('no_internet_connection');
-        } else {
-          _errorMessage ??=
-              '${AppLanguage.tr('failed_to_load_recent_activities')}: $e';
-        }
-      });
       setState(() {
         _isLoadingActivities = false;
         _recentActivities = [];
-        _errorMessage ??=
-            '${AppLanguage.tr('failed_to_load_recent_activities')}: $e';
       });
     }
   }
@@ -739,7 +671,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     if (selectedMembership['id'] == widget.organizationMemberId) return;
 
     // Navigasi berdasarkan role — dilakukan di context dashboard (valid)
-    if (_roleService.isPetugas(selectedMembership)) {
+    final roleCode = _roleService.getRoleCode(selectedMembership);
+    if (_roleService.isPetugas(selectedMembership) || roleCode == 'SA001') {
       Navigator.pushReplacement(
         context,
         PageRouteBuilder(
@@ -880,6 +813,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(
                                       organization?['name'] ??
@@ -887,15 +821,18 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.bold,
+                                        height: 1.1,
                                         color: _isDarkMode
                                             ? Colors.white
                                             : const Color(0xFF1F2937),
                                       ),
                                     ),
+                                    const SizedBox(height: 2),
                                     Text(
                                       roleName.toUpperCase(),
                                       style: TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 11,
+                                        height: 1.0,
                                         color: _isDarkMode
                                             ? Colors.white60
                                             : Colors.grey.shade500,
@@ -1307,8 +1244,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                               borderRadius: BorderRadius.circular(12),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
+                                  horizontal: 8,
+                                  vertical: 3,
                                 ),
                                 decoration: BoxDecoration(
                                   color: Colors.white.withOpacity(0.12),
@@ -1327,8 +1264,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                       child: Text(
                                         '${_roleService.getRoleName(widget.memberData)}${_organization != null ? ' - ${_organization!['name']}' : ''}',
                                         style: TextStyle(
-                                          fontSize: 13,
+                                          fontSize: 12,
                                           fontWeight: FontWeight.w500,
+                                          height: 1.0,
                                           color: Colors.white.withOpacity(0.95),
                                         ),
                                         textAlign: TextAlign.center,
@@ -1339,7 +1277,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                     Icon(
                                       Icons.keyboard_arrow_down_rounded,
                                       color: Colors.white.withOpacity(0.8),
-                                      size: 18,
+                                      size: 16,
                                     ),
                                   ],
                                 ),
@@ -1350,8 +1288,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                           // Date
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
+                              horizontal: 10,
+                              vertical: 4,
                             ),
                             decoration: BoxDecoration(
                               color: Colors.white.withOpacity(0.2),
@@ -1370,7 +1308,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                   _getCurrentDate(),
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize: 12,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),

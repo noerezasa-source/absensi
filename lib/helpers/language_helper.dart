@@ -9,6 +9,7 @@ class LanguageHelper {
   // Supported languages
   static const String indonesian = 'id';
   static const String english = 'en';
+  static const String arabic = 'ar';
 
   // Default language
   static const String defaultLanguage = indonesian;

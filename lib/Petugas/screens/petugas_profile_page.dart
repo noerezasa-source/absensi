@@ -1772,10 +1772,10 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
               builder: (context, currentLang, _) {
                 String langName = currentLang == LanguageHelper.indonesian
                     ? 'Bahasa Indonesia'
-                    : 'English';
+                    : (currentLang == LanguageHelper.english ? 'English' : 'العربية');
                 String flag = currentLang == LanguageHelper.indonesian
                     ? '🇮🇩'
-                    : '🇺🇸';
+                    : (currentLang == LanguageHelper.english ? '🇺🇸' : '🇸🇦');
 
                 return InkWell(
                   onTap: _showLanguageBottomSheet,
@@ -1850,6 +1850,12 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
             subtitle: 'International',
             isSelected: currentLang == LanguageHelper.english,
           ),
+          _buildLanguageSelectOption(
+            code: LanguageHelper.arabic,
+            title: 'العربية',
+            subtitle: 'Arabic',
+            isSelected: currentLang == LanguageHelper.arabic,
+          ),
         ],
       ),
     );
@@ -1897,7 +1903,9 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
                 ),
                 child: Center(
                   child: Text(
-                    code == 'id' ? '🇮🇩' : '🇺🇸',
+                    code == 'id'
+                        ? '🇮🇩'
+                        : (code == 'en' ? '🇺🇸' : '🇸🇦'),
                     style: const TextStyle(fontSize: 24),
                   ),
                 ),

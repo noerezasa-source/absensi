@@ -60,7 +60,7 @@ class RoleService {
     final roleCode = memberData['system_roles']['code'] as String?;
     // print('🔍 isAdmin check: roleCode = $roleCode');
 
-    // Admin role codes: A001 (Admin), SA001 (Super Admin)
+    // Admin role codes: A001 (Admin), SA001 (Petugas)
     final result = roleCode == 'A001' || roleCode == 'SA001';
     // print('   Result: $result');
     return result;

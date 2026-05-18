@@ -42,6 +42,7 @@ dependencies:
   path: ^1.9.0
   table_calendar: ^3.0.9
   cached_network_image: ^3.3.0
+  provider: ^6.1.2
   intl: any
   tflite_flutter: ^0.12.1
   audioplayers: ^6.0.0
@@ -53,9 +54,10 @@ dependencies:
   printing: ^5.10.0
   excel: ^4.0.0
   share_plus: ^11.0.1
-  #flutter_local_notifications: ^14.0.0
-  #workmanager: ^0.5.1
-  #timezone: ^0.9.2
+  timezone: ^0.9.2
+  device_info_plus: ^9.0.0
+
+
   flutter_localizations:
     sdk: flutter
 
@@ -109,12 +111,16 @@ flutter:
     - assets/sounds/
     - assets/Lang/id/json/
     - assets/Lang/en/json/
+    - assets/Lang/ar/json/
     - assets/Lang/id/json/Petugas/
     - assets/Lang/en/json/Petugas/
+    - assets/Lang/ar/json/Petugas/
     - assets/Lang/id/json/User/
     - assets/Lang/en/json/User/
+    - assets/Lang/ar/json/User/
     - assets/Lang/id/json/attendance/
     - assets/Lang/en/json/attendance/
+    - assets/Lang/ar/json/attendance/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -19,5 +19,8 @@
     "photo_updated": "Foto profil berhasil diperbarui",
     "photo_failed": "Gagal memperbarui foto",
     "profile_updated": "Profil berhasil diperbarui",
-    "profile_failed": "Gagal memperbarui profil"
+    "profile_failed": "Gagal memperbarui profil",
+    "timezone_settings": "Pengaturan Timezone",
+    "current_timezone": "Zona Waktu Saat Ini",
+    "current_time_preview": "Waktu saat ini"
 }
