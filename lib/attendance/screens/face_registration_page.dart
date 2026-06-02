@@ -58,6 +58,25 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   DateTime? _lastProcessTime; // Throttling
   DateTime? _lastGuidanceUpdate;
   Timer? _errorTimer;
+  DateTime? _lastTtsTime; // Voice guidance throttling
+
+  void _speakGuidanceKey(String key) {
+    final now = DateTime.now();
+    if (_lastTtsTime == null ||
+        now.difference(_lastTtsTime!) >= const Duration(seconds: 3)) {
+      _lastTtsTime = now;
+      TtsService().speakKey(key);
+    }
+  }
+
+  void _speakGuidanceText(String text) {
+    final now = DateTime.now();
+    if (_lastTtsTime == null ||
+        now.difference(_lastTtsTime!) >= const Duration(seconds: 3)) {
+      _lastTtsTime = now;
+      TtsService().speak(text);
+    }
+  }
 
   @override
   void initState() {
@@ -238,7 +257,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           _overlayColor = Colors.transparent;
           _guidanceMessage = 'Arahkan wajah ke kamera';
         });
-        TtsService().speakKey('face_not_found');
+        _speakGuidanceKey('face_not_found');
       } else {
         final face = faces.first;
         final validation = _validateFace(
@@ -268,7 +287,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             'Tahan posisi...',
             Colors.green.withValues(alpha: 0.3),
           );
-          TtsService().speakKey('hold_position');
+          _speakGuidanceKey('hold_position');
 
           // Check stability before capturing
           if (_consecutiveValidFrames >= _requiredValidFrames &&
@@ -297,17 +316,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           
           // Voice guidance fallback for validation error
           if (msg.contains('mata')) {
-            TtsService().speakKey('eyes_closed');
+            _speakGuidanceKey('eyes_closed');
           } else if (msg.contains('miring') || msg.contains('Tilt')) {
-            TtsService().speakKey('tilt_head');
+            _speakGuidanceKey('tilt_head');
           } else if (msg.contains('Lurus') || msg.contains('Straight')) {
-            TtsService().speakKey('look_straight');
+            _speakGuidanceKey('look_straight');
           } else if (msg.contains('KIRI') || msg.contains('LEFT')) {
-            TtsService().speakKey('turn_left');
+            _speakGuidanceKey('turn_left');
           } else if (msg.contains('KANAN') || msg.contains('RIGHT')) {
-            TtsService().speakKey('turn_right');
+            _speakGuidanceKey('turn_right');
           } else {
-            TtsService().speak(msg);
+            _speakGuidanceText(msg);
           }
         }
       }
@@ -906,30 +925,18 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     int bytesPerRow;
 
     if (Platform.isAndroid && image.format.group == ImageFormatGroup.yuv420) {
-      // ✅ OPTIMIZATION: Run heavy conversion in background isolate
+      // ✅ OPTIMIZATION: Remove expensive NV21 conversion overhead.
+      // Standard YUV420 concatenation is extremely fast in the main thread and natively supported by ML Kit.
       try {
-        final planesData = image.planes
-            .map(
-              (p) => _PlaneData(
-                bytes: p.bytes,
-                bytesPerRow: p.bytesPerRow,
-                bytesPerPixel: p.bytesPerPixel,
-              ),
-            )
-            .toList();
-
-        bytes = _yuv420ToNv21Compute(
-          _NV21ConvertParams(
-            width: image.width,
-            height: image.height,
-            planes: planesData,
-          ),
-        );
-
-        format = InputImageFormat.nv21;
-        bytesPerRow = image.width;
+        final WriteBuffer allBytes = WriteBuffer();
+        for (Plane plane in image.planes) {
+          allBytes.putUint8List(plane.bytes);
+        }
+        bytes = allBytes.done().buffer.asUint8List();
+        format = InputImageFormat.yuv420;
+        bytesPerRow = image.planes.first.bytesPerRow;
       } catch (e) {
-        debugPrint('Error in NV21 conversion: $e');
+        debugPrint('Error in YUV concatenation: $e');
         return null;
       }
     } else {
@@ -1333,73 +1340,4 @@ class FaceDetectorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(FaceDetectorPainter oldDelegate) => true;
-}
-
-// ✅ ISOLATE WRAPPERS (Top-Level)
-class _PlaneData {
-  final Uint8List bytes;
-  final int bytesPerRow;
-  final int? bytesPerPixel;
-  _PlaneData({
-    required this.bytes,
-    required this.bytesPerRow,
-    this.bytesPerPixel,
-  });
-}
-
-class _NV21ConvertParams {
-  final int width;
-  final int height;
-  final List<_PlaneData> planes;
-  _NV21ConvertParams({
-    required this.width,
-    required this.height,
-    required this.planes,
-  });
-}
-
-Uint8List _yuv420ToNv21Compute(_NV21ConvertParams params) {
-  final int width = params.width;
-  final int height = params.height;
-  final List<_PlaneData> planes = params.planes;
-
-  final int ySize = width * height;
-  final int uvSize = width * height ~/ 2;
-  final Uint8List nv21 = Uint8List(ySize + uvSize);
-
-  // Y Plane
-  final _PlaneData yData = planes[0];
-  final Uint8List yBytes = yData.bytes;
-  final int yStride = yData.bytesPerRow;
-
-  for (int y = 0; y < height; y++) {
-    final int srcPos = y * yStride;
-    final int dstPos = y * width;
-    for (int x = 0; x < width; x++) {
-      nv21[dstPos + x] = yBytes[srcPos + x];
-    }
-  }
-
-  // UV Planes
-  final _PlaneData uData = planes[1];
-  final _PlaneData vData = planes[2];
-  final Uint8List uBytes = uData.bytes;
-  final Uint8List vBytes = vData.bytes;
-  final int uStride = uData.bytesPerRow;
-  final int vStride = vData.bytesPerRow;
-  final int pixelStride = uData.bytesPerPixel ?? 1;
-
-  int uvIndex = ySize;
-  for (int y = 0; y < height ~/ 2; y++) {
-    for (int x = 0; x < width ~/ 2; x++) {
-      final int uIndex = y * uStride + x * pixelStride;
-      final int vIndex = y * vStride + x * pixelStride;
-
-      if (vIndex < vBytes.length && uIndex < uBytes.length) {
-        nv21[uvIndex++] = vBytes[vIndex];
-        nv21[uvIndex++] = uBytes[uIndex];
-      }
-    }
-  }
-  return nv21;
 }

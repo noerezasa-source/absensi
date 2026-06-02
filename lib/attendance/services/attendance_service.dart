@@ -967,8 +967,7 @@ class AttendanceService {
           organization_members!inner(
             id,
             organization_id,
-            department,
-            user_profiles!inner(
+            user_profiles(
               display_name,
               first_name,
               last_name,
@@ -993,16 +992,15 @@ class AttendanceService {
             'fingerprint',
           ])
           .order('event_time', ascending: false)
-          .limit(limit * 2); // Ambil lebih banyak untuk filter
+          .limit(limit);
 
-      // Filter hanya yang masih punya attendance_records
-      final filteredLogs = (logs as List)
-          .where((log) => log['attendance_records'] != null)
-          .take(limit)
-          .toList();
-
-      return List<Map<String, dynamic>>.from(filteredLogs);
+      // ✅ FIX: Do NOT filter by attendance_records presence.
+      // Logs are written immediately on check-in/check-out, but attendance_records
+      // may be created asynchronously or only after check-out.
+      // Filtering here causes an empty "Recent Activities" feed.
+      return List<Map<String, dynamic>>.from(logs);
     } catch (e) {
+      debugPrint('Error in getOrganizationRecentActivities: $e');
       throw Exception('Failed to load recent activities: $e');
     }
   }

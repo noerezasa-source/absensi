@@ -329,7 +329,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         final member =
             activity['organization_members'] as Map<String, dynamic>? ?? {};
         final profile = member['user_profiles'] as Map<String, dynamic>? ?? {};
-        final department = member['department'] as String?;
+        // ✅ FIX: 'department' column does not exist on organization_members.
+        // Department info would come from a joined 'departments' table if needed.
+        final String department = AppLanguage.tr('no_department');
         final record =
             activity['attendance_records'] as Map<String, dynamic>? ?? {};
         final rawData = activity['raw_data'] as Map<String, dynamic>? ?? {};
@@ -369,9 +371,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
             'photoUrl': _resolveProfilePhotoUrl(
               profile['profile_photo_url'] as String?,
             ),
-            'department':
-                department ??
-                AppLanguage.tr('no_department'),
+            'department': department,
             'status': record['status'] as String?,
             'checkInTime': null,
             'checkOutTime': null,
@@ -500,9 +500,10 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       double totalMinutes = 0.0;
       for (final record in currentWeekRecords as List) {
         final dateStr = record['attendance_date'] as String?;
-        final minutes = record['work_duration_minutes'] as int?;
+        // ✅ FIX: Cast as num? (not int?) to handle both int and double returned by Supabase
+        final minutes = (record['work_duration_minutes'] as num?)?.toDouble() ?? 0.0;
 
-        if (dateStr != null && minutes != null && minutes > 0) {
+        if (dateStr != null && minutes > 0) {
           final date = DateTime.parse(dateStr);
           final weekday = date.weekday;
 
@@ -517,8 +518,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       // Calculate last week's total
       double lastWeekMinutes = 0.0;
       for (final record in lastWeekRecords as List) {
-        final minutes = record['work_duration_minutes'] as int?;
-        if (minutes != null && minutes > 0) {
+        final minutes = (record['work_duration_minutes'] as num?)?.toDouble() ?? 0.0;
+        if (minutes > 0) {
           lastWeekMinutes += minutes;
         }
       }
@@ -556,6 +557,10 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       if (mounted) {
         setState(() {
           _isLoadingWeeklyData = false;
+          // ✅ FIX: Set safe defaults so UI renders 0 instead of crashing
+          _totalWeeklyHours = 0.0;
+          _weeklyPercentageChange = 0.0;
+          _dailyHours = [0.0, 0.0, 0.0, 0.0, 0.0];
         });
       }
     }

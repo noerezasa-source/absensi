@@ -941,8 +941,13 @@ class _FaceAttendanceMultiUserPageState
     final displayFaces = <Map<String, dynamic>>[];
 
     for (final face in faces) {
-      final id = face.trackingId ?? -1;
-      if (id == -1) continue; // Skip untracked faces
+      // ✅ MULTI-USER FIX: Assign a synthetic ID if ML Kit doesn't provide one.
+      // This ensures every detected face can enter the tracking state machine.
+      final id = face.trackingId ??
+          (face.boundingBox.left.toInt() * 1000 + face.boundingBox.top.toInt())
+              .abs() %
+          99000 +
+          1000;
 
       // Initialize state if new
       _faceStates.putIfAbsent(id, () => FaceTrackingState.idle);

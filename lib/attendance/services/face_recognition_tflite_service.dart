@@ -30,7 +30,9 @@ class FaceRecognitionTFLiteService {
         enableClassification: true,
         enableTracking: true,
         performanceMode: FaceDetectorMode.fast,
-        minFaceSize: 0.05,
+        // ✅ ANTI FALSE-POSITIVE: Ignore tiny/distant faces (e.g. background bystanders).
+        // 0.15 means the face bounding box must be >= 15% of the image's shorter dimension.
+        minFaceSize: 0.15,
       ),
     );
   }
@@ -130,10 +132,11 @@ class FaceRecognitionTFLiteService {
 
     // 3. Check face size (Dynamic Area)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    // Assuming standard preview ~ 720x1280 = 921,600. 4% = ~36,000.
-    // Absolute minimum fallback 2000 for dist.
-    if (faceArea < 2000) {
-      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()})');
+    // Assuming standard preview ~ 720x1280 = 921,600.
+    // 12000 pixels ensures only close-up, active-user-scale faces are processed.
+    // This blocks bystanders walking past in the background.
+    if (faceArea < 12000) {
+      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 12000)');
       return false;
     }
 
