@@ -43,6 +43,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
   Map<String, dynamic>? _userProfile;
   Map<String, dynamic>? _organization;
 
+  // Department state
+  Map<String, dynamic>? _departmentData;
+  bool _isLoadingDepartment = true;
+  bool _isJoiningDepartment = false;
+
   // Timezone state
   String _selectedTimezone = 'Asia/Jakarta';
   String _timezoneDisplay = 'Jakarta (WIB)';
@@ -51,6 +56,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
   // Form controllers
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _displayNameController;
+  late TextEditingController _firstNameController;
+  late TextEditingController _lastNameController;
   late TextEditingController _phoneController;
   String _selectedGender = 'male';
   DateTime? _selectedDateOfBirth;
@@ -61,11 +68,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
   void initState() {
     super.initState();
     _displayNameController = TextEditingController();
+    _firstNameController = TextEditingController();
+    _lastNameController = TextEditingController();
     _phoneController = TextEditingController();
     _userProfile = widget.userProfile;
     _checkFaceRegistration();
     _loadOrganizationInfo();
-    _loadTimezone(); // Load timezone from database
+    _loadTimezone();
+    _loadMemberDepartment();
     if (_userProfile == null) {
       _loadUserProfile();
     } else {
@@ -76,12 +86,16 @@ class _UserProfilePageState extends State<UserProfilePage> {
   @override
   void dispose() {
     _displayNameController.dispose();
+    _firstNameController.dispose();
+    _lastNameController.dispose();
     _phoneController.dispose();
     super.dispose();
   }
 
   void _populateControllers() {
     _displayNameController.text = _userProfile?['display_name'] ?? '';
+    _firstNameController.text = _userProfile?['first_name'] ?? '';
+    _lastNameController.text = _userProfile?['last_name'] ?? '';
     _phoneController.text = _userProfile?['phone'] ?? '';
     _selectedGender = _userProfile?['jenis_kelamin'] ?? 'male';
     _selectedDateOfBirth = _userProfile?['date_of_birth'] != null
@@ -129,7 +143,347 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
+  /// Load current department of this member
+  Future<void> _loadMemberDepartment() async {
+    try {
+      final response = await _supabase
+          .from('organization_members')
+          .select('department_id, departments (id, name, code)')
+          .eq('id', widget.organizationMemberId)
+          .maybeSingle();
+
+      if (mounted) {
+        setState(() {
+          if (response != null && response['departments'] != null) {
+            _departmentData = response['departments'] as Map<String, dynamic>;
+          } else {
+            _departmentData = null;
+          }
+          _isLoadingDepartment = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading department: $e');
+      if (mounted) setState(() => _isLoadingDepartment = false);
+    }
+  }
+
+  /// Join a department by code (scoped to member's organization)
+  Future<void> _joinDepartmentByCode(String code) async {
+    final orgId = widget.memberData['organization_id'] as int?;
+    if (orgId == null) throw Exception('Data organisasi tidak ditemukan');
+
+    // Search department by code within this organization
+    final dept = await _supabase
+        .from('departments')
+        .select('id, name, code')
+        .eq('organization_id', orgId)
+        .ilike('code', code.trim().toUpperCase())
+        .eq('is_active', true)
+        .maybeSingle();
+
+    if (dept == null) {
+      throw Exception('Kode departemen tidak valid untuk organisasi Anda.');
+    }
+
+    // Update member department
+    await _supabase
+        .from('organization_members')
+        .update({
+          'department_id': dept['id'],
+          'department': dept['name'],
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', widget.organizationMemberId);
+
+    // Refresh department display
+    await _loadMemberDepartment();
+  }
+
+  /// Show bottom sheet to enter department code
+  void _showJoinDepartmentSheet() {
+    final codeController = TextEditingController();
+    String? errorMsg;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Container(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+                top: 12,
+                left: 24,
+                right: 24,
+              ),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode
+                    ? const Color(0xFF1E1040)
+                    : Colors.white,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(28),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 20,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Handle
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Icon + Title
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF8938DF), Color(0xFF4A1E79)],
+                          ),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(
+                          Icons.domain_add_rounded,
+                          color: Colors.white,
+                          size: 26,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Gabung Departemen',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: widget.isDarkMode
+                                    ? Colors.white
+                                    : const Color(0xFF1A1A2E),
+                              ),
+                            ),
+                            Text(
+                              'Masukkan kode departemen yang diberikan admin',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: widget.isDarkMode
+                                    ? Colors.white54
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 28),
+
+                  // Code input
+                  Container(
+                    decoration: BoxDecoration(
+                      color: widget.isDarkMode
+                          ? Colors.white.withValues(alpha: 0.05)
+                          : const Color(0xFFF5F0FF),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: const Color(0xFF8938DF).withValues(alpha: 0.3),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: TextField(
+                      controller: codeController,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.characters,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 4,
+                        color: widget.isDarkMode ? Colors.white : const Color(0xFF4A1E79),
+                      ),
+                      textAlign: TextAlign.center,
+                      decoration: InputDecoration(
+                        hintText: 'KODE-DEPT',
+                        hintStyle: TextStyle(
+                          color: Colors.grey.withValues(alpha: 0.4),
+                          fontSize: 18,
+                          letterSpacing: 2,
+                        ),
+                        prefixIcon: const Icon(
+                          Icons.tag_rounded,
+                          color: Color(0xFF8938DF),
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
+                      ),
+                      onChanged: (_) {
+                        if (errorMsg != null) {
+                          setSheetState(() => errorMsg = null);
+                        }
+                      },
+                    ),
+                  ),
+
+                  // Error message
+                  if (errorMsg != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.error_outline_rounded,
+                            color: Colors.red,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              errorMsg!,
+                              style: const TextStyle(
+                                color: Colors.red,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  const SizedBox(height: 24),
+
+                  // Join button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isJoiningDepartment
+                          ? null
+                          : () async {
+                              final code = codeController.text.trim();
+                              if (code.isEmpty) {
+                                setSheetState(
+                                  () => errorMsg = 'Kode tidak boleh kosong',
+                                );
+                                return;
+                              }
+                              setSheetState(
+                                () => _isJoiningDepartment = true,
+                              );
+                              setState(() => _isJoiningDepartment = true);
+                              try {
+                                await _joinDepartmentByCode(code);
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.check_circle_rounded,
+                                            color: Colors.white,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              'Berhasil bergabung ke departemen ${_departmentData?['name'] ?? ''}!',
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      backgroundColor: Colors.green,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                setSheetState(() {
+                                  errorMsg = e
+                                      .toString()
+                                      .replaceAll('Exception: ', '');
+                                  _isJoiningDepartment = false;
+                                });
+                                setState(() => _isJoiningDepartment = false);
+                              }
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF8938DF),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: _isJoiningDepartment
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2.5,
+                              ),
+                            )
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.login_rounded),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Gabung Sekarang',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   // Load timezone from database
+
   Future<void> _loadTimezone() async {
     try {
       final userId = _supabase.auth.currentUser?.id;
@@ -312,6 +666,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
           .from('user_profiles')
           .update({
             'display_name': _displayNameController.text.trim(),
+            'first_name': _firstNameController.text.trim(),
+            'last_name': _lastNameController.text.trim(),
             'phone': _phoneController.text.trim(),
             'jenis_kelamin': _selectedGender,
             'date_of_birth': _selectedDateOfBirth?.toIso8601String(),
@@ -351,15 +707,30 @@ class _UserProfilePageState extends State<UserProfilePage> {
   String _getFullName() {
     final profile = _userProfile ?? widget.userProfile;
     if (profile == null) return 'User';
-    final displayName = profile['display_name'] as String?;
-    if (displayName != null && displayName.trim().isNotEmpty) {
-      return displayName.trim();
-    }
     final firstName = profile['first_name'] as String? ?? '';
+    final middleName = profile['middle_name'] as String? ?? '';
     final lastName = profile['last_name'] as String? ?? '';
-    return '$firstName $lastName'.trim().isEmpty
-        ? 'User'
-        : '$firstName $lastName'.trim();
+    final displayName = (profile['display_name'] as String?)?.trim();
+
+    String fullName = '';
+    if (middleName.isNotEmpty) {
+      fullName = '$firstName $middleName $lastName'.trim();
+    } else {
+      fullName = '$firstName $lastName'.trim();
+    }
+
+    // Format: "Nama Panjang - Nama Panggilan"
+    if (fullName.isNotEmpty &&
+        displayName != null &&
+        displayName.isNotEmpty &&
+        fullName != displayName) {
+      return '$fullName - $displayName';
+    } else if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    } else if (fullName.isNotEmpty) {
+      return fullName;
+    }
+    return 'User';
   }
 
   String? _getProfilePhotoUrl() {
@@ -642,6 +1013,18 @@ class _UserProfilePageState extends State<UserProfilePage> {
                             ),
                             const SizedBox(height: 12),
                             _buildTextField(
+                              label: 'First Name',
+                              controller: _firstNameController,
+                              icon: Icons.person_outline,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildTextField(
+                              label: 'Last Name',
+                              controller: _lastNameController,
+                              icon: Icons.person_outline,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildTextField(
                               label: AppLanguage.tr(
                                 'User.profile.phone_number',
                               ),
@@ -692,6 +1075,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
                           ),
                           _buildDivider(),
                           _buildInfoRow(
+                            'Full Name',
+                            '${_firstNameController.text} ${_lastNameController.text}'
+                                .trim(),
+                          ),
+                          _buildDivider(),
+                          _buildInfoRow(
                             AppLanguage.tr('User.profile.phone_number'),
                             _phoneController.text.isNotEmpty
                                 ? _phoneController.text
@@ -726,11 +1115,16 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     _buildSecurityCard(),
                     const SizedBox(height: 16),
 
+                    // Department Card
+                    _buildDepartmentCard(),
+                    const SizedBox(height: 16),
+
                     // Timezone Settings Card
                     _buildTimezoneSettingsCard(),
                     const SizedBox(height: 16),
 
                     _buildLanguageSettingsCard(),
+
 
                     const SizedBox(height: 48),
                     SizedBox(
@@ -843,7 +1237,126 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
   }
 
+  Widget _buildDepartmentCard() {
+    if (_isLoadingDepartment) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: widget.isDarkMode ? 0.2 : 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: const Center(
+          child: SizedBox(
+            height: 20,
+            width: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    final hasDept = _departmentData != null;
+    final deptName = _departmentData?['name'] as String? ?? '';
+    final deptCode = _departmentData?['code'] as String? ?? '';
+
+    return GestureDetector(
+      onTap: _showJoinDepartmentSheet,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: widget.isDarkMode ? 0.2 : 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: hasDept
+                    ? const Color(0xFF4A1E79).withValues(alpha: 0.12)
+                    : Colors.orange.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                hasDept ? Icons.domain_rounded : Icons.domain_add_rounded,
+                color: hasDept ? const Color(0xFF8938DF) : Colors.orange.shade700,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Departemen',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: widget.isDarkMode
+                          ? Colors.white
+                          : const Color(0xFF1F2937),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    hasDept
+                        ? '$deptName  •  $deptCode'
+                        : 'Belum bergabung departemen — ketuk untuk memasukkan kode',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hasDept
+                          ? (widget.isDarkMode
+                              ? Colors.greenAccent.shade200
+                              : Colors.green.shade700)
+                          : (widget.isDarkMode
+                              ? Colors.white60
+                              : Colors.grey.shade500),
+                      fontWeight: hasDept ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: hasDept
+                    ? Colors.green.withValues(alpha: 0.1)
+                    : const Color(0xFF8938DF).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                hasDept ? 'Aktif' : 'Gabung',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: hasDept ? Colors.green.shade700 : const Color(0xFF8938DF),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSecurityCard() {
+
     return _isCheckingFace
         ? const Center(child: CircularProgressIndicator())
         : Container(
@@ -1216,7 +1729,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
             builder: (context, currentLang, _) {
               String langName = currentLang == LanguageHelper.indonesian
                   ? 'Bahasa Indonesia'
-                  : (currentLang == LanguageHelper.english ? 'English' : 'العربية');
+                  : (currentLang == LanguageHelper.english
+                        ? 'English'
+                        : 'العربية');
               String flag = currentLang == LanguageHelper.indonesian
                   ? '🇮🇩'
                   : (currentLang == LanguageHelper.english ? '🇺🇸' : '🇸🇦');
@@ -1346,9 +1861,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 ),
                 child: Center(
                   child: Text(
-                    code == 'id'
-                        ? '🇮🇩'
-                        : (code == 'en' ? '🇺🇸' : '🇸🇦'),
+                    code == 'id' ? '🇮🇩' : (code == 'en' ? '🇺🇸' : '🇸🇦'),
                     style: const TextStyle(fontSize: 24),
                   ),
                 ),

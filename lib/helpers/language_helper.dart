@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
 class LanguageHelper {
   static const String _languageKey = 'selected_language';
@@ -35,8 +36,19 @@ class LanguageHelper {
     languageNotifier.value = _currentLanguage;
 
     await loadTranslations(_currentLanguage);
+    _setFormatLocale(_currentLanguage);
 
     return _currentLanguage;
+  }
+
+  static void _setFormatLocale(String lang) {
+    if (lang == 'ar') {
+      Intl.defaultLocale = 'ar_SA';
+    } else if (lang == 'en') {
+      Intl.defaultLocale = 'en_US';
+    } else {
+      Intl.defaultLocale = 'id_ID';
+    }
   }
 
   // Load all JSON translation files for the given language
@@ -85,6 +97,7 @@ class LanguageHelper {
     languageNotifier.value = languageCode;
 
     await loadTranslations(languageCode);
+    _setFormatLocale(languageCode);
   }
 
   // Get translation by key (format: "filename.key" or "folder.filename.key")
@@ -100,6 +113,25 @@ class LanguageHelper {
 
       if (_localizedValues.containsKey(mapKey)) {
         return _localizedValues[mapKey]?[realKey]?.toString() ?? key;
+      }
+
+      // Try nested traversal for keys like "Petugas.members.department.title"
+      // where the structure is _localizedValues["Petugas.members"]["department"]["title"]
+      if (parts.length >= 3) {
+        String baseMapKey = parts.sublist(0, 2).join('.');
+        if (_localizedValues.containsKey(baseMapKey)) {
+          dynamic current = _localizedValues[baseMapKey];
+          for (int i = 2; i < parts.length - 1; i++) {
+            if (current is Map && current.containsKey(parts[i])) {
+              current = current[parts[i]];
+            } else {
+              return key;
+            }
+          }
+          if (current is Map && current.containsKey(parts.last)) {
+            return current[parts.last]?.toString() ?? key;
+          }
+        }
       }
     }
 

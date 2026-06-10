@@ -9,9 +9,9 @@ import 'package:absensimassal/auth/services/role_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:provider/provider.dart';
-import 'package:absensimassal/providers/timezone_provider.dart';
-import 'package:absensimassal/providers/theme_provider.dart';
+import 'package:get/get.dart';
+import 'package:absensimassal/controllers/timezone_controller.dart';
+import 'package:absensimassal/controllers/theme_controller.dart';
 import 'package:absensimassal/attendance/services/attendance_sync_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -67,21 +67,16 @@ Future<void> main() async {
   await AppLanguage.init();
   await initializeDateFormatting('id_ID', null);
   await initializeDateFormatting('en_US', null);
+  await initializeDateFormatting('ar_SA', null);
 
   // Start background sync service globally
   AttendanceSyncService().startAutoSync();
 
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(
-          create: (_) => TimezoneProvider()..loadSettings(),
-        ),
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
-      ],
-      child: const MyApp(),
-    ),
-  );
+  // Initialize GetX controllers
+  Get.put(TimezoneController());
+  Get.put(ThemeController());
+
+  runApp(const MyApp());
 }
 
 // ==============================================
@@ -92,16 +87,16 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = Provider.of<ThemeProvider>(context);
+    final themeController = Get.find<ThemeController>();
 
     return ValueListenableBuilder<String>(
       valueListenable: LanguageHelper.languageNotifier,
       builder: (context, languageCode, _) {
-        return MaterialApp(
+        return GetMaterialApp(
           debugShowCheckedModeBanner: false,
           title: 'Absensi',
           locale: Locale(languageCode),
-          themeMode: themeProvider.isDarkMode
+          themeMode: themeController.isDarkMode.value
               ? ThemeMode.dark
               : ThemeMode.light,
           theme: ThemeData(

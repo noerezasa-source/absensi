@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:get/get.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
@@ -15,12 +16,15 @@ import '../../services/supabase_storage_service.dart';
 
 import '../../helpers/rfid_mode_helper.dart';
 import '../widgets/petugas_bottom_nav.dart';
+import '../controllers/members_controller.dart';
 
 import 'petugas_records_page.dart';
 import 'petugas_profile_page.dart';
 import '../../attendance/screens/face_registration_page.dart';
 import '../../attendance/screens/fingerprint_registration_page.dart';
 import '../../helpers/language_helper.dart';
+import 'member_detail_log_page.dart';
+import 'department_management_page.dart';
 
 class PetugasMembersPage extends StatefulWidget {
   final bool isDarkMode;
@@ -54,6 +58,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   final RoleService _roleService = RoleService();
   final MemberPerformanceService _performanceService =
       MemberPerformanceService();
+  final MembersController _membersController = Get.put(MembersController());
 
   bool _isInitialLoading = true;
   bool _isContentLoading = false;
@@ -71,6 +76,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   final TextEditingController _searchController = TextEditingController();
   String _selectedDepartment = 'all';
   List<String> _departments = ['all'];
+  Map<String, int> _departmentNameToId = {};
 
   String _selectedTimePeriod = 'today';
   String _selectedSortBy = 'score';
@@ -129,9 +135,14 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     try {
       _attendanceMode = await RfidModeHelper.getAttendanceMode(organizationId);
 
+      // Initialize controller with organization data
+      _membersController.setOrganizationId(organizationId);
+      _membersController.setOrganizationTimezone(_organizationTimezone);
+
       await Future.wait([
         _loadOrganizationData(),
         _loadOrganizationMembersOptimized(page: 1, isInitial: true),
+        _membersController.loadOrganizationMembers(organizationId),
       ]);
 
       await _applyFilters();
@@ -166,7 +177,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final searchQuery = _searchController.text.trim();
       final departmentFilter = _selectedDepartment == 'all'
           ? null
-          : _selectedDepartment;
+          : (_departmentNameToId[_selectedDepartment]?.toString() ?? _selectedDepartment);
 
       debugPrint(
         '🔍 REFRESH: Query="$searchQuery", Dept="$departmentFilter", Page=$_currentPage',
@@ -196,6 +207,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final members = results[0] as List<Map<String, dynamic>>;
       debugPrint('📦 RESULTS: Received ${members.length} members');
 
+      // Trigger controller load in background to keep data in sync
+      _membersController.loadOrganizationMembers(organizationId);
+
       if (mounted) {
         setState(() {
           _organizationMembers = members;
@@ -209,13 +223,16 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
           if (_departments.length <= 1 && members.isNotEmpty) {
             final deptSet = <String>{'all'};
+            final Map<String, int> nameToId = {};
             for (final member in members) {
               final dept = member['departments'] as Map<String, dynamic>?;
-              if (dept != null && dept['name'] != null) {
+              if (dept != null && dept['name'] != null && dept['id'] != null) {
                 deptSet.add(dept['name'] as String);
+                nameToId[dept['name'] as String] = dept['id'] as int;
               }
             }
             _departments = deptSet.toList()..sort();
+            _departmentNameToId.addAll(nameToId);
             debugPrint('✅ Departments initialized: $_departments');
           }
 
@@ -284,6 +301,31 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           if (org['timezone'] != null) {
             _organizationTimezone = org['timezone'];
           }
+        });
+      }
+
+      // Load all departments for the filter dropdown
+      final deptsResponse = await _supabase
+          .from('departments')
+          .select('id, name')
+          .eq('organization_id', organizationId)
+          .order('name');
+      
+      if (deptsResponse != null && deptsResponse is List && mounted) {
+        final deptSet = <String>{'all'};
+        final Map<String, int> nameToId = {};
+        for (final item in deptsResponse) {
+          final name = item['name'] as String?;
+          final id = item['id'] as int?;
+          if (name != null && name.isNotEmpty && id != null) {
+            deptSet.add(name);
+            nameToId[name] = id;
+          }
+        }
+        setState(() {
+          _departmentNameToId = nameToId;
+          _departments = deptSet.toList()..sort();
+          debugPrint('✅ Departments initialized: $_departments');
         });
       }
     } catch (e) {
@@ -359,15 +401,30 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final profile = member['user_profiles'] as Map<String, dynamic>?;
     if (profile == null) return 'Unknown User';
 
-    final displayName = profile['display_name'] as String?;
-    if (displayName != null && displayName.trim().isNotEmpty) {
-      return displayName.trim();
-    }
-
+    final displayName = (profile['display_name'] as String?)?.trim();
     final firstName = profile['first_name'] as String? ?? '';
     final lastName = profile['last_name'] as String? ?? '';
     final fullName = '$firstName $lastName'.trim();
-    return fullName.isEmpty ? 'Unknown User' : fullName;
+
+    // Show both full name and nickname if both exist
+    if (fullName.isNotEmpty &&
+        displayName != null &&
+        displayName.isNotEmpty &&
+        fullName != displayName) {
+      return '$fullName - $displayName';
+    }
+
+    // Fall back to display_name if available
+    if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    }
+
+    // Fall back to full name
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+
+    return 'Unknown User';
   }
 
   String? _getMemberPhotoUrl(Map<String, dynamic> member) {
@@ -1156,6 +1213,10 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             : Colors.black87,
                       ),
                       textInputAction: TextInputAction.search,
+                      onChanged: (value) {
+                        _membersController.setSearchQuery(value);
+                        setState(() {}); // Trigger rebuild to apply filter
+                      },
                       onSubmitted: (value) {
                         _loadOrganizationMembersOptimized(page: 1);
                       },
@@ -1188,6 +1249,59 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     },
                   ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Class Filter Dropdown
+          Obx(
+            () => Container(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: widget.isDarkMode
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _membersController.selectedClassFilter.value,
+                  isDense: true,
+                  icon: Icon(
+                    Icons.class_,
+                    size: 14,
+                    color: widget.isDarkMode ? Colors.white70 : Colors.grey,
+                  ),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                  ),
+                  dropdownColor: widget.isDarkMode
+                      ? const Color(0xFF2D1B4E)
+                      : Colors.white,
+                  items: _membersController.classOptions
+                      .map<DropdownMenuItem<String>>((String value) {
+                        return DropdownMenuItem(
+                          value: value,
+                          child: Text(
+                            value == 'all' ? 'Semua Kelas' : value,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: widget.isDarkMode
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                        );
+                      })
+                      .toList(),
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      _membersController.setSelectedClassFilter(newValue);
+                    }
+                  },
+                ),
               ),
             ),
           ),
@@ -1225,7 +1339,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 50),
                       child: Text(
-                        value == 'all' ? AppLanguage.tr('all') : value,
+                        value == 'all'
+                            ? AppLanguage.tr('Petugas.members.all')
+                            : value,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 10),
                       ),
@@ -1241,6 +1357,42 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                   }
                 },
               ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Department Management Button
+          Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: widget.isDarkMode
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: IconButton(
+              icon: Icon(
+                Icons.business,
+                size: 16,
+                color: widget.isDarkMode ? Colors.white70 : Colors.grey,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => DepartmentManagementPage(
+                      organizationId:
+                          widget.memberData['organization_id'] as int,
+                      memberData: widget.memberData,
+                      userProfile: widget.userProfile,
+                      isDarkMode: widget.isDarkMode,
+                    ),
+                  ),
+                );
+              },
+              tooltip: AppLanguage.tr('Petugas.members.department.title'),
             ),
           ),
         ],
@@ -1279,9 +1431,25 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       );
     }
 
-    final filteredMembers = _organizationMembers;
+    // Sync search query with controller
+    _membersController.setSearchQuery(_searchController.text);
+
+    // Use controller's filtered members as base
+    var filteredMembers = _membersController.filteredMembers;
+
+    // Apply department filter (page-specific filter)
+    if (_selectedDepartment != 'all') {
+      filteredMembers = filteredMembers.where((member) {
+        final dept = member['departments'] as Map<String, dynamic>? ?? {};
+        final deptName = dept['name'] as String? ?? '';
+        return deptName == _selectedDepartment;
+      }).toList();
+    }
+
     final isFiltering =
-        _searchController.text.isNotEmpty || _selectedDepartment != 'all';
+        _searchController.text.isNotEmpty ||
+        _selectedDepartment != 'all' ||
+        _membersController.selectedClassFilter.value != 'all';
 
     if (_isContentLoading) {
       return Center(
@@ -1309,13 +1477,21 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     return Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            controller: _scrollController,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-            itemCount: filteredMembers.length,
-            itemBuilder: (context, index) {
-              return _buildMemberCard(filteredMembers[index]);
+          child: RefreshIndicator(
+            onRefresh: () async {
+              await _loadOrganizationMembersOptimized(isInitial: false);
+              await _membersController.loadOrganizationMembers(
+                widget.memberData['organization_id'] as int,
+              );
             },
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+              itemCount: filteredMembers.length,
+              itemBuilder: (context, index) {
+                return _buildMemberCard(filteredMembers[index]);
+              },
+            ),
           ),
         ),
         _buildPaginationControls(),
@@ -1626,32 +1802,53 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     bool hasFaceData = false;
     bool hasFingerprintData = false;
     final bioData = member['biometric_data'];
+
+    debugPrint(
+      '🔍 Checking biometric data for member ${member['id']}: $bioData',
+    );
+
     if (bioData is List) {
+      debugPrint('📋 BioData is List with ${bioData.length} items');
       final activeFace = bioData.firstWhere(
         (b) =>
             (b['biometric_type'] == 'face' ||
                 b['biometric_type'] == 'face_recognition') &&
-            b['is_active'] == true,
+            b['is_active'] != false,
         orElse: () => null,
       );
-      if (activeFace != null) hasFaceData = true;
+      if (activeFace != null) {
+        hasFaceData = true;
+        debugPrint('✅ Face data found: $activeFace');
+      }
 
       final activeFinger = bioData.firstWhere(
-        (b) => b['biometric_type'] == 'fingerprint' && b['is_active'] == true,
+        (b) => b['biometric_type'] == 'fingerprint' && b['is_active'] != false,
         orElse: () => null,
       );
-      if (activeFinger != null) hasFingerprintData = true;
+      if (activeFinger != null) {
+        hasFingerprintData = true;
+        debugPrint('✅ Fingerprint data found: $activeFinger');
+      }
     } else if (bioData is Map) {
+      debugPrint('📋 BioData is Map');
       if ((bioData['biometric_type'] == 'face' ||
               bioData['biometric_type'] == 'face_recognition') &&
-          bioData['is_active'] == true) {
+          bioData['is_active'] != false) {
         hasFaceData = true;
+        debugPrint('✅ Face data found (Map)');
       }
       if (bioData['biometric_type'] == 'fingerprint' &&
-          bioData['is_active'] == true) {
+          bioData['is_active'] != false) {
         hasFingerprintData = true;
+        debugPrint('✅ Fingerprint data found (Map)');
       }
+    } else {
+      debugPrint('⚠️ BioData is null or not a List/Map: $bioData');
     }
+
+    debugPrint(
+      '📊 Final status - Face: $hasFaceData, Fingerprint: $hasFingerprintData',
+    );
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1729,6 +1926,36 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
+                    // Class Badge
+                    if (member['class_name'] != null &&
+                        member['class_name'].toString().isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFF8B5CF6,
+                          ).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: const Color(
+                              0xFF8B5CF6,
+                            ).withValues(alpha: 0.3),
+                            width: 0.5,
+                          ),
+                        ),
+                        child: Text(
+                          member['class_name'].toString(),
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF8B5CF6),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 2),
                     Row(
                       children: [
                         Flexible(
@@ -1797,6 +2024,182 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                     accentColor,
                     () {},
                   ),
+                  const SizedBox(width: 4),
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_vert,
+                      size: 16,
+                      color: widget.isDarkMode ? Colors.white70 : accentColor,
+                    ),
+                    color: widget.isDarkMode
+                        ? const Color(0xFF2D1B4E)
+                        : Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    onSelected: (String result) async {
+                      switch (result) {
+                        case 'face':
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => FaceRegistrationPage(
+                                organizationMemberId: member['id'],
+                                memberName: _getMemberName(member),
+                              ),
+                            ),
+                          ).then((refresh) {
+                            if (refresh == true) {
+                              _loadOrganizationMembersOptimized();
+                            }
+                          });
+                          break;
+                        case 'fingerprint':
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => FingerprintRegistrationPage(
+                                organizationMemberId: member['id'],
+                                memberName: _getMemberName(member),
+                              ),
+                            ),
+                          ).then((refresh) {
+                            if (refresh == true) {
+                              _loadOrganizationMembersOptimized();
+                            }
+                          });
+                          break;
+                        case 'rfid':
+                          _showRfidRegistrationDialog(member);
+                          break;
+                      }
+                    },
+                    itemBuilder: (BuildContext context) => [
+                      PopupMenuItem<String>(
+                        value: 'face',
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.face_rounded,
+                              size: 18,
+                              color: widget.isDarkMode
+                                  ? Colors.white70
+                                  : Colors.grey.shade700,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Registrasi Wajah',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: widget.isDarkMode
+                                      ? Colors.white
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ),
+                            if (hasFaceData)
+                              const Icon(
+                                Icons.check_box,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              )
+                            else
+                              Icon(
+                                Icons.check_box_outline_blank,
+                                color: widget.isDarkMode
+                                    ? Colors.white54
+                                    : Colors.grey.shade400,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'fingerprint',
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.fingerprint_rounded,
+                              size: 18,
+                              color: widget.isDarkMode
+                                  ? Colors.white70
+                                  : Colors.grey.shade700,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Registrasi Sidik Jari',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: widget.isDarkMode
+                                      ? Colors.white
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ),
+                            if (hasFingerprintData)
+                              const Icon(
+                                Icons.check_box,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              )
+                            else
+                              Icon(
+                                Icons.check_box_outline_blank,
+                                color: widget.isDarkMode
+                                    ? Colors.white54
+                                    : Colors.grey.shade400,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'rfid',
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.nfc_rounded,
+                              size: 18,
+                              color: widget.isDarkMode
+                                  ? Colors.white70
+                                  : Colors.grey.shade700,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Registrasi RFID',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: widget.isDarkMode
+                                      ? Colors.white
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ),
+                            if (member['rfid_card_id'] != null)
+                              const Icon(
+                                Icons.check_box,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              )
+                            else
+                              Icon(
+                                Icons.check_box_outline_blank,
+                                color: widget.isDarkMode
+                                    ? Colors.white54
+                                    : Colors.grey.shade400,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ],
@@ -1849,21 +2252,21 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         (b) =>
             (b['biometric_type'] == 'face' ||
                 b['biometric_type'] == 'face_recognition') &&
-            b['is_active'] == true,
+            b['is_active'] != false,
         orElse: () => null,
       );
       activeFingerData = bioData.firstWhere(
-        (b) => b['biometric_type'] == 'fingerprint' && b['is_active'] == true,
+        (b) => b['biometric_type'] == 'fingerprint' && b['is_active'] != false,
         orElse: () => null,
       );
     } else if (bioData is Map) {
       if ((bioData['biometric_type'] == 'face' ||
               bioData['biometric_type'] == 'face_recognition') &&
-          bioData['is_active'] == true) {
+          bioData['is_active'] != false) {
         activeFaceData = Map<String, dynamic>.from(bioData);
       }
       if (bioData['biometric_type'] == 'fingerprint' &&
-          bioData['is_active'] == true) {
+          bioData['is_active'] != false) {
         activeFingerData = Map<String, dynamic>.from(bioData);
       }
     }
@@ -1992,7 +2395,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                '${AppLanguage.tr('Petugas.members.department')} $deptName',
+                                'Departemen: $deptName',
                                 style: const TextStyle(
                                   color: Colors.white70,
                                   fontSize: 13,
@@ -2041,6 +2444,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                               MaterialPageRoute(
                                 builder: (context) => FaceRegistrationPage(
                                   organizationMemberId: member['id'],
+                                  memberName: _getMemberName(member),
                                 ),
                               ),
                             ).then((refresh) {
@@ -2080,9 +2484,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             if (hasFaceData) ...[
                               const SizedBox(width: 6),
                               const Icon(
-                                Icons.check_circle,
+                                Icons.check_box,
                                 color: Color(0xFF10B981),
-                                size: 18,
+                                size: 20,
                               ),
                             ],
                           ],
@@ -2137,9 +2541,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             if (hasFingerprintData) ...[
                               const SizedBox(width: 6),
                               const Icon(
-                                Icons.check_circle,
+                                Icons.check_box,
                                 color: Color(0xFF10B981),
-                                size: 18,
+                                size: 20,
                               ),
                             ],
                           ],
@@ -2182,11 +2586,48 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                             if (member['rfid_card_id'] != null) ...[
                               const SizedBox(width: 6),
                               const Icon(
-                                Icons.check_circle,
+                                Icons.check_box,
                                 color: Color(0xFF10B981),
-                                size: 18,
+                                size: 20,
                               ),
                             ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _showEditMemberDialog(member);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF8B5CF6),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: const BorderSide(
+                              color: Color(0xFFA855F7),
+                              width: 1.5,
+                            ),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.edit_rounded, size: 18),
+                            const SizedBox(width: 6),
+                            const Text(
+                              'Edit Kelas',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -2202,10 +2643,345 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     );
   }
 
+  void _showEditMemberDialog(Map<String, dynamic> member) {
+    final TextEditingController classController = TextEditingController(
+      text: member['class_name'] as String? ?? '',
+    );
+    String selectedClass = member['class_name'] as String? ?? '';
+
+    // Department selection
+    int? selectedDepartmentId = member['department_id'] as int?;
+    List<Map<String, dynamic>> departments = [];
+    bool isLoadingDepartments = true;
+    bool hasLoaded = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          if (!hasLoaded) {
+            hasLoaded = true;
+            Future<void> loadDepartments() async {
+              try {
+                final orgId = widget.memberData['organization_id'];
+                final response = await _supabase
+                    .from('departments')
+                    .select('id, name, code')
+                    .eq('organization_id', orgId)
+                    .order('name');
+
+                if (mounted) {
+                  setDialogState(() {
+                    departments = List<Map<String, dynamic>>.from(response);
+                    isLoadingDepartments = false;
+                  });
+                }
+              } catch (e) {
+                debugPrint('Error loading departments: $e');
+                if (mounted) {
+                  setDialogState(() => isLoadingDepartments = false);
+                }
+              }
+            }
+            loadDepartments();
+          }
+
+          return AlertDialog(
+          backgroundColor: widget.isDarkMode
+              ? const Color(0xFF2D1B4E)
+              : Colors.white,
+          title: Text(
+            'Edit Data Siswa',
+            style: TextStyle(
+              color: widget.isDarkMode ? Colors.white : Colors.black87,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _getMemberName(member),
+                style: TextStyle(
+                  color: widget.isDarkMode
+                      ? Colors.white70
+                      : Colors.grey.shade600,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Pilih Kelas:',
+                style: TextStyle(
+                  color: widget.isDarkMode ? Colors.white : Colors.black87,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedClass.isEmpty ? null : selectedClass,
+                decoration: InputDecoration(
+                  hintText: 'Pilih kelas',
+                  hintStyle: TextStyle(
+                    color: widget.isDarkMode ? Colors.white38 : Colors.grey,
+                  ),
+                  filled: true,
+                  fillColor: widget.isDarkMode
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : Colors.grey.shade100,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: widget.isDarkMode
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: widget.isDarkMode
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                ),
+                dropdownColor: widget.isDarkMode
+                    ? const Color(0xFF2D1B4E)
+                    : Colors.white,
+                style: TextStyle(
+                  color: widget.isDarkMode ? Colors.white : Colors.black87,
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'X RPL 1', child: Text('X RPL 1')),
+                  DropdownMenuItem(value: 'XI RPL 1', child: Text('XI RPL 1')),
+                  DropdownMenuItem(
+                    value: 'XII RPL 1',
+                    child: Text('XII RPL 1'),
+                  ),
+                ],
+                onChanged: (value) {
+                  setDialogState(() {
+                    selectedClass = value ?? '';
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Pilih Departemen:',
+                style: TextStyle(
+                  color: widget.isDarkMode ? Colors.white : Colors.black87,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 8),
+              isLoadingDepartments
+                  ? const Center(child: CircularProgressIndicator())
+                  : DropdownButtonFormField<int>(
+                      value: selectedDepartmentId,
+                      decoration: InputDecoration(
+                        hintText: 'Pilih departemen',
+                        hintStyle: TextStyle(
+                          color: widget.isDarkMode
+                              ? Colors.white38
+                              : Colors.grey,
+                        ),
+                        filled: true,
+                        fillColor: widget.isDarkMode
+                            ? Colors.white.withValues(alpha: 0.05)
+                            : Colors.grey.shade100,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(
+                            color: widget.isDarkMode
+                                ? Colors.white.withValues(alpha: 0.1)
+                                : Colors.grey.shade300,
+                          ),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(
+                            color: widget.isDarkMode
+                                ? Colors.white.withValues(alpha: 0.1)
+                                : Colors.grey.shade300,
+                          ),
+                        ),
+                      ),
+                      dropdownColor: widget.isDarkMode
+                          ? const Color(0xFF2D1B4E)
+                          : Colors.white,
+                      style: TextStyle(
+                        color: widget.isDarkMode
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                      items: departments.map<DropdownMenuItem<int>>((dept) {
+                        return DropdownMenuItem<int>(
+                          value: dept['id'] as int,
+                          child: Text(
+                            '${dept['name']} (${dept['code'] ?? 'No Code'})',
+                            style: TextStyle(
+                              color: widget.isDarkMode
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          selectedDepartmentId = value;
+                        });
+                      },
+                    ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(
+                'Batal',
+                style: TextStyle(
+                  color: widget.isDarkMode
+                      ? Colors.white70
+                      : Colors.grey.shade600,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (selectedClass.isEmpty) {
+                  Get.snackbar(
+                    'Error',
+                    'Silakan pilih kelas terlebih dahulu',
+                    snackPosition: SnackPosition.BOTTOM,
+                  );
+                  return;
+                }
+
+                try {
+                  final updateData = <String, dynamic>{
+                    'class_name': selectedClass,
+                  };
+
+                  if (selectedDepartmentId != null) {
+                    updateData['department_id'] = selectedDepartmentId;
+                  }
+
+                  final result = await _supabase
+                      .from('organization_members')
+                      .update(updateData)
+                      .eq('id', member['id'])
+                      .select();
+
+                  debugPrint('Update result: $result');
+
+                  if (mounted) {
+                    Navigator.pop(context);
+                    Get.snackbar(
+                      'Berhasil',
+                      'Data siswa berhasil diperbarui',
+                      snackPosition: SnackPosition.BOTTOM,
+                      backgroundColor: const Color(0xFF10B981),
+                      colorText: Colors.white,
+                    );
+
+                    // Update local state directly without re-fetching
+                    setState(() {
+                      final index = _organizationMembers.indexWhere(
+                        (m) => m['id'] == member['id'],
+                      );
+                      if (index != -1) {
+                        _organizationMembers[index]['class_name'] =
+                            selectedClass;
+                        if (selectedDepartmentId != null) {
+                          _organizationMembers[index]['department_id'] =
+                              selectedDepartmentId;
+                        }
+                      }
+                    });
+
+                    // Update controller state directly without re-fetching
+                    final controllerIndex = _membersController
+                        .organizationMembers
+                        .indexWhere((m) => m['id'] == member['id']);
+                    if (controllerIndex != -1) {
+                      _membersController
+                              .organizationMembers[controllerIndex]['class_name'] =
+                          selectedClass;
+                      if (selectedDepartmentId != null) {
+                        _membersController
+                                .organizationMembers[controllerIndex]['department_id'] =
+                            selectedDepartmentId;
+                      }
+                      _membersController.organizationMembers.refresh();
+                    }
+                  }
+                } catch (e) {
+                  debugPrint('Error updating member: $e');
+                  if (mounted) {
+                    Get.snackbar(
+                      'Error',
+                      'Gagal memperbarui data: $e',
+                      snackPosition: SnackPosition.BOTTOM,
+                      backgroundColor: const Color(0xFFEF4444),
+                      colorText: Colors.white,
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Simpan'),
+            ),
+          ],
+        );
+        },
+      ),
+    );
+  }
+
   void _showRfidRegistrationDialog(Map<String, dynamic> member) {
     String? scannedCardId;
     final TextEditingController rfidController = TextEditingController();
     final FocusNode rfidFocusNode = FocusNode();
+    bool isProcessing = false;
+    
+    late void Function() rfidListener;
+
+    void processCard(String value) {
+      if (isProcessing) return;
+      final cardId = value.trim();
+      if (cardId.isNotEmpty) {
+        isProcessing = true;
+        
+        // Unfocus and remove listener to stop any further text field events
+        rfidFocusNode.unfocus();
+        rfidController.removeListener(rfidListener);
+        
+        // Delay the pop to ensure TextField has completed its internal build/event cycle
+        Future.delayed(const Duration(milliseconds: 150), () {
+          rfidController.clear();
+          if (Navigator.canPop(context)) {
+            Navigator.pop(context); // Close the bottom sheet
+          }
+          _handleSaveRfid(member, cardId);
+        });
+      }
+    }
+
+    rfidListener = () {
+      if (isProcessing) return;
+      final text = rfidController.text;
+      if (text.endsWith('\n') || text.endsWith('\r')) {
+        processCard(text);
+      }
+    };
+
+    rfidController.addListener(rfidListener);
 
     showModalBottomSheet(
       context: context,
@@ -2213,30 +2989,17 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       backgroundColor: Colors.transparent,
       isDismissible: false,
       enableDrag: false,
-      builder: (context) {
+      builder: (sheetContext) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
+          builder: (dialogContext, setDialogState) {
             Future.delayed(const Duration(milliseconds: 50), () {
               rfidFocusNode.requestFocus();
               SystemChannels.textInput.invokeMethod('TextInput.hide');
             });
 
-            rfidController.addListener(() {
-              final text = rfidController.text;
-              if (text.endsWith('\n') || text.endsWith('\r')) {
-                final cardId = text.trim();
-                if (cardId.isNotEmpty) {
-                  setDialogState(() {
-                    scannedCardId = cardId;
-                    rfidController.clear();
-                  });
-                }
-              }
-            });
-
             return Container(
               padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
+                bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
               ),
               decoration: BoxDecoration(
                 color: widget.isDarkMode
@@ -2385,19 +3148,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                         readOnly: false,
                         showCursor: false,
                         onSubmitted: (value) {
-                          final cardId = value.trim();
-                          if (cardId.isNotEmpty) {
-                            setDialogState(() {
-                              scannedCardId = cardId;
-                              rfidController.clear();
-                            });
-                          }
-                          Future.delayed(const Duration(milliseconds: 50), () {
-                            rfidFocusNode.requestFocus();
-                            SystemChannels.textInput.invokeMethod(
-                              'TextInput.hide',
-                            );
-                          });
+                          processCard(value);
                         },
                       ),
                     ),
@@ -2598,6 +3349,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                         MaterialPageRoute(
                           builder: (context) => FaceRegistrationPage(
                             organizationMemberId: member['id'],
+                            memberName: _getMemberName(member),
                           ),
                         ),
                       ).then((refresh) {
@@ -2686,13 +3438,13 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   }
 
   Future<void> _registerFaceFromSinglePhoto(Map<String, dynamic> member) async {
-    final faceService = FaceRecognitionTFLiteService();
+    final biometricService = BiometricService();
+    final faceService = await biometricService.getFaceService();
     final organizationMemberId = member['id'] as int?;
 
     if (organizationMemberId == null) return;
 
     try {
-      await faceService.initialize();
       final ImagePicker picker = ImagePicker();
 
       final XFile? image = await showDialog<XFile?>(
@@ -2760,7 +3512,6 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           );
         }
 
-        final biometricService = BiometricService();
         final storageService = SupabaseStorageService();
 
         final processedFile = File(image.path);
@@ -3147,139 +3898,150 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         ? Colors.white
         : (widget.isDarkMode ? Colors.white70 : Colors.black87);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 1),
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(
-            color: widget.isDarkMode
-                ? Colors.white.withValues(alpha: 0.05)
-                : Colors.grey.shade100,
-            width: 1,
+    return InkWell(
+      onTap: () {
+        Get.to(
+          () => MemberDetailLogPage(
+            memberId: member['id'] as int,
+            memberName: _getMemberName(member),
+            isDarkMode: widget.isDarkMode,
+          ),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 1),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: widget.isDarkMode
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : Colors.grey.shade100,
+              width: 1,
+            ),
           ),
         ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: circleColor,
-              shape: BoxShape.circle,
-              boxShadow: rank <= 3
-                  ? [
-                      BoxShadow(
-                        color: circleColor.withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
-                      ),
-                    ]
-                  : null,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              '$rank',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: textColor,
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: circleColor,
+                shape: BoxShape.circle,
+                boxShadow: rank <= 3
+                    ? [
+                        BoxShadow(
+                          color: circleColor.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ]
+                    : null,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _getMemberName(member),
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _getMemberName(member),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: widget.isDarkMode ? Colors.white : Colors.black87,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.calendar_today_outlined,
+                        size: 11,
+                        color: const Color(0xFFA855F7),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '$totalAttendance ${AppLanguage.tr('logs')}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: widget.isDarkMode
+                              ? Colors.white54
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Icon(
+                        Icons.access_time,
+                        size: 11,
+                        color: const Color(0xFFA855F7),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '$workHours${AppLanguage.tr('hrs_short')}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: widget.isDarkMode
+                              ? Colors.white54
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(
+                      0xFF8B5CF6,
+                    ).withValues(alpha: widget.isDarkMode ? 0.2 : 0.1),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    _formatPercentage(productivityScore),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF8938DF),
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.calendar_today_outlined,
-                      size: 11,
-                      color: const Color(0xFFA855F7),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$totalAttendance ${AppLanguage.tr('logs')}',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: widget.isDarkMode
-                            ? Colors.white54
-                            : Colors.grey.shade600,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Icon(
-                      Icons.access_time,
-                      size: 11,
-                      color: const Color(0xFFA855F7),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$workHours${AppLanguage.tr('hrs_short')}',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: widget.isDarkMode
-                            ? Colors.white54
-                            : Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 2),
+                Text(
+                  AppLanguage.tr('score').toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    color: widget.isDarkMode
+                        ? Colors.white24
+                        : Colors.grey.shade400,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ],
             ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(
-                    0xFF8B5CF6,
-                  ).withValues(alpha: widget.isDarkMode ? 0.2 : 0.1),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Text(
-                  _formatPercentage(productivityScore),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF8938DF),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                AppLanguage.tr('score').toUpperCase(),
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w900,
-                  color: widget.isDarkMode
-                      ? Colors.white24
-                      : Colors.grey.shade400,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -6,18 +6,24 @@ import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/face_recognition_tflite_service.dart';
 import '../services/biometric_service.dart';
 import '../../services/supabase_storage_service.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import '../../services/tts_service.dart';
-
+import '../../helpers/language_helper.dart';
 
 class FaceRegistrationPage extends StatefulWidget {
   final int organizationMemberId;
+  final String? memberName;
 
-  const FaceRegistrationPage({super.key, required this.organizationMemberId});
+  const FaceRegistrationPage({
+    super.key,
+    required this.organizationMemberId,
+    this.memberName,
+  });
 
   @override
   State<FaceRegistrationPage> createState() => _FaceRegistrationPageState();
@@ -27,8 +33,8 @@ enum CaptureAngle { front, left, right, complete }
 
 class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
-  final FaceRecognitionTFLiteService _faceService =
-      FaceRecognitionTFLiteService();
+  FaceRecognitionTFLiteService?
+  _faceService; // Use shared instance from BiometricService
   final BiometricService _biometricService = BiometricService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
 
@@ -38,7 +44,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   bool _isTakingPicture = false;
   bool _isModelInitialized = false;
   String? _errorMessage;
-  String _currentStep = 'Loading model...';
+  String _currentStep = AppLanguage.tr(
+    'attendance.face_registration.loading_model',
+  );
   String _guidanceMessage = '';
   Color _overlayColor = Colors.white;
 
@@ -59,6 +67,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   DateTime? _lastGuidanceUpdate;
   Timer? _errorTimer;
   DateTime? _lastTtsTime; // Voice guidance throttling
+
+  // Member name display
+  String? _memberName;
 
   void _speakGuidanceKey(String key) {
     final now = DateTime.now();
@@ -82,7 +93,54 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   void initState() {
     super.initState();
     TtsService().initialize();
+    _memberName = widget.memberName;
+    if (_memberName == null) {
+      _fetchMemberName();
+    }
     _initializeModel();
+  }
+
+  /// Fetch member name from DB if not passed as parameter
+  Future<void> _fetchMemberName() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('organization_members')
+          .select('user_profiles (first_name, middle_name, last_name, display_name)')
+          .eq('id', widget.organizationMemberId)
+          .maybeSingle();
+
+      if (response != null && response['user_profiles'] != null) {
+        final profile = response['user_profiles'] as Map<String, dynamic>;
+        final firstName = profile['first_name'] as String? ?? '';
+        final middleName = profile['middle_name'] as String? ?? '';
+        final lastName = profile['last_name'] as String? ?? '';
+        final displayName = (profile['display_name'] as String?)?.trim();
+
+        String fullName = middleName.isNotEmpty
+            ? '$firstName $middleName $lastName'.trim()
+            : '$firstName $lastName'.trim();
+
+        String formatted;
+        if (fullName.isNotEmpty &&
+            displayName != null &&
+            displayName.isNotEmpty &&
+            fullName != displayName) {
+          formatted = '$fullName - $displayName';
+        } else if (displayName != null && displayName.isNotEmpty) {
+          formatted = displayName;
+        } else {
+          formatted = fullName.isNotEmpty ? fullName : 'Member';
+        }
+
+        if (mounted) {
+          setState(() {
+            _memberName = formatted;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching member name: $e');
+    }
   }
 
   @override
@@ -91,7 +149,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     _stopStream();
     _errorTimer?.cancel();
     _cameraController?.dispose();
-    _faceService.dispose();
+    // Don't dispose shared service - it's managed by BiometricService
     super.dispose();
   }
 
@@ -136,14 +194,19 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   Future<void> _initializeModel() async {
     try {
       setState(() {
-        _currentStep = 'Loading model...';
+        _currentStep = AppLanguage.tr(
+          'attendance.face_registration.loading_model',
+        );
       });
 
-      await _faceService.initialize();
+      // Use shared service instance from BiometricService
+      _faceService = await _biometricService.getFaceService();
 
       setState(() {
         _isModelInitialized = true;
-        _currentStep = 'Model ready';
+        _currentStep = AppLanguage.tr(
+          'attendance.face_registration.model_ready',
+        );
       });
 
       await _initializeCamera();
@@ -151,7 +214,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (mounted) {
         _showError('Failed to load model: $e');
         setState(() {
-          _currentStep = 'Model initialization failed';
+          _currentStep = AppLanguage.tr(
+            'attendance.face_registration.model_failed',
+          );
         });
       }
     }
@@ -160,7 +225,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   Future<void> _initializeCamera() async {
     try {
       setState(() {
-        _currentStep = 'Starting camera...';
+        _currentStep = AppLanguage.tr(
+          'attendance.face_registration.starting_camera',
+        );
       });
 
       final cameras = await availableCameras();
@@ -183,13 +250,17 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
-          _currentStep = 'Tahap 1: Wajah Depan';
-          _guidanceMessage = 'Lihat Lurus ke Kamera';
+          _currentStep = AppLanguage.tr(
+            'attendance.face_registration.step1_title',
+          );
+          _guidanceMessage = AppLanguage.tr(
+            'attendance.face_registration.look_straight_ui',
+          );
         });
         // Welcome voice guidance
         TtsService().speakKey('welcome');
         TtsService().speakKey('step1_instruction');
-        
+
         // Start silent stream instead of polling timer
         _startImageStream();
       }
@@ -208,6 +279,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       _cameraController!.startImageStream((CameraImage image) {
         _processCameraFrame(image);
       });
+      debugPrint('✅ Image stream started successfully');
     } catch (e) {
       debugPrint('Error starting stream: $e');
       _isStreaming = false;
@@ -231,8 +303,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     // 🚀 THROTTLING: Max ~6-7 FPS (every 150ms) to ensure smooth camera preview
     final now = DateTime.now();
     if (_lastProcessTime != null &&
-        now.difference(_lastProcessTime!) <
-            const Duration(milliseconds: 150)) {
+        now.difference(_lastProcessTime!) < const Duration(milliseconds: 150)) {
       return;
     }
 
@@ -240,13 +311,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     _lastProcessTime = now;
 
     try {
-
       // 1. Convert to InputImage
       final inputImage = await _inputImageFromCameraImage(image);
       if (inputImage == null) return;
 
-      // 2. Detect Faces
-      final faces = await _faceService.detectFacesFromInputImage(inputImage);
+      // 2. Detect Faces — use permissive detector so bracket is always visible
+      if (_faceService == null) return;
+      final faces = await _faceService!.detectFacesFromInputImage(inputImage);
 
       if (!mounted) return;
 
@@ -255,7 +326,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         setState(() {
           _painterFaces = [];
           _overlayColor = Colors.transparent;
-          _guidanceMessage = 'Arahkan wajah ke kamera';
+          _guidanceMessage = AppLanguage.tr(
+            'attendance.face_registration.face_not_found_ui',
+          );
         });
         _speakGuidanceKey('face_not_found');
       } else {
@@ -284,7 +357,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         if (validation['isValid'] == true) {
           _consecutiveValidFrames++;
           _updateGuidance(
-            'Tahan posisi...',
+            AppLanguage.tr('attendance.face_registration.hold_position_ui'),
             Colors.green.withValues(alpha: 0.3),
           );
           _speakGuidanceKey('hold_position');
@@ -297,8 +370,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
             // Trigger capture
             setState(() {
-              _guidanceMessage = 'Mengambil foto...';
-              _currentStep = 'Capturing...';
+              _guidanceMessage = AppLanguage.tr(
+                'attendance.face_registration.capturing_ui',
+              );
+              _currentStep = AppLanguage.tr(
+                'attendance.face_registration.capturing_ui',
+              );
               _painterFaces = []; // Clear brackets during freeze-frame capture
             });
             TtsService().speakKey('capturing');
@@ -309,11 +386,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         } else {
           _consecutiveValidFrames = 0;
           final String msg = validation['message'] ?? 'Sesuaikan posisi';
-          _updateGuidance(
-            msg,
-            Colors.orange.withValues(alpha: 0.3),
-          );
-          
+          _updateGuidance(msg, Colors.orange.withValues(alpha: 0.3));
+
           // Voice guidance fallback for validation error
           if (msg.contains('mata')) {
             _speakGuidanceKey('eyes_closed');
@@ -379,27 +453,46 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           return {'isValid': false, 'message': '← Salah Arah! Toleh KIRI'};
         }
         if (headY < 15.0) {
-          return {'isValid': false, 'message': '← Toleh ke KIRI'};
+          return {
+            'isValid': false,
+            'message': AppLanguage.tr(
+              'attendance.face_registration.turn_left_ui',
+            ),
+          };
         }
         if (headY > 45.0) {
           return {
             'isValid': false,
-            'message': 'Terlalu miring! Kembali sedikit',
+            'message': AppLanguage.tr(
+              'attendance.face_registration.tilt_head_ui',
+            ),
           };
         }
         break;
       case CaptureAngle.right:
         // Range: -15 to -45 degrees (User turns to THEIR right - sign swapped for this device)
         if (headY > 10.0) {
-          return {'isValid': false, 'message': 'Salah Arah! Toleh KANAN →'};
+          return {
+            'isValid': false,
+            'message': AppLanguage.tr(
+              'attendance.face_registration.wrong_direction_right',
+            ),
+          };
         }
         if (headY > -15.0) {
-          return {'isValid': false, 'message': 'Toleh ke KANAN →'};
+          return {
+            'isValid': false,
+            'message': AppLanguage.tr(
+              'attendance.face_registration.turn_right_ui',
+            ),
+          };
         }
         if (headY < -45.0) {
           return {
             'isValid': false,
-            'message': 'Terlalu miring! Kembali sedikit',
+            'message': AppLanguage.tr(
+              'attendance.face_registration.tilt_head_ui',
+            ),
           };
         }
         break;
@@ -407,22 +500,30 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         break;
     }
 
-    return {'isValid': true, 'message': 'Sempurna, Tahan!'};
+    return {
+      'isValid': true,
+      'message': AppLanguage.tr('attendance.face_registration.perfect_hold'),
+    };
   }
 
   Future<void> _processCapturedAngle(String imagePath) async {
     try {
       setState(() {
         _overlayColor = Colors.green;
-        _guidanceMessage =
-            'Sudut ${_currentAngle.name.toUpperCase()} Berhasil!';
-        _currentStep = 'Memproses...';
+        _guidanceMessage = AppLanguage.tr(
+          'attendance.face_registration.success_angle',
+        );
+        _currentStep = AppLanguage.tr(
+          'attendance.face_registration.processing',
+        );
       });
 
-      // Extract features for this angle
-      final faceTemplate = await _faceService.extractFaceFeatures(
+      // Extract features — use permissive detector for enrollment
+      if (_faceService == null) return;
+      final faceTemplate = await _faceService!.extractFaceFeatures(
         imagePath,
         allowSidePose: _currentAngle != CaptureAngle.front,
+        forRegistration: true,
       );
 
       // ✅ HIGH STANDARD VALIDATION: Mandatory thresholds
@@ -433,11 +534,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       double minQuality = _currentAngle == CaptureAngle.front ? 0.90 : 0.65;
 
       if (qualityScore < minQuality) {
-        setState(() {
-          _overlayColor = Colors.red; // More urgent than orange
-        });
         _updateGuidance(
-          'Kualitas rendah (${(qualityScore * 100).toInt()}%). Butuh > ${(minQuality * 100).toInt()}%. Silakan ulangi dengan cahaya lebih baik.',
+          AppLanguage.tr('attendance.face_registration.quality_low_ui'),
           Colors.red,
         );
         TtsService().speakKey('quality_low');
@@ -461,20 +559,31 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       // PROGRESS LOGIC
       if (_currentAngle == CaptureAngle.front) {
         _currentAngle = CaptureAngle.left;
-        _resetStreamForAngle('Tahap 2: Samping Kiri', '← Toleh ke KIRI');
+        _resetStreamForAngle(
+          AppLanguage.tr('attendance.face_registration.step2_title'),
+          AppLanguage.tr('attendance.face_registration.turn_left_ui'),
+        );
         await TtsService().speakKey('step_done_front');
         TtsService().speakKey('step2_instruction');
       } else if (_currentAngle == CaptureAngle.left) {
         _currentAngle = CaptureAngle.right;
-        _resetStreamForAngle('Tahap 3: Samping Kanan', 'Toleh ke KANAN →');
+        _resetStreamForAngle(
+          AppLanguage.tr('attendance.face_registration.step3_title'),
+          AppLanguage.tr('attendance.face_registration.turn_right_ui'),
+        );
         await TtsService().speakKey('step_done_left');
         TtsService().speakKey('step3_instruction');
       } else {
         // Complete
+        _updateGuidance(
+          AppLanguage.tr('attendance.face_registration.done_saving'),
+          Colors.green,
+        );
         setState(() {
-          _guidanceMessage = 'Selesai! Menyimpan...';
           _isRegistrationComplete = true;
-          _currentStep = 'Menyimpan Data...';
+          _currentStep = AppLanguage.tr(
+            'attendance.face_registration.saving_data',
+          );
         });
         await TtsService().speakKey('step_done_right');
         TtsService().speakKey('saving');
@@ -492,17 +601,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     _consecutiveValidFrames = 0;
     _isTakingPicture = false;
     _startImageStream();
+    _updateGuidance(msg, Colors.blue);
     setState(() {
       _currentStep = stepName;
-      _guidanceMessage = msg;
-      _overlayColor = Colors.blue;
     });
   }
 
   Future<void> _finalizeMultiAngleRegistration() async {
     setState(() {
       _isLoading = true;
-      _currentStep = 'Menyimpan ke Database...';
+      _currentStep = AppLanguage.tr('attendance.face_registration.saving_db');
     });
 
     try {
@@ -589,9 +697,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                 child: const Icon(Icons.check, color: Colors.white, size: 44),
               ),
               const SizedBox(height: 24),
-              const Text(
-                'Registrasi Selesai!',
-                style: TextStyle(
+              Text(
+                AppLanguage.tr('attendance.face_registration.reg_complete'),
+                style: const TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
                   decoration: TextDecoration.none,
@@ -599,10 +707,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Akurasi pengenalan wajah kini lebih tinggi dengan multi-angle.',
+              Text(
+                AppLanguage.tr('attendance.face_registration.reg_desc'),
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 14,
                   color: Colors.grey,
                   decoration: TextDecoration.none,
@@ -632,7 +740,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       });
 
       // ✅ SIMPLIFIED: Extract front face features only (no side pose)
-      final faceTemplate = await _faceService.extractFaceFeatures(
+      if (_faceService == null) return;
+      final faceTemplate = await _faceService!.extractFaceFeatures(
         imagePath,
         allowSidePose: false,
       );
@@ -670,10 +779,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       if (qualityScore < minRequired) {
         setState(() {
-          _guidanceMessage =
-              'Kualitas $qualityLevel (${(qualityScore * 100).toInt()}%). Butuh cahaya lebih terang!';
+          _guidanceMessage = AppLanguage.tr(
+            'attendance.face_registration.quality_low_ui',
+          );
           _overlayColor = Colors.orange;
-          _currentStep = 'Cahaya kurang - coba lagi';
+          _currentStep = AppLanguage.tr(
+            'attendance.face_registration.quality_low_ui',
+          );
         });
         await Future.delayed(const Duration(seconds: 2));
         await File(imagePath).delete();
@@ -693,7 +805,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             '⚠️ Low liveness score: ${livenessScore.toStringAsFixed(2)}',
           );
           setState(() {
-            _guidanceMessage = 'Foto tidak natural. Pastikan wajah asli!';
+            _guidanceMessage = AppLanguage.tr(
+              'attendance.face_registration.liveness_low',
+            );
             _overlayColor = Colors.red;
           });
           await Future.delayed(const Duration(seconds: 2));
@@ -807,9 +921,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  const Text(
-                    'Registrasi Selesai!',
-                    style: TextStyle(
+                  Text(
+                    AppLanguage.tr('attendance.face_registration.reg_complete'),
+                    style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
                       letterSpacing: -0.5,
@@ -818,10 +932,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Pengenalan wajah dengan facial landmarks aktif',
+                  Text(
+                    AppLanguage.tr('attendance.face_registration.reg_desc'),
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w400,
                       color: Colors.grey,
@@ -846,7 +960,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         'Gagal menyimpan: ${e.toString().replaceAll('Exception: ', '')}',
       );
       setState(() {
-        _currentStep = 'Gagal menyimpan';
+        _currentStep = AppLanguage.tr(
+          'attendance.face_registration.save_failed',
+        );
         _isLoading = false;
         _overlayColor = Colors.red;
         _isRegistrationComplete = false;
@@ -888,7 +1004,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   // Helper for CameraImage -> InputImage
-  Future<InputImage?> _inputImageFromCameraImage(CameraImage image) async {
+  // Uses NV21 format which is the only format guaranteed to work with ML Kit on Android.
+  InputImage? _inputImageFromCameraImage(CameraImage image) {
     if (_cameraController == null) return null;
 
     final camera = _cameraController!.description;
@@ -900,13 +1017,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       rotation = InputImageRotation.rotation0deg;
     } else if (Platform.isAndroid) {
       var rotationCompensation =
-          _orientations[_cameraController!.value.deviceOrientation];
-      if (rotationCompensation == null) return null;
+          _orientations[_cameraController!.value.deviceOrientation] ?? 0;
       if (camera.lensDirection == CameraLensDirection.front) {
-        // Front camera
         rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
       } else {
-        // Back camera
         rotationCompensation =
             (sensorOrientation - rotationCompensation + 360) % 360;
       }
@@ -914,40 +1028,35 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
     if (rotation == null) return null;
 
-    // Format
-    InputImageFormat? format = InputImageFormatValue.fromRawValue(
-      image.format.raw,
-    );
-    if (format == null) return null;
-
-    // Bytes
-    final Uint8List bytes;
-    int bytesPerRow;
-
-    if (Platform.isAndroid && image.format.group == ImageFormatGroup.yuv420) {
-      // ✅ OPTIMIZATION: Remove expensive NV21 conversion overhead.
-      // Standard YUV420 concatenation is extremely fast in the main thread and natively supported by ML Kit.
+    // ✅ CRITICAL FIX: Convert to NV21 — the ONLY format reliably supported
+    // by Google ML Kit on all Android devices. The camera may output YUV420
+    // in a layout ML Kit cannot parse directly, causing InputImageConverterError.
+    if (Platform.isAndroid) {
       try {
-        final WriteBuffer allBytes = WriteBuffer();
-        for (Plane plane in image.planes) {
-          allBytes.putUint8List(plane.bytes);
-        }
-        bytes = allBytes.done().buffer.asUint8List();
-        format = InputImageFormat.yuv420;
-        bytesPerRow = image.planes.first.bytesPerRow;
+        final nv21Bytes = _yuv420ToNv21(image);
+        return InputImage.fromBytes(
+          bytes: nv21Bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: rotation,
+            format: InputImageFormat.nv21,
+            bytesPerRow: image.width,
+          ),
+        );
       } catch (e) {
-        debugPrint('Error in YUV concatenation: $e');
+        debugPrint('NV21 conversion error: $e');
         return null;
       }
-    } else {
-      // Regular concatenation for other formats
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in image.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      bytes = allBytes.done().buffer.asUint8List();
-      bytesPerRow = image.planes.first.bytesPerRow;
     }
+
+    // iOS: planes can be used directly
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    final bytes = allBytes.done().buffer.asUint8List();
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
 
     return InputImage.fromBytes(
       bytes: bytes,
@@ -955,9 +1064,50 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: rotation,
         format: format,
-        bytesPerRow: bytesPerRow,
+        bytesPerRow: image.planes.first.bytesPerRow,
       ),
     );
+  }
+
+  /// Converts a YUV420 CameraImage to NV21 byte array.
+  /// NV21 layout: Y plane (width*height bytes) + interleaved V,U plane.
+  Uint8List _yuv420ToNv21(CameraImage image) {
+    final int width = image.width;
+    final int height = image.height;
+    final int ySize = width * height;
+    final int uvSize = width * height ~/ 2;
+    final Uint8List nv21 = Uint8List(ySize + uvSize);
+
+    // Copy Y plane
+    final Uint8List yPlane = image.planes[0].bytes;
+    final int yRowStride = image.planes[0].bytesPerRow;
+    if (yRowStride == width) {
+      nv21.setRange(0, ySize, yPlane);
+    } else {
+      for (int row = 0; row < height; row++) {
+        nv21.setRange(
+          row * width,
+          row * width + width,
+          yPlane,
+          row * yRowStride,
+        );
+      }
+    }
+
+    // Interleave V and U planes for NV21 (V first, then U)
+    final Uint8List uPlane = image.planes[1].bytes;
+    final Uint8List vPlane = image.planes[2].bytes;
+    final int uvRowStride = image.planes[1].bytesPerRow;
+    final int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
+    int pos = ySize;
+    for (int row = 0; row < height ~/ 2; row++) {
+      for (int col = 0; col < width ~/ 2; col++) {
+        final int uvIndex = row * uvRowStride + col * uvPixelStride;
+        nv21[pos++] = vPlane[uvIndex]; // V first (NV21)
+        nv21[pos++] = uPlane[uvIndex]; // then U
+      }
+    }
+    return nv21;
   }
 
   static final Map<DeviceOrientation, int> _orientations = {
@@ -967,6 +1117,96 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     DeviceOrientation.landscapeRight: 270,
   };
 
+  Widget _buildAngleFlowchart() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(3, (index) {
+        bool completed = false;
+        bool current = false;
+
+        switch (_currentAngle) {
+          case CaptureAngle.front:
+            completed = false;
+            current = index == 0;
+            break;
+          case CaptureAngle.left:
+            completed = index == 0;
+            current = index == 1;
+            break;
+          case CaptureAngle.right:
+            completed = index == 0 || index == 1;
+            current = index == 2;
+            break;
+          case CaptureAngle.complete:
+            completed = true;
+            current = false;
+            break;
+        }
+
+        return Row(
+          children: [
+            // Step circle
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: completed
+                    ? Colors.white
+                    : current
+                    ? Colors.white.withValues(alpha: 0.5)
+                    : Colors.white.withValues(alpha: 0.2),
+                border: Border.all(
+                  color: current
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.4),
+                  width: 2,
+                ),
+              ),
+              child: Center(
+                child: completed
+                    ? const Icon(
+                        Icons.check,
+                        color: Color(0xFF4A1E79),
+                        size: 24,
+                      )
+                    : Text(
+                        index == 0
+                            ? 'F'
+                            : index == 1
+                            ? 'L'
+                            : 'R',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: current
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.6),
+                        ),
+                      ),
+              ),
+            ),
+            // Connecting line (except for last step)
+            if (index < 2)
+              Container(
+                width: 30,
+                height: 2,
+                margin: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: completed
+                      ? Colors.white
+                      : current
+                      ? Colors.white.withValues(alpha: 0.5)
+                      : Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+          ],
+        );
+      }),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
@@ -974,19 +1214,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final double viewfinderHeight = viewfinderWidth * 1.3;
 
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Register Face',
-          style: TextStyle(color: Colors.white),
-        ),
-      ),
       body: Stack(
         children: [
           // 1. FULL CAMERA BACKGROUND
@@ -1004,6 +1231,20 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
+          // Background logo with transparency
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0.08,
+              child: Image.asset(
+                'assets/logo/app_logo_terbaru.png',
+                fit: BoxFit.contain,
+                alignment: Alignment.center,
+                width: 300,
+                height: 300,
+              ),
+            ),
+          ),
+
           // 2. DYNAMIC FACE BRACKETS (Optimized CustomPainter)
           if (_painterFaces.isNotEmpty &&
               _cameraController != null &&
@@ -1020,12 +1261,76 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                 ),
               ),
             ),
-          // 4. PROGRESS CARD
+
+          // 3. TOP BAR
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.6),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            'Registrasi Wajah',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          if (_memberName != null && _memberName!.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              _memberName!,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.85),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 48),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // 4. PROGRESS CARD with Flowchart
           if (_isCameraInitialized && _isModelInitialized)
             Positioned(
               left: 20,
               right: 20,
-              bottom: 30, // Positioned slightly lower
+              bottom: 30,
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
@@ -1035,10 +1340,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                   gradient: const LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFF8938DF), // Light Purple from Dashboard
-                      Color(0xFF4A1E79), // Dark Purple from Dashboard
-                    ],
+                    colors: [Color(0xFF8938DF), Color(0xFF4A1E79)],
                   ),
                   borderRadius: BorderRadius.circular(36),
                   boxShadow: [
@@ -1059,7 +1361,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                           : 'Scanning your face...',
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 22, // Slightly larger like mockup
+                        fontSize: 22,
                         fontWeight: FontWeight.bold,
                         letterSpacing: -0.5,
                       ),
@@ -1073,7 +1375,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                         fontWeight: FontWeight.w400,
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 20),
+                    // Flowchart for 3 angles
+                    _buildAngleFlowchart(),
+                    const SizedBox(height: 20),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -1101,7 +1406,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(10),
                       child: Container(
-                        height: 7, // Thinner progress bar
+                        height: 7,
                         width: double.infinity,
                         color: Colors.white.withValues(alpha: 0.15),
                         child: FractionallySizedBox(

@@ -126,6 +126,20 @@ class OfflineDatabaseService {
       } catch (e) {
         debugPrint('⚠️ Error checking/adding notes column: $e');
       }
+
+      // 4. 🔥 CEK DAN TAMBAHKAN KOLOM color_code DI cached_shifts
+      try {
+        final shiftTableCheck = await db.rawQuery("PRAGMA table_info(cached_shifts)");
+        final hasColor = shiftTableCheck.any((col) => col['name'] == 'color_code');
+        if (!hasColor) {
+          debugPrint('🛠️ REPAIR: color_code column missing in cached_shifts. Adding...');
+          await db.execute('ALTER TABLE cached_shifts ADD COLUMN color_code TEXT');
+          await db.execute('ALTER TABLE cached_shifts ADD COLUMN break_duration_minutes INTEGER');
+          debugPrint('✅ REPAIR: cached_shifts columns added.');
+        }
+      } catch (e) {
+        debugPrint('⚠️ Error repairing cached_shifts: $e');
+      }
     } catch (e) {
       debugPrint('⚠️ Error during self-healing check: $e');
     }
@@ -250,6 +264,8 @@ class OfflineDatabaseService {
         start_time TEXT,
         end_time TEXT,
         description TEXT,
+        color_code TEXT,
+        break_duration_minutes INTEGER,
         is_active INTEGER DEFAULT 1,
         cached_at TEXT NOT NULL
       )
@@ -1295,6 +1311,8 @@ class OfflineDatabaseService {
           'start_time': shift['start_time'],
           'end_time': shift['end_time'],
           'description': shift['description'],
+          'color_code': shift['color_code'],
+          'break_duration_minutes': shift['break_duration_minutes'],
           'is_active': (shift['is_active'] == true || shift['is_active'] == 1)
               ? 1
               : 0,

@@ -7,6 +7,10 @@ import '../../helpers/timezone_helper.dart';
 import '../../services/offline_database_service.dart';
 
 class AttendanceService {
+  static final AttendanceService _instance = AttendanceService._internal();
+  factory AttendanceService() => _instance;
+  AttendanceService._internal();
+
   final SupabaseClient _supabase = Supabase.instance.client;
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
 

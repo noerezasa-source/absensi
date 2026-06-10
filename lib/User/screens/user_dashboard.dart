@@ -15,6 +15,7 @@ import '../../helpers/timezone_helper.dart';
 import '../../Petugas/screens/selfie_attendance_flow_page.dart';
 import '../../helpers/language_helper.dart';
 import '../../services/timezone_service.dart';
+import 'join_department_screen.dart';
 
 class UserDashboardPage extends StatefulWidget {
   final int organizationMemberId;
@@ -39,14 +40,12 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   final BiometricService _biometricService = BiometricService();
   final RoleService _roleService = RoleService();
   final _supabase = Supabase.instance.client;
-  final TimezoneService _timezoneService = TimezoneService();
 
   bool _hasRegisteredFace = false;
   bool _isCheckingFace = false;
-  bool _isLoadingAttendance = true;
-  String? _errorMessage;
   Map<String, dynamic>? _userProfile;
   bool _isDarkMode = false;
+  String? _errorMessage;
 
   // Calendar & Daily Events
   DateTime _focusedDay = DateTime.now();
@@ -598,7 +597,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
   Future<void> _loadAttendanceData(DateTime focusedMonth) async {
     _loadUserProfile();
     setState(() {
-      _isLoadingAttendance = true;
+      var _isLoadingAttendance = true;
     });
 
     try {
@@ -632,7 +631,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
       if (mounted) {
         _processAttendanceRecords(records);
         setState(() {
-          _isLoadingAttendance = false;
+          var _isLoadingAttendance = false;
         });
       }
     } catch (e) {
@@ -895,13 +894,30 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   String _getFullName() {
     if (_userProfile == null) return 'Loading...';
-    final firstName = _userProfile!['first_name'] ?? '';
-    final middleName = _userProfile!['middle_name'] ?? '';
-    final lastName = _userProfile!['last_name'] ?? '';
+    final firstName = _userProfile!['first_name'] as String? ?? '';
+    final middleName = _userProfile!['middle_name'] as String? ?? '';
+    final lastName = _userProfile!['last_name'] as String? ?? '';
+    final displayName = (_userProfile!['display_name'] as String?)?.trim();
+
+    String fullName = '';
     if (middleName.isNotEmpty) {
-      return '$firstName $middleName $lastName'.trim();
+      fullName = '$firstName $middleName $lastName'.trim();
+    } else {
+      fullName = '$firstName $lastName'.trim();
     }
-    return '$firstName $lastName'.trim();
+
+    // Format: "Nama Panjang - Nama Panggilan"
+    if (fullName.isNotEmpty &&
+        displayName != null &&
+        displayName.isNotEmpty &&
+        fullName != displayName) {
+      return '$fullName - $displayName';
+    } else if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    } else if (fullName.isNotEmpty) {
+      return fullName;
+    }
+    return 'User';
   }
 
   String? _resolveProfilePhotoUrl(String? storedPath) {
@@ -1465,34 +1481,133 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                             ),
                           ),
                           const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.calendar_today,
-                                  color: Colors.white,
-                                  size: 14,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 5,
                                 ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _getCurrentDate(),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w500,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.calendar_today,
+                                      color: Colors.white,
+                                      size: 14,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      _getCurrentDate(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              if (widget.memberData['department'] != null &&
+                                  widget.memberData['department'].toString().isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.business_center,
+                                        color: Colors.white,
+                                        size: 14,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        widget.memberData['department'],
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              else
+                                GestureDetector(
+                                  onTap: () async {
+                                    final result = await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => JoinDepartmentScreen(
+                                          organizationMemberId: widget.organizationMemberId,
+                                          memberData: widget.memberData,
+                                        ),
+                                      ),
+                                    );
+                                    if (result == true) {
+                                      // Refresh dashboard to show new department
+                                      if (mounted) {
+                                        Navigator.pushReplacement(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => UserDashboardPage(
+                                              organizationMemberId: widget.organizationMemberId,
+                                              memberData: widget.memberData, // We should ideally refresh memberData
+                                              isDarkMode: _isDarkMode,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: Colors.orange.withValues(alpha: 0.5),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.add_business,
+                                          color: Colors.orangeAccent,
+                                          size: 14,
+                                        ),
+                                        SizedBox(width: 6),
+                                        Text(
+                                          'Gabung Dept',
+                                          style: TextStyle(
+                                            color: Colors.orangeAccent,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ],
-                            ),
+                            ],
                           ),
                         ],
                       ),
@@ -2831,7 +2946,7 @@ class _UserDashboardPageState extends State<UserDashboardPage>
 
   Widget _buildEventListItem(Map<String, dynamic> event) {
     final eventColor = _getEventColor(event['type']);
-    final photoUrl = _extractPhotoUrl(event);
+    _extractPhotoUrl(event); // retain call for side effects (caching)
 
     return Container(
       decoration: BoxDecoration(

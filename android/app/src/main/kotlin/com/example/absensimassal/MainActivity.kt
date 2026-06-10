@@ -316,7 +316,11 @@ class MainActivity : FlutterActivity() {
         override fun extractError(i: Int) {
             try {
                 Log.e("FingerSDK", "extractError: $i")
-                sendToFlutter("status", "Extract error: $i")
+                if (bRegister) {
+                    sendToFlutter("status", "Extract error: $i (Lifted too fast)")
+                } else {
+                    sendToFlutter("status", "Extract error: $i")
+                }
             } catch (e: Throwable) {
                 Log.e("FingerSDK", "CRASH PREVENTED in extractError: ${e.message}")
             }
@@ -335,9 +339,8 @@ class MainActivity : FlutterActivity() {
                 return
             }
             if (enroll_index > 0 && ZKFingerService.verify(regtemparray[enroll_index - 1], template) <= 0) {
-                sendToFlutter("status", "Please press same finger 3 times")
-                bRegister = false
-                enroll_index = 0
+                sendToFlutter("status", "Finger mismatch or lifted too fast")
+                // Do not reset bRegister and enroll_index, allow retry for this step
                 return
             }
             System.arraycopy(template, 0, regtemparray[enroll_index], 0, 2048)

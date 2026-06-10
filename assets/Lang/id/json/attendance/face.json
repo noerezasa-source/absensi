@@ -27,5 +27,9 @@
     "error": "Error",
     "done": "Selesai",
     "break_in": "Istirahat Masuk",
-    "break_out": "Istirahat Keluar"
+    "break_out": "Istirahat Keluar",
+    "init_failed": "Gagal inisialisasi sistem: ",
+    "refreshing_faces": "Menyegarkan data wajah...",
+    "refresh_success": "Data wajah berhasil diperbarui!",
+    "refresh_failed": "Gagal memperbarui data wajah"
 }

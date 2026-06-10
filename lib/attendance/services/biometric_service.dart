@@ -11,6 +11,10 @@ import '../../services/offline_database_service.dart';
 import '../../helpers/timezone_helper.dart';
 
 class BiometricService {
+  static final BiometricService _instance = BiometricService._internal();
+  factory BiometricService() => _instance;
+  BiometricService._internal();
+
   final SupabaseClient _supabase = Supabase.instance.client;
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
 
@@ -125,7 +129,6 @@ class BiometricService {
       throw Exception('Failed to register face template: $e');
     }
   }
-
 
   Future<BiometricData?> getActiveFaceTemplate(int organizationMemberId) async {
     try {

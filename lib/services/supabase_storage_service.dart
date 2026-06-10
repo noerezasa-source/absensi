@@ -3,6 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseStorageService {
+  static final SupabaseStorageService _instance =
+      SupabaseStorageService._internal();
+  factory SupabaseStorageService() => _instance;
+  SupabaseStorageService._internal();
+
   final SupabaseClient _supabase = Supabase.instance.client;
 
   // Upload foto attendance
@@ -63,6 +68,10 @@ class SupabaseStorageService {
       // This assumes RLS allows writing to folders based on member_id (or is public/service role).
       final filePath = '$organizationMemberId/$fileName';
 
+      debugPrint('📤 Uploading face template to bucket: face-templates');
+      debugPrint('📤 File path: $filePath');
+      debugPrint('📤 File size: ${await imageFile.length()} bytes');
+
       await _supabase.storage
           .from('face-templates')
           .upload(filePath, imageFile);
@@ -71,8 +80,20 @@ class SupabaseStorageService {
           .from('face-templates')
           .getPublicUrl(filePath);
 
+      debugPrint('✅ Upload successful: $publicUrl');
       return publicUrl;
     } catch (e) {
+      debugPrint('❌ Failed to upload face template: $e');
+      if (e.toString().contains('Bucket not found')) {
+        debugPrint(
+          '⚠️ CRITICAL: Bucket "face-templates" not found. Please verify bucket ID in Supabase Storage.',
+        );
+      }
+      if (e.toString().contains('RLS')) {
+        debugPrint(
+          '⚠️ RLS policy issue: Check storage policies for face-templates bucket',
+        );
+      }
       throw Exception('Failed to upload face template: $e');
     }
   }

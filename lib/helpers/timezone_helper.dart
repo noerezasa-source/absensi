@@ -295,7 +295,7 @@ class TimezoneHelper {
 
   /// Format date with full month name
   static String formatDateLong(DateTime date, {String? locale}) {
-    final formatter = DateFormat('EEEE, dd MMMM yyyy', locale ?? 'id_ID');
+    final formatter = DateFormat('EEEE, dd MMMM yyyy', locale ?? Intl.defaultLocale ?? 'id_ID');
     return formatter.format(date);
   }
 

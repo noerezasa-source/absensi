@@ -27,5 +27,9 @@
     "error": "Error",
     "done": "Done",
     "break_in": "Break In",
-    "break_out": "Break Out"
+    "break_out": "Break Out",
+    "init_failed": "System initialization failed: ",
+    "refreshing_faces": "Refreshing face data...",
+    "refresh_success": "Face data updated successfully!",
+    "refresh_failed": "Failed to update face data"
 }

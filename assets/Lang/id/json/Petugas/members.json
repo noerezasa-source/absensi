@@ -25,7 +25,7 @@
     "invalid_page_number": "Harap masukkan nomor halaman antara 1 dan {totalPages}",
     "member": "Anggota",
     "no_department": "Tidak Ada Departemen",
-    "department": "Departemen",
+    "all": "Semua",
     "employee_id": "ID Karyawan",
     "face_not_registered_yet": "Wajah Anda belum terdaftar.",
     "register_face_for_attendance": "Silakan daftarkan wajah Anda agar absensi berjalan lancar.",
@@ -43,5 +43,26 @@
     "waiting_for_card": "Menunggu kartu...",
     "save_rfid_card": "Simpan Kartu",
     "card_already_registered_other": "Kartu ini sudah terdaftar untuk anggota lain.",
-    "rfid_card_registered_success": "Kartu RFID berhasil didaftarkan!"
+    "rfid_card_registered_success": "Kartu RFID berhasil didaftarkan!",
+    "department": {
+        "title": "Manajemen Departemen",
+        "name": "Nama Departemen",
+        "add": "Tambah Departemen",
+        "edit": "Edit Departemen",
+        "delete": "Hapus Departemen",
+        "save": "Simpan",
+        "cancel": "Batal",
+        "search": "Cari departemen...",
+        "no_departments": "Tidak ada departemen tersedia",
+        "enter_name": "Masukkan nama departemen",
+        "added_success": "Departemen berhasil ditambahkan",
+        "added_failed": "Gagal menambahkan departemen",
+        "updated_success": "Departemen berhasil diperbarui",
+        "updated_failed": "Gagal memperbarui departemen",
+        "deleted_success": "Departemen berhasil dihapus",
+        "deleted_failed": "Gagal menghapus departemen",
+        "delete_confirm": "Konfirmasi Hapus",
+        "delete_warning": "Apakah Anda yakin ingin menghapus departemen ini? Tindakan ini tidak dapat dibatalkan.",
+        "retry": "Coba Lagi"
+    }
 }

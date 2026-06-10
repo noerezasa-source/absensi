@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "node",
+      "args": [
+        "/home/the-ardyansa/Abensimassalv1/node_modules/@supabase/mcp-server-supabase/dist/index.js"
+      ],
+      "env": {
+        "SUPABASE_URL": "https://oovtwiioyejefifsgrtj.supabase.co",
+        "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vdnR3aWlveWVqZWZpZnNncnRqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDAxNjQxNiwiZXhwIjoyMDk1NTkyNDE2fQ.NAEWTNrlIZMcvxX08BYYPPOY2JrSVeFIbjLceqMJaQs"
+      }
+    }
+  }
+}

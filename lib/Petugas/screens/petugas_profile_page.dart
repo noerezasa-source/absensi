@@ -445,6 +445,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
             'date_of_birth': _selectedDateOfBirth?.toIso8601String().split(
               'T',
             )[0],
+            'updated_at': DateTime.now().toIso8601String(),
           })
           .eq('id', userId);
 
@@ -568,14 +569,30 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
 
   String _getFullName() {
     if (_userProfile == null) return 'Loading...';
-    final firstName = _userProfile!['first_name'] ?? '';
-    final middleName = _userProfile!['middle_name'] ?? '';
-    final lastName = _userProfile!['last_name'] ?? '';
+    final firstName = _userProfile!['first_name'] as String? ?? '';
+    final middleName = _userProfile!['middle_name'] as String? ?? '';
+    final lastName = _userProfile!['last_name'] as String? ?? '';
+    final displayName = (_userProfile!['display_name'] as String?)?.trim();
 
+    String fullName = '';
     if (middleName.isNotEmpty) {
-      return '$firstName $middleName $lastName'.trim();
+      fullName = '$firstName $middleName $lastName'.trim();
+    } else {
+      fullName = '$firstName $lastName'.trim();
     }
-    return '$firstName $lastName'.trim();
+
+    // Format: "Nama Panjang - Nama Panggilan"
+    if (fullName.isNotEmpty &&
+        displayName != null &&
+        displayName.isNotEmpty &&
+        fullName != displayName) {
+      return '$fullName - $displayName';
+    } else if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    } else if (fullName.isNotEmpty) {
+      return fullName;
+    }
+    return 'User';
   }
 
   String? _getProfilePhotoUrl() {

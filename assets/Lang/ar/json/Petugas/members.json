@@ -31,7 +31,6 @@
     "invalid_page_number": "رقم صفحة غير صالح",
     "member": "عضو",
     "no_department": "لا يوجد قسم",
-    "department": "القسم",
     "employee_id": "معرف الموظف",
     "face_not_registered_yet": "لم يتم تسجيل الوجه بعد",
     "register_face_for_attendance": "تسجيل الوجه للحضور",
@@ -48,5 +47,26 @@
     "waiting_for_card": "بانتظار البطاقة...",
     "save_rfid_card": "حفظ بطاقة RFID",
     "card_already_registered_other": "البطاقة مسجلة لعضو آخر",
-    "rfid_card_registered_success": "تم تسجيل بطاقة RFID بنجاح"
+    "rfid_card_registered_success": "تم تسجيل بطاقة RFID بنجاح",
+    "department": {
+        "title": "إدارة الأقسام",
+        "name": "اسم القسم",
+        "add": "إضافة قسم",
+        "edit": "تعديل القسم",
+        "delete": "حذف القسم",
+        "save": "حفظ",
+        "cancel": "إلغاء",
+        "search": "البحث في الأقسام...",
+        "no_departments": "لا توجد أقسام متاحة",
+        "enter_name": "الرجاء إدخال اسم القسم",
+        "added_success": "تم إضافة القسم بنجاح",
+        "added_failed": "فشل إضافة القسم",
+        "updated_success": "تم تحديث القسم بنجاح",
+        "updated_failed": "فشل تحديث القسم",
+        "deleted_success": "تم حذف القسم بنجاح",
+        "deleted_failed": "فشل حذف القسم",
+        "delete_confirm": "تأكيد الحذف",
+        "delete_warning": "هل أنت متأكد من حذف هذا القسم؟ لا يمكن التراجع عن هذا الإجراء.",
+        "retry": "إعادة المحاولة"
+    }
 }

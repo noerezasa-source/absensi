@@ -13,6 +13,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../../helpers/language_helper.dart';
 import '../services/biometric_service.dart';
 import '../services/face_recognition_tflite_service.dart';
+import '../painters/face_detector_painter.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../services/attendance_service.dart';
 import '../../helpers/sound_helper.dart';
@@ -23,58 +24,6 @@ import '../../models/offline_attendance.dart';
 import '../../models/work_schedule_models.dart';
 import 'manual_check_page.dart';
 import '../../models/face_tracking_state.dart'; // ✅ NEW: State Machine Enum
-
-/// ✅ NEW: Helper for Parallel Frame Processing
-class _FrameSnapshot {
-  final Uint8List bytes;
-  final int width;
-  final int height;
-  final int rotation;
-
-  _FrameSnapshot({
-    required this.bytes,
-    required this.width,
-    required this.height,
-    required this.rotation,
-  });
-}
-
-/// ✅ NEW: Top-level function for multi-threaded weighted averaging (compute)
-List<double> _computeWeightedAverage(Map<String, dynamic> args) {
-  final List<List<double>> embeddings = (args['embeddings'] as List)
-      .cast<List<double>>();
-  final List<double> weights = (args['weights'] as List).cast<double>();
-
-  if (embeddings.isEmpty) return [];
-
-  final embeddingSize = embeddings.first.length;
-  final averaged = List<double>.filled(embeddingSize, 0.0);
-  double totalWeight = 0.0;
-
-  for (int j = 0; j < embeddings.length; j++) {
-    final weight = weights[j];
-    totalWeight += weight;
-    for (int i = 0; i < embeddingSize; i++) {
-      averaged[i] += embeddings[j][i] * weight;
-    }
-  }
-
-  if (totalWeight == 0) return averaged;
-
-  for (int i = 0; i < embeddingSize; i++) {
-    averaged[i] /= totalWeight;
-  }
-
-  // Re-normalize
-  double sumSquares = 0.0;
-  for (var v in averaged) {
-    sumSquares += v * v;
-  }
-  final double magnitude = sqrt(sumSquares);
-  return magnitude < 1e-6
-      ? averaged
-      : averaged.map((v) => v / magnitude).toList();
-}
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
@@ -151,17 +100,21 @@ class _FaceAttendanceMultiUserPageState
   final Map<int, Rect> _lastFaceRects = {};
   final Map<int, DateTime> _cooldowns = {};
 
+  // ✅ NEW: Centroid Tracker State
+  final Map<int, Offset> _activeTrackers = {};
+  int _nextTrackerId = 1;
+  static const double _maxTrackingDistance = 150.0;
+
   // Configuration
   static const int _requiredStableFrames =
-      0; // ⚡ INSTANT: Recognition triggers immediately upon detection.
+      3; // ⚡ STABLE: Require 3 stable frames before recognition (prevents accidental triggers)
   static const double _stabilityThreshold =
       300.0; // 🚀 INCREASED: More tolerant of motion (was 200.0)
   static const Duration _recognitionCooldown = Duration(
     seconds: 2,
   ); // ✅ FASTER: 2s cooldown for quicker re-recognition
 
-  // ✅ Adaptive Multi-Frame Configuration (Speed + Accuracy Balance)
-  static const int _multiFrameCount = 2;
+  // ✅ Adaptive Configuration (Speed + Accuracy Balance)
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
   static const Duration _sameModeCooldown = Duration(minutes: 5);
   final Map<String, DateTime> _lastAttendanceTime = {}; // Key: "memberId_mode"
@@ -230,11 +183,29 @@ class _FaceAttendanceMultiUserPageState
         _initStatus = 'Warming up biometric cache...';
       });
       await Future.wait([
-        _getCurrentLocation(),
-        _checkConnectivity(),
-        _biometricService.getAllActiveFaceTemplatesWithUserInfo(
-          widget.organizationId,
+        _getCurrentLocation().timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            debugPrint('⚠️ Location timeout - continuing without location');
+            return;
+          },
         ),
+        _checkConnectivity().timeout(
+          const Duration(seconds: 3),
+          onTimeout: () {
+            debugPrint('⚠️ Connectivity check timeout - continuing');
+            return;
+          },
+        ),
+        _biometricService
+            .getAllActiveFaceTemplatesWithUserInfo(widget.organizationId)
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                debugPrint('⚠️ Face templates load timeout - continuing');
+                return [];
+              },
+            ),
       ]);
 
       // Final: Ready (100%)
@@ -257,7 +228,10 @@ class _FaceAttendanceMultiUserPageState
       }
     } catch (e) {
       debugPrint('❌ Initialization failed: $e');
-      _showMessage('Gagal inisialisasi system: $e', MessageType.error);
+      _showMessage(
+        '${AppLanguage.tr('attendance.face.init_failed')}$e',
+        MessageType.error,
+      );
     }
   }
 
@@ -269,6 +243,7 @@ class _FaceAttendanceMultiUserPageState
     _isProcessing = false;
     _faceDataMap.clear();
     _detectedFaces.clear();
+    _recentAttendanceList.clear();
     _cameraController?.dispose();
     // ❌ REMOVED: _faceService.dispose(); // KEEP MODEL PERSISTENT IN MEMORY
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -510,7 +485,7 @@ class _FaceAttendanceMultiUserPageState
     setState(() {
       _isRefreshing = true;
       _showMessage(
-        'Menyegarkan data wajah...',
+        AppLanguage.tr('attendance.face.refreshing_faces'),
         MessageType.loading,
         seconds: 60,
       ); // Long timeout
@@ -519,12 +494,18 @@ class _FaceAttendanceMultiUserPageState
     try {
       await _biometricService.refreshCache(widget.organizationId);
       if (mounted) {
-        _showMessage('Data wajah berhasil diperbarui!', MessageType.success);
+        _showMessage(
+          AppLanguage.tr('attendance.face.refresh_success'),
+          MessageType.success,
+        );
       }
     } catch (e) {
       debugPrint('Refresh faces error: $e');
       if (mounted) {
-        _showMessage('Gagal memperbarui data wajah', MessageType.error);
+        _showMessage(
+          AppLanguage.tr('attendance.face.refresh_failed'),
+          MessageType.error,
+        );
       }
     } finally {
       if (mounted) {
@@ -637,14 +618,15 @@ class _FaceAttendanceMultiUserPageState
       );
       // ✅ USE SHARED SERVICE: Prevents 2-3s delay from reloading models
       _faceService = await _biometricService.getFaceService();
+      debugPrint('✅ Face service initialized successfully');
       _clearMessage();
     } catch (e) {
-      debugPrint('Failed to init TFLite: $e');
+      debugPrint('❌ Failed to init TFLite: $e');
       if (mounted) {
         _showMessage(
-          AppLanguage.tr('attendance.face.failed_init'),
+          'Face service init failed: $e',
           MessageType.error,
-          seconds: 5,
+          seconds: 10,
         );
       }
     }
@@ -658,7 +640,9 @@ class _FaceAttendanceMultiUserPageState
     }
 
     try {
+      debugPrint('📷 Initializing camera...');
       final cameras = await availableCameras();
+      debugPrint('📷 Available cameras: ${cameras.length}');
       if (cameras.isEmpty) {
         throw Exception('No cameras available');
       }
@@ -667,6 +651,7 @@ class _FaceAttendanceMultiUserPageState
         (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
+      debugPrint('📷 Selected camera: ${frontCamera.name}');
 
       // ✅ FIXED: Dispose old controller if exists
       if (_cameraController != null) {
@@ -680,7 +665,7 @@ class _FaceAttendanceMultiUserPageState
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup
-                  .nv21 // Android standard
+                  .yuv420 // YUV420 untuk ML Kit
             : ImageFormatGroup.bgra8888, // iOS standard
       );
 
@@ -690,6 +675,7 @@ class _FaceAttendanceMultiUserPageState
           throw TimeoutException('Camera initialization timeout');
         },
       );
+      debugPrint('✅ Camera initialized successfully');
 
       try {
         await _cameraController!.setFocusMode(FocusMode.auto);
@@ -701,16 +687,13 @@ class _FaceAttendanceMultiUserPageState
         setState(() {
           _isCameraInitialized = true;
         });
+        debugPrint('✅ Starting continuous scan...');
         _startContinuousScan();
       }
     } catch (e) {
-      debugPrint('Camera error: $e');
+      debugPrint('❌ Camera error: $e');
       if (mounted) {
-        _showMessage(
-          AppLanguage.tr('attendance.face.camera_error'),
-          MessageType.error,
-          seconds: 5,
-        );
+        _showMessage('Camera error: $e', MessageType.error, seconds: 10);
         setState(() {
           _isCameraInitialized = false;
         });
@@ -743,14 +726,18 @@ class _FaceAttendanceMultiUserPageState
     if (_cameraController == null ||
         !_cameraController!.value.isInitialized ||
         _isStreaming) {
+      debugPrint(
+        '⚠️ Cannot start scan: camera=${_cameraController != null}, initialized=${_cameraController?.value.isInitialized}, streaming=$_isStreaming',
+      );
       return;
     }
 
     try {
       _isStreaming = true;
+      debugPrint('✅ Starting image stream...');
       _cameraController!.startImageStream(_processCameraImage);
     } catch (e) {
-      debugPrint('Error starting image stream: $e');
+      debugPrint('❌ Error starting image stream: $e');
       _isStreaming = false;
     }
   }
@@ -771,31 +758,40 @@ class _FaceAttendanceMultiUserPageState
     _isProcessing = true;
 
     try {
-      final inputImage = await _inputImageFromCameraImage(image);
+      final inputImage = _inputImageFromCameraImage(image);
       if (inputImage == null) {
+        debugPrint('⚠️ InputImage is null');
         _isProcessing = false;
         return;
       }
 
+      Uint8List? currentFrameBytes;
+      int currentWidth = image.width;
+      int currentHeight = image.height;
+      int currentRotation = 0;
+
       if (inputImage.bytes != null) {
-        _lastStreamBytes = inputImage.bytes;
-        _lastStreamWidth = image.width;
-        _lastStreamHeight = image.height;
+        currentFrameBytes = inputImage.bytes;
         if (inputImage.metadata?.rotation != null) {
           switch (inputImage.metadata!.rotation) {
             case InputImageRotation.rotation0deg:
-              _lastStreamRotation = 0;
+              currentRotation = 0;
             case InputImageRotation.rotation90deg:
-              _lastStreamRotation = 90;
+              currentRotation = 90;
             case InputImageRotation.rotation180deg:
-              _lastStreamRotation = 180;
+              currentRotation = 180;
             case InputImageRotation.rotation270deg:
-              _lastStreamRotation = 270;
+              currentRotation = 270;
           }
         }
       }
 
       final faces = await _faceService.detectFacesFromInputImage(inputImage);
+
+      // Debug: Log face detection
+      if (faces.isNotEmpty) {
+        debugPrint('👤 Detected ${faces.length} face(s)');
+      }
 
       // ✅ Mode Switching Logic (Hysteresis)
       if (faces.isEmpty) {
@@ -812,9 +808,19 @@ class _FaceAttendanceMultiUserPageState
         }
       }
 
+      // ⚡ SYNC COPY BYTES FOR CONCURRENT PROCESSING
+      Uint8List? copiedBytes;
+      if (currentFrameBytes != null && faces.isNotEmpty) {
+        copiedBytes = Uint8List.fromList(currentFrameBytes);
+      }
+
       _handleStreamFaces(
         faces,
         Size(image.height.toDouble(), image.width.toDouble()),
+        copiedBytes,
+        currentWidth,
+        currentHeight,
+        currentRotation,
       );
     } catch (e) {
       debugPrint('Error processing stream: $e');
@@ -823,7 +829,7 @@ class _FaceAttendanceMultiUserPageState
     }
   }
 
-  Future<InputImage?> _inputImageFromCameraImage(CameraImage image) async {
+  InputImage? _inputImageFromCameraImage(CameraImage image) {
     if (_cameraController == null) return null;
 
     final camera = _cameraController!.description;
@@ -835,13 +841,10 @@ class _FaceAttendanceMultiUserPageState
       rotation = InputImageRotation.rotation0deg;
     } else if (Platform.isAndroid) {
       var rotationCompensation =
-          _orientations[_cameraController!.value.deviceOrientation];
-      if (rotationCompensation == null) return null;
+          _orientations[_cameraController!.value.deviceOrientation] ?? 0;
       if (camera.lensDirection == CameraLensDirection.front) {
-        // Front camera
         rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
       } else {
-        // Back camera
         rotationCompensation =
             (sensorOrientation - rotationCompensation + 360) % 360;
       }
@@ -849,32 +852,48 @@ class _FaceAttendanceMultiUserPageState
     }
     if (rotation == null) return null;
 
-    // Format
-    InputImageFormat? format = InputImageFormatValue.fromRawValue(
-      image.format.raw,
-    );
-    if (format == null) return null;
-
-    // Bytes
-    // Bytes
-    final Uint8List bytes;
-    int bytesPerRow;
-
-    if (Platform.isAndroid && image.format.group == ImageFormatGroup.yuv420) {
-      // ✅ OPTIMIZATION: Remove expensive 'compute' isolate overhead for the detection loop.
-      // Standard YUV420 concatenation is extremely fast in the main thread and natively supported by ML Kit.
+    // ✅ CRITICAL FIX: Convert to NV21 — the ONLY format reliably supported
+    // by Google ML Kit on all Android devices.
+    if (Platform.isAndroid) {
       try {
-        bytes = _concatenatePlanes(image.planes);
-        format = InputImageFormat.yuv420;
-        bytesPerRow = image.planes.first.bytesPerRow;
-      } catch (e) {
-        debugPrint('Error in YUV concatenation: $e');
+        // Validate planes before conversion
+        if (image.planes.length < 3) {
+          debugPrint('⚠️ Not enough planes for YUV420: ${image.planes.length}');
+          return null;
+        }
+
+        if (image.planes[0].bytes.isEmpty ||
+            image.planes[1].bytes.isEmpty ||
+            image.planes[2].bytes.isEmpty) {
+          debugPrint('⚠️ One or more planes are empty');
+          return null;
+        }
+
+        final nv21Bytes = _yuv420ToNv21(image);
+        return InputImage.fromBytes(
+          bytes: nv21Bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: rotation,
+            format: InputImageFormat.nv21,
+            bytesPerRow: image.width,
+          ),
+        );
+      } catch (e, stackTrace) {
+        debugPrint('❌ NV21 conversion error: $e');
+        debugPrint('Stack trace: $stackTrace');
         return null;
       }
-    } else {
-      bytes = _concatenatePlanes(image.planes);
-      bytesPerRow = image.planes.first.bytesPerRow;
     }
+
+    // iOS fallback
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    final bytes = allBytes.done().buffer.asUint8List();
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
 
     return InputImage.fromBytes(
       bytes: bytes,
@@ -882,23 +901,96 @@ class _FaceAttendanceMultiUserPageState
         size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: rotation,
         format: format,
-        bytesPerRow: bytesPerRow, // ✅ Use correct stride
+        bytesPerRow: image.planes.first.bytesPerRow,
       ),
     );
   }
 
-  // Hook to capture bytes from processCameraImage
-  Uint8List? _lastStreamBytes;
-  int _lastStreamWidth = 0;
-  int _lastStreamHeight = 0;
-  int _lastStreamRotation = 0; // NEW: Rotation in degrees
+  /// Converts a YUV420 CameraImage to NV21 byte array.
+  /// NV21 layout: Y plane (width*height bytes) + interleaved V,U plane.
+  /// Handles both planar (pixelStride=1) and semi-planar (pixelStride=2) formats.
+  Uint8List _yuv420ToNv21(CameraImage image) {
+    final int width = image.width;
+    final int height = image.height;
+    final int ySize = width * height;
+    final int uvSize = width * height ~/ 2;
+    final Uint8List nv21 = Uint8List(ySize + uvSize);
 
-  Uint8List _concatenatePlanes(List<Plane> planes) {
-    final WriteBuffer allBytes = WriteBuffer();
-    for (Plane plane in planes) {
-      allBytes.putUint8List(plane.bytes);
+    // Debug: Log plane information
+    debugPrint(
+      '🔍 NV21 conversion: width=$width, height=$height, planes=${image.planes.length}',
+    );
+    for (int i = 0; i < image.planes.length; i++) {
+      debugPrint(
+        '  Plane $i: bytes=${image.planes[i].bytes.length}, bytesPerRow=${image.planes[i].bytesPerRow}, bytesPerPixel=${image.planes[i].bytesPerPixel}',
+      );
     }
-    return allBytes.done().buffer.asUint8List();
+
+    // Validate planes
+    if (image.planes.length < 3) {
+      throw Exception(
+        'Expected 3 planes for YUV420, got ${image.planes.length}',
+      );
+    }
+
+    // Copy Y plane
+    final Uint8List yPlane = image.planes[0].bytes;
+    final int yRowStride = image.planes[0].bytesPerRow;
+
+    if (yPlane.length < ySize) {
+      debugPrint(
+        '⚠️ Y plane too small: ${yPlane.length} < $ySize, using available data',
+      );
+    }
+
+    if (yRowStride == width) {
+      final copyLength = yPlane.length < ySize ? yPlane.length : ySize;
+      nv21.setRange(0, copyLength, yPlane);
+    } else {
+      for (int row = 0; row < height; row++) {
+        final int srcOffset = row * yRowStride;
+        final int dstOffset = row * width;
+        // Guard against Y plane being shorter than expected
+        final int available = yPlane.length - srcOffset;
+        final int toCopy = available < width ? available : width;
+        if (toCopy <= 0) break;
+        nv21.setRange(dstOffset, dstOffset + toCopy, yPlane, srcOffset);
+      }
+    }
+
+    // Handle UV planes
+    final Uint8List uPlane = image.planes[1].bytes;
+    final Uint8List vPlane = image.planes[2].bytes;
+    final int uvRowStride = image.planes[1].bytesPerRow;
+    final int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
+
+    debugPrint('🔍 UV: uvRowStride=$uvRowStride, uvPixelStride=$uvPixelStride');
+
+    int pos = ySize;
+    final int uvRows = height ~/ 2;
+    final int uvCols = width ~/ 2;
+
+    for (int row = 0; row < uvRows; row++) {
+      for (int col = 0; col < uvCols; col++) {
+        final int uvIndex = row * uvRowStride + col * uvPixelStride;
+
+        // Check bounds
+        if (uvIndex >= 0 &&
+            uvIndex < vPlane.length &&
+            uvIndex < uPlane.length) {
+          nv21[pos++] = vPlane[uvIndex]; // V first (NV21)
+          if (pos < nv21.length) {
+            nv21[pos++] = uPlane[uvIndex]; // then U
+          }
+        } else {
+          // Fill with neutral chroma (128) if out of bounds
+          if (pos < nv21.length) nv21[pos++] = 128;
+          if (pos < nv21.length) nv21[pos++] = 128;
+        }
+      }
+    }
+
+    return nv21;
   }
 
   static final Map<DeviceOrientation, int> _orientations = {
@@ -908,21 +1000,59 @@ class _FaceAttendanceMultiUserPageState
     DeviceOrientation.landscapeRight: 270,
   };
 
-  // ✅ REFACTORED: State Machine Core Logic
-  Future<void> _handleStreamFaces(List<Face> faces, Size imageSize) async {
+  // ✅ REFACTORED: State Machine Core Logic + Centroid Tracker
+  void _handleStreamFaces(
+    List<Face> faces,
+    Size imageSize,
+    Uint8List? frameBytes,
+    int width,
+    int height,
+    int rotation,
+  ) {
     final now = DateTime.now();
 
-    // 1. Clean up stale states (faces that left the frame)
-    final currentTrackingIds = faces.map((f) => f.trackingId ?? -1).toSet();
-    _faceStates.removeWhere(
-      (id, _) => !currentTrackingIds.contains(id) && id != -1,
-    );
-    _stabilityCounters.removeWhere(
-      (id, _) => !currentTrackingIds.contains(id) && id != -1,
-    );
-    _lastFaceRects.removeWhere(
-      (id, _) => !currentTrackingIds.contains(id) && id != -1,
-    );
+    // 1. Centroid Tracking to Assign Persistent IDs
+    final Map<int, Face> currentTrackedFaces = {};
+    final Set<int> usedTrackerIds = {};
+
+    for (final face in faces) {
+      int? assignedId = face.trackingId;
+
+      // If ML Kit doesn't provide trackingId, use Centroid Tracking
+      if (assignedId == null) {
+        final currentCentroid = face.boundingBox.center;
+        double minDistance = double.infinity;
+        int? closestId;
+
+        _activeTrackers.forEach((id, prevCentroid) {
+          if (!usedTrackerIds.contains(id)) {
+            final distance = (currentCentroid - prevCentroid).distance;
+            if (distance < minDistance && distance < _maxTrackingDistance) {
+              minDistance = distance;
+              closestId = id;
+            }
+          }
+        });
+
+        if (closestId != null) {
+          assignedId = closestId;
+        } else {
+          assignedId = _nextTrackerId++;
+        }
+      }
+
+      _activeTrackers[assignedId!] = face.boundingBox.center;
+      usedTrackerIds.add(assignedId);
+      currentTrackedFaces[assignedId] = face;
+    }
+
+    // Clean up stale trackers
+    _activeTrackers.removeWhere((id, _) => !usedTrackerIds.contains(id));
+
+    // 2. Clean up stale states
+    _faceStates.removeWhere((id, _) => !usedTrackerIds.contains(id));
+    _stabilityCounters.removeWhere((id, _) => !usedTrackerIds.contains(id));
+    _lastFaceRects.removeWhere((id, _) => !usedTrackerIds.contains(id));
 
     // Check global cooldowns
     final activeCooldowns = Map<int, DateTime>.from(_cooldowns);
@@ -933,21 +1063,16 @@ class _FaceAttendanceMultiUserPageState
       }
     });
 
-    if (faces.isEmpty) {
+    if (currentTrackedFaces.isEmpty) {
       if (mounted) setState(() => _detectedFaces = []);
       return;
     }
 
     final displayFaces = <Map<String, dynamic>>[];
 
-    for (final face in faces) {
-      // ✅ MULTI-USER FIX: Assign a synthetic ID if ML Kit doesn't provide one.
-      // This ensures every detected face can enter the tracking state machine.
-      final id = face.trackingId ??
-          (face.boundingBox.left.toInt() * 1000 + face.boundingBox.top.toInt())
-              .abs() %
-          99000 +
-          1000;
+    for (final entry in currentTrackedFaces.entries) {
+      final id = entry.key;
+      final face = entry.value;
 
       // Initialize state if new
       _faceStates.putIfAbsent(id, () => FaceTrackingState.idle);
@@ -958,7 +1083,7 @@ class _FaceAttendanceMultiUserPageState
         if (now.isBefore(_cooldowns[id]!)) {
           // Still in cooldown, just show box (gray)
           displayFaces.add(
-            _buildFaceDisplayData(face, FaceTrackingState.cooldown),
+            _buildFaceDisplayData(face, id, FaceTrackingState.cooldown),
           );
           continue;
         } else {
@@ -975,9 +1100,17 @@ class _FaceAttendanceMultiUserPageState
           _stabilityCounters[id] = 0;
           _lastFaceRects[id] = face.boundingBox;
           // Trigger Inference Immediately
-          _triggerRecognition(face, imageSize);
+          _triggerRecognition(
+            face,
+            id,
+            imageSize,
+            frameBytes,
+            width,
+            height,
+            rotation,
+          );
           displayFaces.add(
-            _buildFaceDisplayData(face, FaceTrackingState.locked),
+            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
           );
           break;
 
@@ -997,33 +1130,38 @@ class _FaceAttendanceMultiUserPageState
           if ((_stabilityCounters[id] ?? 0) >= _requiredStableFrames) {
             _faceStates[id] = FaceTrackingState.locked;
             // Trigger Inference
-            _triggerRecognition(face, imageSize);
+            _triggerRecognition(
+              face,
+              id,
+              imageSize,
+              frameBytes,
+              width,
+              height,
+              rotation,
+            );
           }
 
           displayFaces.add(
-            _buildFaceDisplayData(face, FaceTrackingState.tracking),
+            _buildFaceDisplayData(face, id, FaceTrackingState.tracking),
           );
           break;
 
         case FaceTrackingState.locked:
           // Waiting for inference to complete
-          // Don't process anymore, just show LOCKED UI
           displayFaces.add(
-            _buildFaceDisplayData(face, FaceTrackingState.locked),
+            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
           );
           break;
 
         case FaceTrackingState.livenessCheck:
-          // ✅ Running anti-spoofing liveness detection
-          // Show processing UI while checking
           displayFaces.add(
-            _buildFaceDisplayData(face, FaceTrackingState.livenessCheck),
+            _buildFaceDisplayData(face, id, FaceTrackingState.livenessCheck),
           );
           break;
 
         case FaceTrackingState.cooldown:
           displayFaces.add(
-            _buildFaceDisplayData(face, FaceTrackingState.cooldown),
+            _buildFaceDisplayData(face, id, FaceTrackingState.cooldown),
           );
           break;
       }
@@ -1041,6 +1179,7 @@ class _FaceAttendanceMultiUserPageState
 
   Map<String, dynamic> _buildFaceDisplayData(
     Face face,
+    int trackerId,
     FaceTrackingState state,
   ) {
     // Determine color/status based on state
@@ -1062,7 +1201,7 @@ class _FaceAttendanceMultiUserPageState
         statusText = AppLanguage.tr('attendance.face.checking');
         break;
       case FaceTrackingState.cooldown:
-        final trackedData = _persistentFaceTracker[face.trackingId];
+        final trackedData = _persistentFaceTracker[trackerId];
         if (trackedData != null) {
           final name = trackedData['name'] as String;
           final similarity = trackedData['similarity'] as double?;
@@ -1093,168 +1232,50 @@ class _FaceAttendanceMultiUserPageState
       'rect': face.boundingBox,
       'color': boxColor,
       'name': statusText,
-      'trackingId': face.trackingId,
+      'trackingId': trackerId,
     };
   }
 
-  /// ✅ Multi-Frame Averaging: Capture embeddings from multiple frames and average them
-  Future<Map<String, dynamic>?> _captureMultiFrameEmbedding(
-    Face face,
-    int id,
-  ) async {
-    debugPrint(
-      '🎬 Starting HIGH-PERFORMANCE multi-frame capture for face $id ($_multiFrameCount frames)',
-    );
-
-    final List<_FrameSnapshot> snapshots = [];
-
-    try {
-      // 1. ASYNC SNAPSHOT PHASE: Collect all frame bytes first (Rapid Burst)
-      for (int i = 0; i < _multiFrameCount; i++) {
-        if (i > 0) {
-          await Future.delayed(
-            const Duration(milliseconds: 10),
-          ); // Use fixed interval
-        }
-
-        if (_lastStreamBytes == null) {
-          debugPrint('⚠️ Stream bytes unavailable at burst frame $i');
-          break;
-        }
-
-        // Deep copy bytes IMMEDIATELY to free stream for next frame
-        snapshots.add(
-          _FrameSnapshot(
-            bytes: Uint8List.fromList(_lastStreamBytes!),
-            width: _lastStreamWidth,
-            height: _lastStreamHeight,
-            rotation: _lastStreamRotation,
-          ),
-        );
-      }
-
-      if (snapshots.isEmpty) return null;
-
-      // 2. PARALLEL PROCESSING PHASE: Run TFLite inference for all frames concurrently
-      debugPrint('⚡ Processing ${snapshots.length} frames in parallel...');
-      final templateFutures = snapshots.map((s) async {
-        try {
-          return await _faceService.buildTemplateFromBytes(
-            s.bytes,
-            s.width,
-            s.height,
-            s.rotation,
-            face,
-            allowSidePose: false,
-          );
-        } catch (e) {
-          debugPrint('⚠️ Failed to extract embedding from snapshot: $e');
-          return null;
-        }
-      }).toList();
-
-      // --- TURBO PATH: Handle Frame 0 concurrently with matching ---
-      if (snapshots.length == 1) {
-        final template = await templateFutures[0];
-        if (template == null) return null; // Handle potential null from error
-
-        final embedding = (template['embedding'] as List<dynamic>?)
-            ?.map((e) => (e as num).toDouble())
-            .toList();
-
-        if (embedding == null) return null;
-
-        // Concurrent Liveness + DB Match
-        final matchFuture = _biometricService.identifyBestMatchWithUserInfo(
-          capturedTemplate: template,
-          organizationId: widget.organizationId,
-          threshold: 0.65, // Updated from 0.45 to 0.65
-          strict: false,
-        );
-
-        // Match results directly (liveness skipped)
-        await matchFuture;
-        return template; // Return template for standard match flow
-      }
-
-      // --- MULTI-FRAME PATH: Wait for all processing ---
-      final results = await Future.wait(templateFutures);
-      final List<Map<String, dynamic>> templates = results
-          .whereType<Map<String, dynamic>>()
-          .toList();
-      final List<List<double>> embeddings = [];
-      final List<double> weights = [];
-
-      for (var t in templates) {
-        final e = (t['embedding'] as List<dynamic>?)
-            ?.map((v) => (v as num).toDouble())
-            .toList();
-        if (e != null) {
-          embeddings.add(e);
-          weights.add(t['qualityScore'] as double? ?? 0.5);
-        }
-      }
-
-      if (embeddings.isEmpty) return null;
-
-      // 3. MULTI-THREADED MATH: Offload weighted averaging to an Isolate
-      final avgEmbedding = await compute(_computeWeightedAverage, {
-        'embeddings': embeddings,
-        'weights': weights,
-      });
-
-      // Liveness check skipped (disabled)
-      /*
-      final livenessResult = _checkBehavioralLiveness(embeddings, templates);
-      if (!livenessResult['isLive']) {
-        return null;
-      }
-      */
-
-      return {
-        ...templates.last,
-        'embedding': avgEmbedding,
-        'frame_count': embeddings.length,
-        'multi_frame': true,
-        'liveness_verified': true,
-        'liveness_detail': {'isLive': true, 'reason': 'disabled'},
-      };
-    } catch (e) {
-      debugPrint('❌ Parallel Multi-frame error: $e');
-      return null;
-    }
-  }
+  // ✅ REMOVED _captureMultiFrameEmbedding entirely.
 
   /* Behavioral Liveness Analysis Removed */
 
-  Future<void> _triggerRecognition(Face face, Size imageSize) async {
-    final id = face.trackingId ?? -1;
+  Future<void> _triggerRecognition(
+    Face face,
+    int id,
+    Size imageSize,
+    Uint8List? frameBytes,
+    int width,
+    int height,
+    int rotation,
+  ) async {
     if (id == -1) return;
 
     try {
       final stopwatch = Stopwatch()..start();
-      // ✅ Multi-Frame Averaging: Capture and average embeddings from 3 frames
-      debugPrint('🎯 [BENCH] Starting multi-frame recognition for face $id');
+      // ✅ Instant Single-Frame Inference
+      debugPrint('🎯 [BENCH] Starting instantaneous recognition for face $id');
 
-      if (_lastStreamBytes == null) {
+      if (frameBytes == null) {
         debugPrint('⚠️ No stream bytes available for recognition');
         _faceStates[id] = FaceTrackingState.idle; // Reset
         return;
       }
 
-      // Capture multi-frame averaged embedding
+      // Capture single-frame embedding directly
       final captureStart = stopwatch.elapsedMilliseconds;
-      final template = await _captureMultiFrameEmbedding(face, id);
+      final template = await _faceService.buildTemplateFromBytes(
+        frameBytes,
+        width,
+        height,
+        rotation,
+        face,
+        allowSidePose: false,
+      );
       final captureEnd = stopwatch.elapsedMilliseconds;
       debugPrint(
         '🎬 [BENCH] Capture+Extraction took: ${captureEnd - captureStart}ms',
       );
-
-      if (template == null) {
-        debugPrint('❌ Multi-frame capture failed, aborting recognition');
-        _faceStates[id] = FaceTrackingState.idle;
-        return;
-      }
 
       final frameCount = template['frame_count'] ?? 1;
       debugPrint('✅ Using $frameCount-frame averaged embedding for matching');
@@ -1266,7 +1287,8 @@ class _FaceAttendanceMultiUserPageState
               capturedTemplate: template,
               organizationId: widget.organizationId,
               strict: true,
-              threshold: 0.65, // Updated from 0.3 to 0.65
+              threshold:
+                  0.55, // ✅ INCREASED: More strict threshold to prevent false matches (was 0.45)
             );
       final matchEnd = stopwatch.elapsedMilliseconds;
       debugPrint(
@@ -2160,7 +2182,7 @@ class _FaceAttendanceMultiUserPageState
               ),
 
             // ✅ SYNC: Using a single CustomPainter for all faces to eliminate lag (matching wajah project)
-            if (_detectedFaces.isNotEmpty && _cameraController != null)
+            if (_cameraController != null)
               Positioned.fill(
                 child: CustomPaint(
                   painter: FaceDetectorPainter(
@@ -2174,6 +2196,41 @@ class _FaceAttendanceMultiUserPageState
                   ),
                 ),
               ),
+
+            // Debug overlay to show status
+            Positioned(
+              bottom: 100,
+              left: 16,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Camera: ${_isCameraInitialized ? "✅" : "❌"}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                    ),
+                    Text(
+                      'Streaming: ${_isStreaming ? "✅" : "❌"}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                    ),
+                    Text(
+                      'Faces: ${_detectedFaces.length}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                    ),
+                    Text(
+                      'Idle: ${_isIdleMode ? "✅" : "❌"}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
             // ✅ NEW: Premium Top Bar Overlay
             Positioned(
@@ -2667,150 +2724,4 @@ class _FaceAttendanceMultiUserPageState
   void _showMenu(BuildContext context) {
     _openModePicker();
   }
-}
-
-/// ✅ SYNC: Optimized Custom Painter for all faces (matching wajah project)
-class FaceDetectorPainter extends CustomPainter {
-  final Size absoluteImageSize;
-  final List<Map<String, dynamic>> faces;
-  final bool isFrontCamera;
-
-  FaceDetectorPainter({
-    required this.absoluteImageSize,
-    required this.faces,
-    required this.isFrontCamera,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (absoluteImageSize.width == 0 || absoluteImageSize.height == 0) return;
-
-    final double scaleX = size.width / absoluteImageSize.width;
-    final double scaleY = size.height / absoluteImageSize.height;
-
-    final Paint bracketPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..strokeCap = StrokeCap.round;
-
-    final Paint boxPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-
-    for (final face in faces) {
-      final rect = face['rect'] as Rect;
-      final color = face['color'] as Color;
-      final nameLabel = face['name'] as String?;
-
-      // Apply scaling and mirroring
-      double left, right;
-      if (isFrontCamera) {
-        left = (absoluteImageSize.width - rect.right) * scaleX;
-        right = (absoluteImageSize.width - rect.left) * scaleX;
-      } else {
-        left = rect.left * scaleX;
-        right = rect.right * scaleX;
-      }
-      final top = rect.top * scaleY;
-      final bottom = rect.bottom * scaleY;
-
-      final mappedRect = Rect.fromLTRB(left, top, right, bottom);
-
-      // 1. Draw main rounded box with low opacity
-      boxPaint.color = color.withValues(alpha: 0.4);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(mappedRect, const Radius.circular(12)),
-        boxPaint,
-      );
-
-      // 2. Draw Brackets
-      bracketPaint.color = color;
-      const bSize = 20.0;
-
-      // Top-Left
-      canvas.drawLine(
-        Offset(left, top + bSize),
-        Offset(left, top),
-        bracketPaint,
-      );
-      canvas.drawLine(
-        Offset(left, top),
-        Offset(left + bSize, top),
-        bracketPaint,
-      );
-
-      // Top-Right
-      canvas.drawLine(
-        Offset(right - bSize, top),
-        Offset(right, top),
-        bracketPaint,
-      );
-      canvas.drawLine(
-        Offset(right, top),
-        Offset(right, top + bSize),
-        bracketPaint,
-      );
-
-      // Bottom-Left
-      canvas.drawLine(
-        Offset(left, bottom - bSize),
-        Offset(left, bottom),
-        bracketPaint,
-      );
-      canvas.drawLine(
-        Offset(left, bottom),
-        Offset(left + bSize, bottom),
-        bracketPaint,
-      );
-
-      // Bottom-Right
-      canvas.drawLine(
-        Offset(right - bSize, bottom),
-        Offset(right, bottom),
-        bracketPaint,
-      );
-      canvas.drawLine(
-        Offset(right, bottom),
-        Offset(right, bottom - bSize),
-        bracketPaint,
-      );
-
-      // 3. Draw Name/Status Label (if present)
-      if (nameLabel != null && nameLabel.isNotEmpty) {
-        final textSpan = TextSpan(
-          text: nameLabel,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-            shadows: [Shadow(blurRadius: 2, color: Colors.black)],
-          ),
-        );
-        final textPainter = TextPainter(
-          text: textSpan,
-          textDirection: TextDirection.ltr,
-        )..layout();
-
-        final labelBgPaint = Paint()..color = color.withValues(alpha: 0.8);
-        final labelRect = Rect.fromLTWH(
-          left,
-          top - textPainter.height - 8,
-          textPainter.width + 12,
-          textPainter.height + 4,
-        );
-
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(labelRect, const Radius.circular(6)),
-          labelBgPaint,
-        );
-        textPainter.paint(
-          canvas,
-          Offset(left + 6, top - textPainter.height - 6),
-        );
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(FaceDetectorPainter oldDelegate) => true;
 }

@@ -30,9 +30,6 @@ class FaceRecognitionTFLiteService {
         enableClassification: true,
         enableTracking: true,
         performanceMode: FaceDetectorMode.fast,
-        // ✅ ANTI FALSE-POSITIVE: Ignore tiny/distant faces (e.g. background bystanders).
-        // 0.15 means the face bounding box must be >= 15% of the image's shorter dimension.
-        minFaceSize: 0.15,
       ),
     );
   }
@@ -58,9 +55,13 @@ class FaceRecognitionTFLiteService {
     return await detectFacesFromInputImage(inputImage);
   }
 
+  /// Strict detector — used for attendance to block background faces
   Future<List<Face>> detectFacesFromInputImage(InputImage inputImage) async {
     return await _faceDetector.processImage(inputImage);
   }
+
+
+
 
   // ✅ IMPROVED: L2 Normalization Helper
   List<double> l2Normalize(List<double> vector) {
@@ -98,7 +99,7 @@ class FaceRecognitionTFLiteService {
     return qualityScore.clamp(0.0, 1.0);
   }
 
-  bool isValidFaceForRecognition(Face face, {bool allowSidePose = false}) {
+  bool isValidFaceForRecognition(Face face, {bool allowSidePose = false, bool forRegistration = false}) {
     // 1. Check eye openness
     final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
     final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
@@ -135,7 +136,7 @@ class FaceRecognitionTFLiteService {
     // Assuming standard preview ~ 720x1280 = 921,600.
     // 12000 pixels ensures only close-up, active-user-scale faces are processed.
     // This blocks bystanders walking past in the background.
-    if (faceArea < 12000) {
+    if (!forRegistration && faceArea < 12000) {
       debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 12000)');
       return false;
     }
@@ -157,13 +158,18 @@ class FaceRecognitionTFLiteService {
   Future<Map<String, dynamic>> extractFaceFeatures(
     String imagePath, {
     bool allowSidePose = false,
+    bool forRegistration = false, // ← use permissive detector during enrollment
   }) async {
+    final inputImage = InputImage.fromFilePath(imagePath);
+    // Use permissive detector for registration so photos captured during enrollment
+    // aren't rejected because the face is slightly small in the high-res photo.
     final faces = await detectFaces(imagePath);
+
     if (faces.isEmpty) throw Exception('No face detected');
     if (faces.length > 1) throw Exception('Multiple faces detected');
 
     final face = faces.first;
-    if (!isValidFaceForRecognition(face, allowSidePose: allowSidePose)) {
+    if (!isValidFaceForRecognition(face, allowSidePose: allowSidePose, forRegistration: forRegistration)) {
       throw Exception(
         'Face quality insufficient. Open eyes and look straight.',
       );

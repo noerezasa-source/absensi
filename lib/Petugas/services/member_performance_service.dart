@@ -30,7 +30,7 @@ class MemberPerformanceService {
           .eq('organization_id', organizationId)
           .eq('is_active', true);
 
-      final memberCount = memberCountResponse.length ?? 0;
+      final memberCount = memberCountResponse.length;
       debugPrint('Active members count: $memberCount');
 
       // Test 3: Count attendance records for current month
@@ -52,7 +52,7 @@ class MemberPerformanceService {
           .gte('attendance_date', startDateStr)
           .lte('attendance_date', endDateStr);
 
-      final attendanceCount = attendanceResponse.length ?? 0;
+      final attendanceCount = attendanceResponse.length;
       debugPrint('Attendance records this month: $attendanceCount');
 
       // Test 4: Check user_profiles
@@ -61,14 +61,14 @@ class MemberPerformanceService {
           .select('id, display_name')
           .limit(5);
 
-      debugPrint('User profiles count: ${userProfileResponse.length ?? 0}');
+      debugPrint('User profiles count: ${userProfileResponse.length}');
 
       return {
         'organization_exists': orgResponse != null,
         'organization_data': orgResponse,
         'active_members_count': memberCount,
         'attendance_records_count': attendanceCount,
-        'user_profiles_count': userProfileResponse.length ?? 0,
+        'user_profiles_count': userProfileResponse.length,
         'test_date': TimezoneHelper.formatUtcForSupabase(DateTime.now()),
       };
     } catch (e) {
@@ -123,10 +123,15 @@ class MemberPerformanceService {
               name,
               code
             ),
-            biometric_data(
+            biometric_data!left(
               id,
               is_active,
               biometric_type
+            ),
+            rfid_cards(
+              id,
+              card_number,
+              is_active
             )
           ''';
 
@@ -140,10 +145,17 @@ class MemberPerformanceService {
         query = query.eq('is_active', true);
       }
 
-      // Apply search filter in-memory after fetch (safer than DB-side for profiles)
-      // Apply department filter in DB only if column exists
+      // Apply department filter: departmentFilter is expected to be a stringified
+      // integer ID (e.g. "5"). Parse it to int before filtering department_id (bigint).
       if (departmentFilter != null && departmentFilter.toLowerCase() != 'all') {
-        query = query.eq('department_id', departmentFilter);
+        final deptId = int.tryParse(departmentFilter);
+        if (deptId != null) {
+          query = query.eq('department_id', deptId);
+        } else {
+          debugPrint(
+            '⚠️ departmentFilter "$departmentFilter" is not a valid integer, skipping DB filter.',
+          );
+        }
       }
 
       // Execute query with range
@@ -155,6 +167,15 @@ class MemberPerformanceService {
 
       var members = List<Map<String, dynamic>>.from(response);
 
+      // Debug: Log biometric data for first few members
+      for (int i = 0; i < members.length && i < 3; i++) {
+        final member = members[i];
+        final bioData = member['biometric_data'];
+        debugPrint(
+          '🔍 Member ${member['id']} biometric_data: $bioData (type: ${bioData.runtimeType})',
+        );
+      }
+
       // Add member names and process roles for easier access
       for (final member in members) {
         member['member_name'] = _getMemberName(member);
@@ -163,6 +184,18 @@ class MemberPerformanceService {
         final role = member['system_roles'] as Map<String, dynamic>?;
         member['role_name'] = role?['name'] ?? 'Member';
         member['role_code'] = role?['code'] ?? 'US001';
+
+        // Extract RFID card ID
+        final rfidCards = member['rfid_cards'];
+        if (rfidCards is List && rfidCards.isNotEmpty) {
+          final activeCard = rfidCards.firstWhere(
+            (c) => c['is_active'] == true,
+            orElse: () => null,
+          );
+          if (activeCard != null) {
+            member['rfid_card_id'] = activeCard['id'];
+          }
+        }
       }
 
       // In-memory search filter (safer than DB-side filtering via joined tables)
@@ -200,6 +233,18 @@ class MemberPerformanceService {
         query = query.eq('is_active', true);
       }
 
+      // Apply department filter: departmentFilter is a stringified integer ID.
+      if (departmentFilter != null && departmentFilter.toLowerCase() != 'all') {
+        final deptId = int.tryParse(departmentFilter);
+        if (deptId != null) {
+          query = query.eq('department_id', deptId);
+        } else {
+          debugPrint(
+            '⚠️ departmentFilter "$departmentFilter" is not a valid integer, skipping count filter.',
+          );
+        }
+      }
+
       final response = await query.count(CountOption.exact);
       return response.count ?? 0;
     } catch (e) {
@@ -207,7 +252,6 @@ class MemberPerformanceService {
       return 0;
     }
   }
-
 
   /// Get performance statistics for members within a date range
   Future<Map<String, dynamic>> getPerformanceStats(
@@ -315,7 +359,7 @@ class MemberPerformanceService {
         }
         memberRecordsCheck[mId]!.add(record);
       }
-    
+
       // Create performance data
       final performers = <Map<String, dynamic>>[];
 
@@ -352,11 +396,13 @@ class MemberPerformanceService {
             ? (records.length - lateDays) / records.length
             : 0.0;
 
-        // Final score: 50% Attendance, 30% Punctuality, 20% Activity (Bonus)
-        final productivityScore =
-            attendanceRate * 0.5 +
-            punctualityRate * 0.3 +
-            (totalWorkMinutes > 0 ? 0.2 : 0.0);
+        // Final score: 50% Attendance, 30% Punctuality, 20% Work Duration
+        // If total work minutes is 0, score should be 0
+        final productivityScore = totalWorkMinutes > 0
+            ? attendanceRate * 0.5 +
+                  punctualityRate * 0.3 +
+                  (totalWorkMinutes / 480).clamp(0.0, 1.0) * 0.2
+            : 0.0;
 
         performers.add({
           ...member,
@@ -818,15 +864,27 @@ class MemberPerformanceService {
     final profile = member['user_profiles'] as Map<String, dynamic>?;
     if (profile == null) return 'Unknown User';
 
-    final displayName = profile['display_name'] as String?;
-    if (displayName != null && displayName.trim().isNotEmpty) {
-      return displayName.trim();
-    }
-
+    final displayName = (profile['display_name'] as String?)?.trim();
     final firstName = profile['first_name'] as String? ?? '';
     final lastName = profile['last_name'] as String? ?? '';
     final fullName = '$firstName $lastName'.trim();
-    return fullName.isEmpty ? 'Unknown User' : fullName;
+
+    if (fullName.isNotEmpty &&
+        displayName != null &&
+        displayName.isNotEmpty &&
+        fullName != displayName) {
+      return '$fullName - $displayName';
+    }
+
+    if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    }
+
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+
+    return 'Unknown User';
   }
 
   String _formatTimeAgo(String? eventTimeString) {

@@ -18,7 +18,6 @@ class CameraSelfieScreen extends StatefulWidget {
 class _CameraSelfieScreenState extends State<CameraSelfieScreen>
     with WidgetsBindingObserver {
   CameraController? _controller;
-  bool _isInitialized = false;
   bool _isCapturing = false;
   int _selectedCameraIndex = 0;
 
@@ -83,9 +82,7 @@ class _CameraSelfieScreenState extends State<CameraSelfieScreen>
       debugPrint('Foto resolusi: ${size?.width} x ${size?.height}');
 
       if (mounted) {
-        setState(() {
-          _isInitialized = true;
-        });
+        setState(() {});
       }
     } catch (e) {
       debugPrint('Error initializing selfie camera: $e');
@@ -348,7 +345,6 @@ class _CameraSelfieScreenState extends State<CameraSelfieScreen>
   Future<void> _toggleCamera() async {
     if (widget.cameras.length < 2) return;
     setState(() {
-      _isInitialized = false;
       _selectedCameraIndex = (_selectedCameraIndex + 1) % widget.cameras.length;
     });
     await _initializeController();

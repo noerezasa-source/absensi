@@ -47,3 +47,5 @@ app.*.map.json
 # Flutter SDK in project root
 /flutter/
 
+node_modules/
+supabase-go

@@ -3,6 +3,10 @@ import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class TimezoneService {
+  static final TimezoneService _instance = TimezoneService._internal();
+  factory TimezoneService() => _instance;
+  TimezoneService._internal();
+
   static const String _selectedTimezoneKey = 'selected_timezone';
   static const String _autoDetectKey = 'auto_detect_timezone';
 
@@ -21,7 +25,11 @@ class TimezoneService {
     {'name': 'Europe/London', 'display': 'London (GMT)', 'gmt': 'GMT+0'},
     {'name': 'Europe/Paris', 'display': 'Paris (CET)', 'gmt': 'GMT+1'},
     {'name': 'America/New_York', 'display': 'New York (EST)', 'gmt': 'GMT-5'},
-    {'name': 'America/Los_Angeles', 'display': 'Los Angeles (PST)', 'gmt': 'GMT-8'},
+    {
+      'name': 'America/Los_Angeles',
+      'display': 'Los Angeles (PST)',
+      'gmt': 'GMT-8',
+    },
     {'name': 'Australia/Sydney', 'display': 'Sydney (AEDT)', 'gmt': 'GMT+11'},
   ];
 
@@ -82,7 +90,11 @@ class TimezoneService {
     try {
       return availableTimezones.firstWhere(
         (tz) => tz['name'] == timezoneName,
-        orElse: () => {'name': 'Asia/Jakarta', 'display': 'Jakarta (WIB)', 'gmt': 'GMT+7'},
+        orElse: () => {
+          'name': 'Asia/Jakarta',
+          'display': 'Jakarta (WIB)',
+          'gmt': 'GMT+7',
+        },
       );
     } catch (e) {
       return null;
@@ -94,7 +106,7 @@ class TimezoneService {
     final timezone = await getSelectedTimezone();
     final location = tz.getLocation(timezone);
     final tzTime = tz.TZDateTime.from(time, location);
-    
+
     switch (format) {
       case 'HH:mm':
         return '${tzTime.hour.toString().padLeft(2, '0')}:${tzTime.minute.toString().padLeft(2, '0')}';
@@ -112,10 +124,30 @@ class TimezoneService {
   // Mendapatkan tanggal lengkap dengan nama hari
   Future<String> getFullDate() async {
     final now = await getCurrentTimeInTimezone();
-    final weekdays = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
-    final months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 
-                    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-    
+    final weekdays = [
+      'Minggu',
+      'Senin',
+      'Selasa',
+      'Rabu',
+      'Kamis',
+      'Jumat',
+      'Sabtu',
+    ];
+    final months = [
+      'Januari',
+      'Februari',
+      'Maret',
+      'April',
+      'Mei',
+      'Juni',
+      'Juli',
+      'Agustus',
+      'September',
+      'Oktober',
+      'November',
+      'Desember',
+    ];
+
     return '${weekdays[now.weekday % 7]}, ${now.day} ${months[now.month - 1]} ${now.year}';
   }
 

@@ -1,4 +1,4 @@
-// lib/pages/rfid_attendance_page.dart
+// lib/attendance/screens/rfid_attendance_page.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -17,6 +17,7 @@ import 'dart:io';
 import '../../models/work_schedule_models.dart';
 import '../services/attendance_service.dart';
 import 'manual_check_page.dart';
+
 
 class RfidAttendancePage extends StatefulWidget {
   final int organizationMemberId;
@@ -75,6 +76,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   @override
   void initState() {
     super.initState();
+    debugPrint('📱 RFID Page Loaded');
+    debugPrint('MemberData: ${widget.memberData}');
+    debugPrint('OrgID from MemberData: ${widget.memberData['organization_id']}');
     _loadOrganizationData();
     _loadMemberSchedule();
     _startClock();
@@ -109,19 +113,14 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
-    final isOnline = result != ConnectivityResult.none;
+    final isOnline = result.isNotEmpty && result.first != ConnectivityResult.none;
     setState(() {
       _isOnline = isOnline;
     });
 
-    // Load offline data if offline (Removed per user request to start empty)
-    // if (!isOnline) {
-    //   _loadOfflineAttendanceData();
-    // }
-
     Connectivity().onConnectivityChanged.listen((results) {
       if (mounted) {
-        final isOnlineNow = results != ConnectivityResult.none;
+        final isOnlineNow = results.isNotEmpty && results.first != ConnectivityResult.none;
         setState(() {
           _isOnline = isOnlineNow;
         });
@@ -408,38 +407,66 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
   Future<void> _loadAvailableModes() async {
     if (_isLoadingModes) return;
     final orgId = _organizationId;
-    if (orgId == null) return;
+    
+    debugPrint('-----------------------------------------');
+    debugPrint('🚀 DEBUG: Memulai Load Shift');
+    debugPrint('🏢 OrgID di HP: $orgId');
 
     setState(() => _isLoadingModes = true);
     try {
-      final modes = await _supabase
+      debugPrint('🔍 Memulai fetch shifts dari Supabase...');
+      
+      // Ambil data tanpa filter untuk mengetes koneksi
+      final response = await _supabase
           .from('shifts')
-          .select('id, code, name, start_time, end_time, description')
-          .eq('organization_id', orgId)
-          .eq('is_active', true)
-          .order('name', ascending: true);
+          .select('id, organization_id, code, name, start_time, end_time, description, color_code');
 
-      if (mounted) {
-        setState(() {
-          _availableModes = List<Map<String, dynamic>>.from(modes);
-        });
+      final List<dynamic> allModes = response as List<dynamic>;
+      debugPrint('✅ HASIL: Ditemukan ${allModes.length} total baris di tabel shifts');
 
-        // Cache shifts for offline use
-        await _offlineDb.cacheShifts(orgId, _availableModes);
+      // Filter manual di aplikasi untuk debugging
+      List<Map<String, dynamic>> finalModes = [];
+      if (orgId != null) {
+        finalModes = allModes
+            .where((m) => m['organization_id'] == orgId)
+            .map((m) => Map<String, dynamic>.from(m))
+            .toList();
+        debugPrint('🎯 Hasil filter untuk OrgID $orgId: ${finalModes.length} shift');
+        
+        // JIKA KOSONG: Ambil semua saja supaya muncul di layar
+        if (finalModes.isEmpty && allModes.isNotEmpty) {
+          debugPrint('⚠️ OrgID $orgId tidak punya shift. Memaksa tampilkan semua data...');
+          finalModes = allModes.map((m) => Map<String, dynamic>.from(m)).toList();
+        }
+      } else {
+        finalModes = allModes.map((m) => Map<String, dynamic>.from(m)).toList();
       }
-    } catch (e) {
-      debugPrint('🌐 Offline/Error loading modes: $e');
 
-      // Fallback to cache
-      final cachedShifts = await _offlineDb.getShifts(orgId);
       if (mounted) {
         setState(() {
-          _availableModes = List<Map<String, dynamic>>.from(cachedShifts);
+          _availableModes = finalModes;
         });
-        if (_availableModes.isNotEmpty) {
-          debugPrint(
-            '💾 Using cached shifts (${_availableModes.length} found)',
-          );
+
+        if (orgId != null && _availableModes.isNotEmpty) {
+          await _offlineDb.cacheShifts(orgId, _availableModes);
+        }
+      }
+    } catch (e, stack) {
+      debugPrint('❌ ERROR SUPABASE: $e');
+      debugPrint('📚 StackTrace: $stack');
+
+      // Fallback to cache (hanya jika orgId ada)
+      if (orgId != null) {
+        final cachedShifts = await _offlineDb.getShifts(orgId);
+        if (mounted) {
+          setState(() {
+            _availableModes = List<Map<String, dynamic>>.from(cachedShifts);
+          });
+          if (_availableModes.isNotEmpty) {
+            debugPrint(
+              '💾 Using cached shifts (${_availableModes.length} found)',
+            );
+          }
         }
       }
     } finally {
@@ -1078,12 +1105,20 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     });
   }
 
+  bool _isProcessingScan = false;
+
   Future<void> _handleCardScan() async {
+    if (_isProcessingScan) return;
+    
     final cardNumber = _cardController.text.trim();
     if (cardNumber.isEmpty) {
       debugPrint('⚠️ Empty card number');
       return;
     }
+
+    setState(() {
+      _isProcessingScan = true;
+    });
 
     debugPrint('📱 Card scanned: "$cardNumber"');
 
@@ -1168,6 +1203,15 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     } finally {
       _cardController.clear();
       _cardFocusNode.requestFocus();
+      
+      // Release lock after a short delay to prevent double-scans from fast scanners
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          setState(() {
+            _isProcessingScan = false;
+          });
+        }
+      });
     }
   }
 
@@ -1445,20 +1489,27 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     }
 
     final displayName = (profile['display_name'] as String?)?.trim();
+    final first = profile['first_name'] as String? ?? '';
+    final last = profile['last_name'] as String? ?? '';
+    final fullName = '$first $last'.trim();
+
+    // Show both full name and nickname if both exist
+    if (fullName.isNotEmpty && displayName != null && displayName.isNotEmpty && fullName != displayName) {
+      return '$fullName - $displayName';
+    }
+
+    // Fall back to display_name if available
     if (displayName != null && displayName.isNotEmpty) {
       return displayName;
     }
 
-    final first = profile['first_name'] as String? ?? '';
-    final last = profile['last_name'] as String? ?? '';
-    final name = '$first $last'.trim();
-
-    if (name.isEmpty) {
-      debugPrint('⚠️ No name found, using "Member"');
-      return AppLanguage.tr('attendance.rfid.member');
+    // Fall back to full name
+    if (fullName.isNotEmpty) {
+      return fullName;
     }
 
-    return name;
+    debugPrint('⚠️ No name found, using "Member"');
+    return AppLanguage.tr('attendance.rfid.member');
   }
 
   String _formatTime(DateTime? time) {
@@ -1507,308 +1558,299 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
     final amPm = _formatAmPm(_currentTime);
 
     return Scaffold(
-      backgroundColor: Colors.white, // White background as per mockup
-      body: GestureDetector(
-        onTap: () => _cardFocusNode.requestFocus(),
-        child: Stack(
-          children: [
-            // Hidden Input for RFID
-            Offstage(
-              offstage: true,
-              child: TextField(
-                controller: _cardController,
-                focusNode: _cardFocusNode,
-                autofocus: true,
-                showCursor: false,
-                enableInteractiveSelection: false,
-                keyboardType: TextInputType.none,
-                decoration: const InputDecoration(border: InputBorder.none),
-                onSubmitted: (_) => _handleCardScan(),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white,
+              const Color(0xFF9333EA).withValues(alpha: 0.05),
+            ],
+          ),
+        ),
+        child: GestureDetector(
+          onTap: () => _cardFocusNode.requestFocus(),
+          child: Stack(
+            children: [
+              // Background logo with transparency
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.08,
+                  child: Image.asset(
+                    'assets/logo/app_logo_terbaru.png',
+                    fit: BoxFit.contain,
+                    alignment: Alignment.center,
+                    width: 300,
+                    height: 300,
+                  ),
+                ),
               ),
-            ),
+              
+              // Hidden Input for RFID
+              Offstage(
+                offstage: true,
+                child: TextField(
+                  controller: _cardController,
+                  focusNode: _cardFocusNode,
+                  autofocus: true,
+                  showCursor: false,
+                  enableInteractiveSelection: false,
+                  keyboardType: TextInputType.none,
+                  decoration: const InputDecoration(border: InputBorder.none),
+                  onSubmitted: (_) => _handleCardScan(),
+                ),
+              ),
 
-            SafeArea(
-              child: Column(
-                children: [
-                  const SizedBox(height: 20),
+              SafeArea(
+                child: Column(
+                  children: [
+                    const SizedBox(height: 20),
 
-                  // 1. CLOCK & DATE HEADER
-                  Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.baseline,
-                      textBaseline: TextBaseline.alphabetic,
-                      children: [
-                        // Phantom element on the left to balance the AM/PM on the right
-                        // and keep the clock numbers exactly in the middle.
-                        Text(
-                          amPm,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.transparent, // Invisible
+                    // 1. CLOCK & DATE HEADER
+                    Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          // Phantom element on the left to balance the AM/PM on the right
+                          Text(
+                            amPm,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.transparent, // Invisible
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 4), // Gap
-                        Text(
-                          timeStr,
-                          style: const TextStyle(
-                            fontSize: 72,
-                            fontWeight: FontWeight.w400,
-                            color: Colors.black87,
-                            letterSpacing: -2,
+                          const SizedBox(width: 4), // Gap
+                          Text(
+                            timeStr,
+                            style: const TextStyle(
+                              fontSize: 72,
+                              fontWeight: FontWeight.w400,
+                              color: Colors.black87,
+                              letterSpacing: -2,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 4), // Gap
-                        Text(
-                          amPm,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade600,
+                          const SizedBox(width: 4), // Gap
+                          Text(
+                            amPm,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey.shade600,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Center(
-                    child: Text(
-                      dateStr,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey.shade600, // Changed to gray
-                        letterSpacing: 1.5,
+                        ],
                       ),
                     ),
-                  ),
-
-                  const SizedBox(height: 40),
-
-                  // 2. SELECT SHIFT CARD (Purple)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: InkWell(
-                      onTap: _openShiftSelectionSheet,
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF9333EA), Color(0xFF7E22CE)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(
-                                0xFF9333EA,
-                              ).withValues(alpha: 0.4),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
+                    const SizedBox(height: 4),
+                    Center(
+                      child: Text(
+                        dateStr,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade600,
+                          letterSpacing: 1.5,
                         ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(
-                                Icons.swap_horiz,
-                                color: Colors.white,
-                                size: 24,
-                              ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 40),
+
+                    // 2. SELECT SHIFT CARD (Purple)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: InkWell(
+                        onTap: _openShiftSelectionSheet,
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF9333EA), Color(0xFF7E22CE)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
                             ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Text(
-                                _selectedMode != null
-                                    ? '${_selectedMode!['name']} - ${_attendanceMode == 'check_in' ? 'IN' : 'OUT'}'
-                                    : 'Select Shift',
-                                style: const TextStyle(
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(
+                                  0xFF9333EA,
+                                ).withValues(alpha: 0.4),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.swap_horiz,
                                   color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
+                                  size: 24,
                                 ),
                               ),
-                            ),
-                            const Icon(
-                              Icons.chevron_right,
-                              color: Colors.white,
-                            ),
-                          ],
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Text(
+                                  _selectedMode != null
+                                      ? '${_selectedMode!['name']} - ${_attendanceMode == 'check_in' ? 'IN' : 'OUT'}'
+                                      : 'Select Shift',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const Icon(
+                                Icons.chevron_right,
+                                color: Colors.white,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
 
-                  // 3. PULSING RFID ANIMATION (Only shown if no entries)
-                  if (_filteredEntries.isEmpty)
-                    Expanded(
-                      child: Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                // Outer Pulse
-                                TweenAnimationBuilder(
-                                  tween: Tween<double>(begin: 0, end: 1),
-                                  duration: const Duration(seconds: 2),
-                                  builder: (context, double value, child) {
-                                    return Container(
-                                      width: 200 + (value * 20),
-                                      height: 200 + (value * 20),
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: const Color(0xFF9333EA)
-                                              .withValues(
-                                                alpha: 0.1 * (1 - value),
-                                              ),
-                                          width: 1,
+                    // 3. PULSING RFID ANIMATION (Only shown if no entries)
+                    if (_filteredEntries.isEmpty)
+                      Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  // Outer Pulse
+                                  TweenAnimationBuilder(
+                                    tween: Tween<double>(begin: 0, end: 1),
+                                    duration: const Duration(seconds: 2),
+                                    builder: (context, double value, child) {
+                                      return Container(
+                                        width: 200 + (value * 20),
+                                        height: 200 + (value * 20),
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: const Color(0xFF9333EA)
+                                                .withValues(
+                                                  alpha: 0.1 * (1 - value),
+                                                ),
+                                            width: 1,
+                                          ),
                                         ),
-                                      ),
-                                    );
-                                  },
-                                  onEnd: () => setState(() {}), // Loop
-                                ),
-                                // Inner Circles
-                                Container(
-                                  width: 180,
-                                  height: 180,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: const Color(
-                                      0xFF9333EA,
-                                    ).withValues(alpha: 0.05),
+                                      );
+                                    },
+                                    onEnd: () => setState(() {}), // Loop
                                   ),
-                                ),
-                                Container(
-                                  width: 130,
-                                  height: 130,
-                                  decoration: const BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.white,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black12,
-                                        blurRadius: 20,
-                                        spreadRadius: 2,
-                                      ),
-                                    ],
-                                  ),
-                                  child: const Center(
-                                    child: Icon(
-                                      Icons.nfc, // RFID Icon
-                                      size: 64,
-                                      color: Color(0xFF9333EA),
+                                  // Inner Circles
+                                  Container(
+                                    width: 180,
+                                    height: 180,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: const Color(
+                                        0xFF9333EA,
+                                      ).withValues(alpha: 0.05),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 32),
-                            Text(
-                              'Scan your card here',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey.shade600,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                  // 4. ATTENDANCE LIST (Expanded when entries present)
-                  if (_filteredEntries.isNotEmpty)
-                    Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.only(top: 24),
-                        child: ListView.separated(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 8,
-                          ),
-                          itemCount: _filteredEntries.length,
-                          separatorBuilder: (_, _) =>
-                              const SizedBox(height: 12),
-                          itemBuilder: (_, index) =>
-                              _buildNewEntryCard(_filteredEntries[index]),
-                        ),
-                      ),
-                    )
-                  else
-                    const SizedBox(
-                      height: 220,
-                    ), // Placeholder height when empty
-                ],
-              ),
-            ),
-
-            // Menu Button (Top Right)
-            // Header Buttons
-            Positioned(
-              top: 40,
-              left: 20,
-              right: 20,
-              child: SafeArea(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // Back Button
-                    CircleAvatar(
-                      backgroundColor: Colors.grey,
-                      radius: 20,
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.chevron_left,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ),
-
-                    Row(
-                      children: [
-                        // Manual Check Button
-                        CircleAvatar(
-                          backgroundColor: Colors.grey,
-                          radius: 20,
-                          child: IconButton(
-                            icon: const Icon(
-                              Icons.assignment_ind_outlined,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => ManualCheckPage(
-                                    organizationMemberId:
-                                        widget.organizationMemberId,
-                                    memberData: widget.memberData,
-                                    initialShiftName: _workTimeMode,
-                                    sourceMode: 'RFID Kiosk',
+                                  Container(
+                                    width: 130,
+                                    height: 130,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.white,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black12,
+                                          blurRadius: 20,
+                                          spreadRadius: 2,
+                                        ),
+                                      ],
+                                    ),
+                                    child: const Center(
+                                      child: Icon(
+                                        Icons.nfc,
+                                        size: 64,
+                                        color: Color(0xFF9333EA),
+                                      ),
+                                    ),
                                   ),
+                                ],
+                              ),
+                              const SizedBox(height: 32),
+                              Text(
+                                'Scan your card here',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey.shade600,
+                                  fontWeight: FontWeight.w500,
                                 ),
-                              );
-                            },
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+
+                    // 4. ATTENDANCE LIST (Expanded when entries present)
+                    if (_filteredEntries.isNotEmpty)
+                      Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.only(top: 24),
+                          child: ListView.separated(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 8,
+                            ),
+                            itemCount: _filteredEntries.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 12),
+                            itemBuilder: (_, index) =>
+                                _buildNewEntryCard(_filteredEntries[index]),
+                          ),
+                        ),
+                      )
+                    else
+                      const SizedBox(
+                        height: 220,
+                      ), // Placeholder height when empty
+                  ],
+                ),
+              ),
+
+              // Header Buttons
+              Positioned(
+                top: 40,
+                left: 20,
+                right: 20,
+                child: SafeArea(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // Back Button
+                      CircleAvatar(
+                        backgroundColor: Colors.grey,
+                        radius: 20,
+                        child: IconButton(
+                          icon: const Icon(
+                            Icons.chevron_left,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1816,8 +1858,9 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // Helper Formats
   String _formatTimeShort(DateTime time) {
@@ -1869,7 +1912,29 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
               ),
               const SizedBox(height: 24),
 
-              ..._availableModes.map((mode) {
+              if (_isLoadingModes)
+                const Center(child: Padding(
+                  padding: EdgeInsets.all(20.0),
+                  child: CircularProgressIndicator(),
+                ))
+              else if (_availableModes.isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.grey.shade400, size: 48),
+                        const SizedBox(height: 12),
+                        const Text('No shifts found in database', style: TextStyle(color: Colors.grey)),
+                        const SizedBox(height: 8),
+                        Text('OrgID: $_organizationId', 
+                             style: const TextStyle(color: Colors.blue, fontSize: 10)),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                ..._availableModes.map((mode) {
                 final isSelected = _selectedMode?['id'] == mode['id'];
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -1895,18 +1960,16 @@ class _RfidAttendancePageState extends State<RfidAttendancePage> {
                           Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: isSelected
-                                  ? const Color(
-                                      0xFF9333EA,
-                                    ).withValues(alpha: 0.1)
-                                  : Colors.grey.shade100,
+                              color: mode['color_code'] != null 
+                                ? Color(int.parse(mode['color_code'].replaceAll('#', '0xFF'))).withValues(alpha: 0.1)
+                                : (isSelected ? const Color(0xFF9333EA).withValues(alpha: 0.1) : Colors.grey.shade100),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
                               _getIconForMode(mode['name'] ?? ''),
-                              color: isSelected
-                                  ? const Color(0xFF9333EA)
-                                  : Colors.grey,
+                              color: mode['color_code'] != null 
+                                ? Color(int.parse(mode['color_code'].replaceAll('#', '0xFF')))
+                                : (isSelected ? const Color(0xFF9333EA) : Colors.grey),
                               size: 20,
                             ),
                           ),

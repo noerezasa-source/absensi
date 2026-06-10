@@ -793,14 +793,23 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
     final userProfile = member['user_profiles'] as Map<String, dynamic>?;
 
     if (userProfile != null) {
-      final displayName = userProfile['display_name'] as String?;
+      final displayName = (userProfile['display_name'] as String?)?.trim();
+      final firstName = userProfile['first_name'] as String? ?? '';
+      final lastName = userProfile['last_name'] as String? ?? '';
+      final fullName = '$firstName $lastName'.trim();
+
+      // Show both full name and nickname if both exist
+      if (fullName.isNotEmpty &&
+          displayName != null &&
+          displayName.isNotEmpty &&
+          fullName != displayName) {
+        return '$fullName - $displayName';
+      }
+
       if (displayName != null && displayName.isNotEmpty) {
         return displayName;
       }
 
-      final firstName = userProfile['first_name'] as String? ?? '';
-      final lastName = userProfile['last_name'] as String? ?? '';
-      final fullName = '$firstName $lastName'.trim();
       if (fullName.isNotEmpty) return fullName;
     }
 

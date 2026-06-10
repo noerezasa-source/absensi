@@ -25,7 +25,6 @@
     "invalid_page_number": "Please enter a valid page between 1 and {totalPages}",
     "member": "Member",
     "no_department": "No Department",
-    "department": "Department",
     "employee_id": "Employee ID",
     "face_not_registered_yet": "Your face has not been registered yet.",
     "register_face_for_attendance": "Please register your face for seamless attendance tracking.",
@@ -43,5 +42,26 @@
     "waiting_for_card": "Waiting for card...",
     "save_rfid_card": "Save Card",
     "card_already_registered_other": "This card is already registered to another member.",
-    "rfid_card_registered_success": "RFID Card successfully registered!"
+    "rfid_card_registered_success": "RFID Card successfully registered!",
+    "department": {
+        "title": "Department Management",
+        "name": "Department Name",
+        "add": "Add Department",
+        "edit": "Edit Department",
+        "delete": "Delete Department",
+        "save": "Save",
+        "cancel": "Cancel",
+        "search": "Search departments...",
+        "no_departments": "No departments available",
+        "enter_name": "Please enter department name",
+        "added_success": "Department added successfully",
+        "added_failed": "Failed to add department",
+        "updated_success": "Department updated successfully",
+        "updated_failed": "Failed to update department",
+        "deleted_success": "Department deleted successfully",
+        "deleted_failed": "Failed to delete department",
+        "delete_confirm": "Confirm Delete",
+        "delete_warning": "Are you sure you want to delete this department? This action cannot be undone.",
+        "retry": "Retry"
+    }
 }

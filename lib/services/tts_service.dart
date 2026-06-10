@@ -83,12 +83,13 @@ class TtsService {
     }
   }
 
-  /// Ucapkan teks berdasarkan key terjemahan dari face_registration.json
-  Future<void> speakKey(String key) async {
-    final text = AppLanguage.tr('attendance.face_registration.$key');
+  /// Ucapkan teks berdasarkan key terjemahan dari file JSON tertentu
+  /// prefix: 'attendance.face_registration' atau 'attendance.fingerprint'
+  Future<void> speakKey(String key, {String prefix = 'attendance.face_registration'}) async {
+    final text = AppLanguage.tr('$prefix.$key');
     // Jika key tidak ditemukan (dikembalikan sebagai key itu sendiri), skip
-    if (text == 'attendance.face_registration.$key') {
-      debugPrint('TTS: Key not found: $key, skipping');
+    if (text == '$prefix.$key') {
+      debugPrint('TTS: Key not found: $key (prefix: $prefix), skipping');
       return;
     }
     await speak(text);

@@ -65,5 +65,13 @@
     "cancel": "إلغاء",
     "step_label": "خطوة",
     "step_from": "من 3",
-    "break_available_at": "الاستراحة متاحة فقط من"
+    "break_available_at": "الاستراحة متاحة فقط من",
+    "welcome": "مرحباً! سنقوم بتسجيل بصمة إصبعك الآن.",
+    "fingerprint_instruction": "اضغط على زر البدء لبدء تسجيل البصمة.",
+    "fingerprint_step_1": "ضع إصبعك. الخطوة الأولى من ثلاث.",
+    "fingerprint_step_2": "ممتاز! ضع نفس الإصبع. الخطوة الثانية من ثلاث.",
+    "fingerprint_step_3": "مثالي! ضع مرة أخرى. الخطوة الثالثة من ثلاث.",
+    "registration_successful": "تم تسجيل البصمة بنجاح!",
+    "fingerprint_start": "ابدأ تسجيل البصمة.",
+    "complete": "اكتمل تسجيل البصمة! شكراً لك."
 }

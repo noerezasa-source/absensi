@@ -60,8 +60,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   // Real-time updates
   Timer? _clockTimer;
+  Timer? _refreshDebounce;
   StreamSubscription? _activitySubscription;
-  DateTime _nowUtc = DateTime.now().toUtc();
+  final ValueNotifier<DateTime> _clockNotifier = ValueNotifier(DateTime.now().toUtc());
 
   @override
   void initState() {
@@ -100,9 +101,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   void _initRealTimeClock() {
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
-        setState(() {
-          _nowUtc = DateTime.now().toUtc();
-        });
+        // Only update the ValueNotifier — does NOT trigger full setState
+        _clockNotifier.value = DateTime.now().toUtc();
       }
     });
   }
@@ -115,19 +115,24 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     _activitySubscription?.cancel();
 
     // Listen to attendance_logs for real-time updates
+    // Use Supabase channel with filter to only receive relevant events
     try {
       _activitySubscription = _supabase
           .from('attendance_logs')
           .stream(primaryKey: ['id'])
-          .order('event_time')
+          .order('event_time', ascending: false)
+          .limit(1) // Only care about newest record to detect changes
           .listen(
             (data) {
               debugPrint('📡 Real-time update detected in attendance_logs');
-              _refreshAll();
+              // Debounce: avoid rapid consecutive refreshes
+              _refreshDebounce?.cancel();
+              _refreshDebounce = Timer(const Duration(seconds: 3), () {
+                if (mounted) _refreshAll();
+              });
             },
             onError: (error) {
               debugPrint('❌ Real-time subscription error: $error');
-              // Optionally attempt to restart after a delay or just swallow to prevent crash
             },
             cancelOnError: false,
           );
@@ -139,7 +144,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   @override
   void dispose() {
     _clockTimer?.cancel();
+    _refreshDebounce?.cancel();
     _activitySubscription?.cancel();
+    _clockNotifier.dispose();
     super.dispose();
   }
 
@@ -1079,14 +1086,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final nowOrg = TimezoneHelper.convertUtcToOrgTimezone(
-      _nowUtc,
-      _organizationTimezone,
-    );
-    final hour = nowOrg.hour.toString().padLeft(2, '0');
-    final minute = nowOrg.minute.toString().padLeft(2, '0');
-    final currentTime = '$hour:$minute';
-
     return Scaffold(
       backgroundColor: _isDarkMode
           ? const Color(0xFF1F0B38)
@@ -1385,15 +1384,28 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                                           ),
                                         ),
                                         const SizedBox(height: 4),
-                                        Text(
-                                          '$currentTime ${nowOrg.hour < 12 ? AppLanguage.tr('am') : AppLanguage.tr('pm')}',
-                                          style: TextStyle(
-                                            fontSize: 28,
-                                            fontWeight: FontWeight.bold,
-                                            color: _isDarkMode
-                                                ? Colors.white
-                                                : const Color(0xFF4A1E79),
-                                          ),
+                                        // Use ValueListenableBuilder so only this Text rebuilds every second
+                                        ValueListenableBuilder<DateTime>(
+                                          valueListenable: _clockNotifier,
+                                          builder: (context, nowUtc, _) {
+                                            final nowOrg = TimezoneHelper.convertUtcToOrgTimezone(
+                                              nowUtc,
+                                              _organizationTimezone,
+                                            );
+                                            final h = nowOrg.hour.toString().padLeft(2, '0');
+                                            final m = nowOrg.minute.toString().padLeft(2, '0');
+                                            final amPm = nowOrg.hour < 12 ? AppLanguage.tr('am') : AppLanguage.tr('pm');
+                                            return Text(
+                                              '$h:$m $amPm',
+                                              style: TextStyle(
+                                                fontSize: 28,
+                                                fontWeight: FontWeight.bold,
+                                                color: _isDarkMode
+                                                    ? Colors.white
+                                                    : const Color(0xFF4A1E79),
+                                              ),
+                                            );
+                                          },
                                         ),
                                       ],
                                     ),

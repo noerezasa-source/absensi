@@ -58,5 +58,13 @@
     "cancel": "Cancel",
     "step_label": "Step",
     "step_from": "of 3",
-    "break_available_at": "Break only available at"
+    "break_available_at": "Break only available at",
+    "welcome": "Welcome! We will register your fingerprint now.",
+    "fingerprint_instruction": "Tap the start button to begin fingerprint registration.",
+    "fingerprint_step_1": "Place your finger. Step one of three.",
+    "fingerprint_step_2": "Good! Place the same finger. Step two of three.",
+    "fingerprint_step_3": "Perfect! Place once more. Step three of three.",
+    "registration_successful": "Fingerprint registration successful!",
+    "fingerprint_start": "Start fingerprint registration.",
+    "complete": "Fingerprint registration complete! Thank you."
 }

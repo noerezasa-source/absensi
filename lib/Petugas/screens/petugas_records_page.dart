@@ -308,13 +308,23 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     if (orgMember != null && orgMember is Map<String, dynamic>) {
       final profile = orgMember['user_profiles'];
       if (profile != null && profile is Map<String, dynamic>) {
-        final displayName = profile['display_name'] as String?;
-        if (displayName != null && displayName.isNotEmpty) {
-          return displayName;
-        }
+        final displayName = (profile['display_name'] as String?)?.trim();
         final firstName = profile['first_name'] as String? ?? '';
         final lastName = profile['last_name'] as String? ?? '';
         final fullName = '$firstName $lastName'.trim();
+
+        // Show both full name and nickname if both exist
+        if (fullName.isNotEmpty &&
+            displayName != null &&
+            displayName.isNotEmpty &&
+            fullName != displayName) {
+          return '$fullName - $displayName';
+        }
+
+        if (displayName != null && displayName.isNotEmpty) {
+          return displayName;
+        }
+        
         if (fullName.isNotEmpty) {
           return fullName;
         }
@@ -325,8 +335,25 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     final memberId = record['organization_member_id'];
     if (_memberProfiles.containsKey(memberId)) {
       final profile = _memberProfiles[memberId];
-      return profile['display_name'] ??
-          '${profile['first_name'] ?? ''} ${profile['last_name'] ?? ''}'.trim();
+      final displayName = (profile['display_name'] as String?)?.trim();
+      final firstName = profile['first_name'] as String? ?? '';
+      final lastName = profile['last_name'] as String? ?? '';
+      final fullName = '$firstName $lastName'.trim();
+
+      if (fullName.isNotEmpty &&
+          displayName != null &&
+          displayName.isNotEmpty &&
+          fullName != displayName) {
+        return '$fullName - $displayName';
+      }
+
+      if (displayName != null && displayName.isNotEmpty) {
+        return displayName;
+      }
+
+      if (fullName.isNotEmpty) {
+        return fullName;
+      }
     }
 
     // Default fallback
