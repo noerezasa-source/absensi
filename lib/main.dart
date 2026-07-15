@@ -13,6 +13,7 @@ import 'package:get/get.dart';
 import 'package:absensimassal/controllers/timezone_controller.dart';
 import 'package:absensimassal/controllers/theme_controller.dart';
 import 'package:absensimassal/attendance/services/attendance_sync_service.dart';
+import 'package:absensimassal/services/objectbox_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:sqflite/sqflite.dart';
@@ -58,6 +59,9 @@ Future<void> main() async {
 
   // HAPUS DATABASE LAMA SEBELUM APLIKASI JALAN
   await forceDeleteDatabase();
+
+  // Inisialisasi ObjectBox
+  await ObjectBoxService().init();
 
   // Backend API atau bisa juga inisialisasi supobase
   await Supabase.initialize(

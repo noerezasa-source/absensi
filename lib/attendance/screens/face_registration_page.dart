@@ -633,6 +633,73 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         'enrollmentDate': DateTime.now().toIso8601String(),
       };
 
+      // ✅ DUPLICATE GUARD: Check if this face is already registered to someone else
+      try {
+        final memberRow = await Supabase.instance.client
+            .from('organization_members')
+            .select('organization_id')
+            .eq('id', widget.organizationMemberId)
+            .maybeSingle();
+        final orgId = memberRow?['organization_id'] as int?;
+        if (orgId != null) {
+          final duplicateWarning = await _biometricService.verifyFaceAgainstExisting(
+            faceTemplate: combinedList.first, // Check the front-facing template
+            intendedMemberId: widget.organizationMemberId,
+            organizationId: orgId,
+          );
+          if (duplicateWarning != null && mounted) {
+            final matchedName = duplicateWarning['matched_name'] as String? ?? 'Unknown';
+            final similarity = ((duplicateWarning['similarity'] as double?) ?? 0) * 100;
+            setState(() {
+              _isLoading = false;
+            });
+            final proceed = await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                title: const Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                    SizedBox(width: 8),
+                    Text('Peringatan Duplikat'),
+                  ],
+                ),
+                content: Text(
+                  'Wajah ini mirip dengan "$matchedName" '
+                  '(${similarity.toStringAsFixed(0)}% cocok).\n\n'
+                  'Pastikan orang yang benar sedang menghadap kamera.\n\n'
+                  'Lanjutkan registrasi?',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Batal', style: TextStyle(color: Colors.red)),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Lanjutkan'),
+                  ),
+                ],
+              ),
+            );
+            if (proceed != true) {
+              setState(() {
+                _isRegistrationComplete = false;
+              });
+              _currentAngle = CaptureAngle.front;
+              _capturedTemplates.clear();
+              _startImageStream();
+              return;
+            }
+            setState(() {
+              _isLoading = true;
+            });
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ Duplicate face check failed (non-fatal): $e');
+      }
+
       // 2. Upload Front Photo
       if (_frontImagePath != null) {
         final imageFile = File(_frontImagePath!);

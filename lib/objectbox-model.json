@@ -1,0 +1,73 @@
+{
+  "_note1": "KEEP THIS FILE! Check it into a version control system (VCS) like git.",
+  "_note2": "ObjectBox manages crucial IDs for your object model. See docs for details.",
+  "_note3": "If you have VCS merge conflicts, you must resolve them according to ObjectBox docs.",
+  "entities": [
+    {
+      "id": "1:644565229026393901",
+      "lastPropertyId": "8:3152709666438246567",
+      "name": "KaryawanWajah",
+      "properties": [
+        {
+          "id": "1:8626836867565474678",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:7607069420853143171",
+          "name": "organizationMemberId",
+          "indexId": "1:1789938161532769008",
+          "type": 6,
+          "flags": 8
+        },
+        {
+          "id": "3:3903796708229298584",
+          "name": "organizationId",
+          "indexId": "2:2187596769051640052",
+          "type": 6,
+          "flags": 8
+        },
+        {
+          "id": "4:7111167614179314663",
+          "name": "namaLengkap",
+          "type": 9
+        },
+        {
+          "id": "5:1526020971928562352",
+          "name": "profilePhotoUrl",
+          "type": 9
+        },
+        {
+          "id": "6:6142035961070109803",
+          "name": "faceEmbedding",
+          "indexId": "3:7295842027488810617",
+          "type": 28,
+          "flags": 8
+        },
+        {
+          "id": "7:4755862382913610031",
+          "name": "lastSyncedAt",
+          "type": 10
+        },
+        {
+          "id": "8:3152709666438246567",
+          "name": "isActive",
+          "type": 1
+        }
+      ],
+      "relations": []
+    }
+  ],
+  "lastEntityId": "1:644565229026393901",
+  "lastIndexId": "3:7295842027488810617",
+  "lastRelationId": "0:0",
+  "lastSequenceId": "0:0",
+  "modelVersion": 5,
+  "modelVersionParserMinimum": 5,
+  "retiredEntityUids": [],
+  "retiredIndexUids": [],
+  "retiredPropertyUids": [],
+  "retiredRelationUids": [],
+  "version": 1
+}

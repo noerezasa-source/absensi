@@ -133,11 +133,9 @@ class FaceRecognitionTFLiteService {
 
     // 3. Check face size (Dynamic Area)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    // Assuming standard preview ~ 720x1280 = 921,600.
-    // 12000 pixels ensures only close-up, active-user-scale faces are processed.
-    // This blocks bystanders walking past in the background.
-    if (!forRegistration && faceArea < 12000) {
-      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 12000)');
+    // Lowered threshold from 12000 to 4000 to support recognition at 1-2 meters.
+    if (!forRegistration && faceArea < 4000) {
+      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 4000)');
       return false;
     }
 
@@ -415,11 +413,43 @@ class FaceRecognitionTFLiteService {
   // ⛔ NO MORE SCALING to [0,1]
   // ⛔ NO MORE LANDMARK comparisons in Identity
   double compareFaces(
-    Map<String, dynamic> template1,
-    Map<String, dynamic> template2,
+    dynamic template1,
+    dynamic template2,
   ) {
-    final embedding1 = List<double>.from(template1['embedding'] ?? []);
-    final embedding2 = List<double>.from(template2['embedding'] ?? []);
+    final List<double> embedding1;
+    final List<double> embedding2;
+
+    if (template1 is List<double>) {
+      embedding1 = template1;
+    } else if (template1 is Float32List) {
+      embedding1 = template1;
+    } else if (template1 is Map && template1['embedding'] is List<double>) {
+      embedding1 = template1['embedding'] as List<double>;
+    } else if (template1 is Map && template1['embedding'] is Float32List) {
+      embedding1 = template1['embedding'] as Float32List;
+    } else if (template1 is Map) {
+      embedding1 = List<double>.from(template1['embedding'] ?? []);
+    } else if (template1 is List) {
+      embedding1 = List<double>.from(template1);
+    } else {
+      return -1.0;
+    }
+
+    if (template2 is List<double>) {
+      embedding2 = template2;
+    } else if (template2 is Float32List) {
+      embedding2 = template2;
+    } else if (template2 is Map && template2['embedding'] is List<double>) {
+      embedding2 = template2['embedding'] as List<double>;
+    } else if (template2 is Map && template2['embedding'] is Float32List) {
+      embedding2 = template2['embedding'] as Float32List;
+    } else if (template2 is Map) {
+      embedding2 = List<double>.from(template2['embedding'] ?? []);
+    } else if (template2 is List) {
+      embedding2 = List<double>.from(template2);
+    } else {
+      return -1.0;
+    }
 
     if (embedding1.isEmpty || embedding2.isEmpty) return -1.0;
 
@@ -428,12 +458,12 @@ class FaceRecognitionTFLiteService {
     double norm1 = 0.0;
     double norm2 = 0.0;
 
-    // Vectors should already be L2 normalized from _buildTemplate,
-    // but we re-calculate safety denominators to be sure.
     for (int i = 0; i < embedding1.length; i++) {
-      dotProduct += embedding1[i] * embedding2[i];
-      norm1 += embedding1[i] * embedding1[i];
-      norm2 += embedding2[i] * embedding2[i];
+      final double val1 = embedding1[i];
+      final double val2 = embedding2[i];
+      dotProduct += val1 * val2;
+      norm1 += val1 * val1;
+      norm2 += val2 * val2;
     }
 
     final mag = sqrt(norm1) * sqrt(norm2);

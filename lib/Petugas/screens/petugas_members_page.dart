@@ -25,6 +25,7 @@ import '../../attendance/screens/fingerprint_registration_page.dart';
 import '../../helpers/language_helper.dart';
 import 'member_detail_log_page.dart';
 import 'department_management_page.dart';
+import '../../services/offline_database_service.dart';
 
 class PetugasMembersPage extends StatefulWidget {
   final bool isDarkMode;
@@ -2072,6 +2073,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                         case 'rfid':
                           _showRfidRegistrationDialog(member);
                           break;
+                        case 'delete_member':
+                          _showDeleteMemberConfirmation(member);
+                          break;
                       }
                     },
                     itemBuilder: (BuildContext context) => [
@@ -2195,6 +2199,31 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                                     : Colors.grey.shade400,
                                 size: 20,
                               ),
+                          ],
+                        ),
+                      ),
+                      // ─── Divider zona berbahaya ───
+                      const PopupMenuDivider(),
+                      PopupMenuItem<String>(
+                        value: 'delete_member',
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.person_remove_rounded,
+                              size: 18,
+                              color: Color(0xFFEF4444),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                'Hapus Anggota',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFFEF4444),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -2942,6 +2971,265 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         },
       ),
     );
+  }
+
+  // ===================================================================
+  // HAPUS ANGGOTA: Confirmation Dialog + Cascade Delete
+  // ===================================================================
+
+  /// Tampilkan dialog konfirmasi sebelum menghapus anggota.
+  Future<void> _showDeleteMemberConfirmation(Map<String, dynamic> member) async {
+    final memberName = _getMemberName(member);
+    final memberId = member['id'] as int;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor:
+            widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.person_remove_rounded,
+                color: Color(0xFFEF4444),
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Hapus Anggota',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: widget.isDarkMode ? Colors.white : Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 14,
+                  color: widget.isDarkMode ? Colors.white70 : Colors.black54,
+                  height: 1.5,
+                ),
+                children: [
+                  const TextSpan(text: 'Anda akan menghapus '),
+                  TextSpan(
+                    text: memberName,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: widget.isDarkMode ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                  const TextSpan(
+                    text:
+                        ' dari organisasi ini.\n\nSemua data biometrik (wajah & sidik jari) akan dihapus permanen.',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: const Color(0xFFEF4444).withValues(alpha: 0.25),
+                ),
+              ),
+              child: const Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    color: Color(0xFFEF4444),
+                    size: 16,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tindakan ini tidak dapat dibatalkan.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFFEF4444),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Batal',
+              style: TextStyle(
+                color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade600,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              elevation: 0,
+            ),
+            child: const Text(
+              'Hapus Permanen',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await _deleteMember(memberId, memberName);
+    }
+  }
+
+  /// Cascade delete anggota dari Supabase + SQLite lokal + RAM Cache.
+  Future<void> _deleteMember(int memberId, String memberName) async {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor:
+              widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(Color(0xFFEF4444)),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  'Menghapus $memberName...',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color:
+                        widget.isDarkMode ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      // Step 1: Supabase — Hapus semua data biometrik (wajah & sidik jari)
+      await _supabase
+          .from('biometric_data')
+          .delete()
+          .eq('organization_member_id', memberId);
+
+      // Step 2: Supabase — Hapus keanggotaan dari organisasi
+      await _supabase.from('organization_members').delete().eq('id', memberId);
+
+      // Step 3 & 4: SQLite — Hapus cache lokal (biometrik + profil)
+      final offlineDb = OfflineDatabaseService();
+      await offlineDb.deleteMemberData(memberId);
+
+      // Step 5: Invalidasi RAM Cache BiometricService
+      final biometricSvc = BiometricService();
+      final orgId = widget.memberData['organization_id'] as int?;
+      if (orgId != null) {
+        await biometricSvc.refreshCache(orgId);
+      }
+
+      // Tutup loading dialog
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+      // Refresh daftar anggota
+      if (mounted) {
+        _loadOrganizationMembersOptimized();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white, size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '$memberName berhasil dihapus dari organisasi.',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.white, size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Gagal menghapus: ${e.toString()}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
   }
 
   void _showRfidRegistrationDialog(Map<String, dynamic> member) {

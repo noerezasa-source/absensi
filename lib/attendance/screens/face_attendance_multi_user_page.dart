@@ -1,7 +1,6 @@
 // lib/pages/face_attendance_multi_user_page.dart
 import 'dart:async';
 import 'dart:io';
-import 'dart:math'; // ✅ Valid element for sqrt
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -916,16 +915,6 @@ class _FaceAttendanceMultiUserPageState
     final int uvSize = width * height ~/ 2;
     final Uint8List nv21 = Uint8List(ySize + uvSize);
 
-    // Debug: Log plane information
-    debugPrint(
-      '🔍 NV21 conversion: width=$width, height=$height, planes=${image.planes.length}',
-    );
-    for (int i = 0; i < image.planes.length; i++) {
-      debugPrint(
-        '  Plane $i: bytes=${image.planes[i].bytes.length}, bytesPerRow=${image.planes[i].bytesPerRow}, bytesPerPixel=${image.planes[i].bytesPerPixel}',
-      );
-    }
-
     // Validate planes
     if (image.planes.length < 3) {
       throw Exception(
@@ -937,12 +926,6 @@ class _FaceAttendanceMultiUserPageState
     final Uint8List yPlane = image.planes[0].bytes;
     final int yRowStride = image.planes[0].bytesPerRow;
 
-    if (yPlane.length < ySize) {
-      debugPrint(
-        '⚠️ Y plane too small: ${yPlane.length} < $ySize, using available data',
-      );
-    }
-
     if (yRowStride == width) {
       final copyLength = yPlane.length < ySize ? yPlane.length : ySize;
       nv21.setRange(0, copyLength, yPlane);
@@ -950,7 +933,6 @@ class _FaceAttendanceMultiUserPageState
       for (int row = 0; row < height; row++) {
         final int srcOffset = row * yRowStride;
         final int dstOffset = row * width;
-        // Guard against Y plane being shorter than expected
         final int available = yPlane.length - srcOffset;
         final int toCopy = available < width ? available : width;
         if (toCopy <= 0) break;
@@ -964,8 +946,6 @@ class _FaceAttendanceMultiUserPageState
     final int uvRowStride = image.planes[1].bytesPerRow;
     final int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
 
-    debugPrint('🔍 UV: uvRowStride=$uvRowStride, uvPixelStride=$uvPixelStride');
-
     int pos = ySize;
     final int uvRows = height ~/ 2;
     final int uvCols = width ~/ 2;
@@ -974,7 +954,6 @@ class _FaceAttendanceMultiUserPageState
       for (int col = 0; col < uvCols; col++) {
         final int uvIndex = row * uvRowStride + col * uvPixelStride;
 
-        // Check bounds
         if (uvIndex >= 0 &&
             uvIndex < vPlane.length &&
             uvIndex < uPlane.length) {
@@ -983,7 +962,6 @@ class _FaceAttendanceMultiUserPageState
             nv21[pos++] = uPlane[uvIndex]; // then U
           }
         } else {
-          // Fill with neutral chroma (128) if out of bounds
           if (pos < nv21.length) nv21[pos++] = 128;
           if (pos < nv21.length) nv21[pos++] = 128;
         }
@@ -1254,7 +1232,7 @@ class _FaceAttendanceMultiUserPageState
     try {
       final stopwatch = Stopwatch()..start();
       // ✅ Instant Single-Frame Inference
-      debugPrint('🎯 [BENCH] Starting instantaneous recognition for face $id');
+      // debugPrint removed to prevent FPS drops
 
       if (frameBytes == null) {
         debugPrint('⚠️ No stream bytes available for recognition');
@@ -1273,12 +1251,10 @@ class _FaceAttendanceMultiUserPageState
         allowSidePose: false,
       );
       final captureEnd = stopwatch.elapsedMilliseconds;
-      debugPrint(
-        '🎬 [BENCH] Capture+Extraction took: ${captureEnd - captureStart}ms',
-      );
+      // Bench logging removed to prevent FPS drops
 
       final frameCount = template['frame_count'] ?? 1;
-      debugPrint('✅ Using $frameCount-frame averaged embedding for matching');
+      // debugPrint('✅ Using $frameCount-frame averaged embedding for matching');
 
       final matchStart = stopwatch.elapsedMilliseconds;
       final result = template.containsKey('matched_user')
@@ -1287,22 +1263,13 @@ class _FaceAttendanceMultiUserPageState
               capturedTemplate: template,
               organizationId: widget.organizationId,
               strict: true,
-              threshold:
-                  0.55, // ✅ INCREASED: More strict threshold to prevent false matches (was 0.45)
+              threshold: 0.70, // Increased from 0.60 to prevent false matches
             );
       final matchEnd = stopwatch.elapsedMilliseconds;
-      debugPrint(
-        '🔍 [BENCH] Matching against database took: ${matchEnd - matchStart}ms',
-      );
+      // Bench logging removed to prevent FPS drops
 
-      if (result == null) {
-        debugPrint(
-          '⚠️ No match found for face $id (similarity below threshold)',
-        );
-      }
-      debugPrint(
-        '🚀 [BENCH] TOTAL Recognition Cycle: ${stopwatch.elapsedMilliseconds}ms',
-      );
+      // Null match logging removed — handled by biometric_service compact log
+      // Bench logging removed to prevent FPS drops
 
       if (result != null) {
         // ✅ INSTANT FEEDBACK: Sound + UI First
@@ -1316,9 +1283,7 @@ class _FaceAttendanceMultiUserPageState
         final matchedBiometricId = result['biometric_id'] as int?;
         final organizationMemberId = result['organization_member_id'] as int?;
 
-        debugPrint(
-          '✅ Valid match found: $matchedName (Mem: $organizationMemberId, Bio: $matchedBiometricId) with sim: ${matchedSim.toStringAsFixed(3)}',
-        );
+        // debugPrint('✅ Valid match found: $matchedName ...') removed for FPS
 
         _persistentFaceTracker[id] = {
           'name': matchedName,
@@ -1357,9 +1322,9 @@ class _FaceAttendanceMultiUserPageState
         if (mounted) {
           // Silenced error sound per user request
         }
-        // ✅ UNKNOWN: Short Cooldown to RETRY quickly (Machine Gun Mode)
-        // This allows moving subjects to be re-evaluated effectively
-        _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 200));
+        // ✅ UNKNOWN: Cooldown to RETRY (1 second instead of 200ms)
+        // This prevents flooding the Isolate if multiple unrecognised faces are on screen.
+        _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 1000));
       }
     } catch (e) {
       debugPrint('Recognition error: $e');

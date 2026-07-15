@@ -321,7 +321,18 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
             throw Exception('Image file not found: ${message.imagePath}');
           }
           final imageBytes = await imageFile.readAsBytes();
-          faceImage = img.decodeImage(imageBytes);
+          final fullImage = img.decodeImage(imageBytes);
+          if (fullImage != null) {
+            // ✅ CRITICAL FIX: Crop face region from full photo
+            // Previously the entire photo was fed to the model, producing
+            // embeddings inconsistent with the attendance path (which crops
+            // tightly). This mismatch caused identity cross-matching.
+            faceImage = _cropFaceFromDecodedImage(
+              fullImage,
+              message.faceData,
+              max(recognitionInputSize, landmarkInputSize),
+            );
+          }
         } else if (message.imageBytes != null &&
             message.imageWidth != null &&
             message.imageHeight != null) {
@@ -581,6 +592,57 @@ img.Image _normalizeLighting(img.Image image) {
     brightness: adjustmentFactor,
     contrast: 1.1, // Slight contrast boost for features
   );
+}
+
+// ✅ CRITICAL FIX: Crop face region from a decoded JPEG/PNG image.
+// This ensures the registration path produces the same tightly-cropped face
+// input as the attendance path (_convertYUVRegionToImage), fixing the
+// embedding inconsistency that caused identity cross-matching/swapping.
+img.Image _cropFaceFromDecodedImage(
+  img.Image fullImage,
+  Map<String, dynamic> faceData,
+  int targetSize,
+) {
+  final box = faceData['boundingBox'] as Map<String, dynamic>?;
+  if (box == null) {
+    // No bounding box provided — resize whole image as fallback
+    return img.copyResize(fullImage, width: targetSize, height: targetSize);
+  }
+
+  final double fLeft = (box['left'] as num).toDouble();
+  final double fTop = (box['top'] as num).toDouble();
+  final double fWidth = (box['width'] as num).toDouble();
+  final double fHeight = (box['height'] as num).toDouble();
+
+  // Add margin around face (same 25% margin as _convertYUVRegionToImage)
+  const margin = 0.25;
+  final marginW = fWidth * margin;
+  final marginH = fHeight * margin;
+
+  int startX = max(0, (fLeft - marginW).toInt());
+  int startY = max(0, (fTop - marginH).toInt());
+  int endX = min(fullImage.width, (fLeft + fWidth + marginW).toInt());
+  int endY = min(fullImage.height, (fTop + fHeight + marginH).toInt());
+
+  int cropW = endX - startX;
+  int cropH = endY - startY;
+
+  if (cropW <= 10 || cropH <= 10) {
+    // Fallback: bounding box too small or invalid, use whole image
+    return img.copyResize(fullImage, width: targetSize, height: targetSize);
+  }
+
+  // Crop the face region
+  final cropped = img.copyCrop(
+    fullImage,
+    x: startX,
+    y: startY,
+    width: cropW,
+    height: cropH,
+  );
+
+  // Resize to target (square) for model input
+  return img.copyResize(cropped, width: targetSize, height: targetSize);
 }
 
 img.Image _enhanceImage(img.Image image) {

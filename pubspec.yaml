@@ -45,6 +45,11 @@ dependencies:
   get: ^4.6.6
   intl: any
   tflite_flutter: ^0.12.1
+
+  # 🆕 ObjectBox — Offline Vector Search untuk Face Embedding (HNSW Index)
+  # Memungkinkan Approximate Nearest Neighbor search ~1ms untuk 1000+ karyawan.
+  objectbox: ^4.0.0
+  objectbox_flutter_libs: ^4.0.0 # Berisi native .so untuk Android/iOS
   audioplayers: ^6.0.0
   sqflite: ^2.3.0 # Local SQLite database
   fl_chart: ^1.2.0 # Chart visualization
@@ -83,6 +88,17 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # 🆕 ObjectBox code generator — jalankan sekali:
+  #   dart run build_runner build --delete-conflicting-outputs
+  build_runner: ^2.4.13
+  objectbox_generator: ^4.0.0
+
+# Paksa source_gen ke versi baru agar kompatibel dengan analyzer 8.x
+# yang digunakan oleh objectbox_generator 4.x.
+# Tanpa ini, build_runner gagal dengan error 'getInvocation not defined'.
+dependency_overrides:
+  source_gen: ^4.2.3
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

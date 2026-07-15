@@ -6,6 +6,7 @@ import 'package:path/path.dart';
 import 'package:flutter/foundation.dart';
 import '../models/offline_attendance.dart';
 import '../helpers/timezone_helper.dart';
+import 'objectbox_service.dart';
 
 class OfflineDatabaseService {
   static final OfflineDatabaseService _instance =
@@ -772,6 +773,40 @@ class OfflineDatabaseService {
     }
   }
 
+  /// Hapus semua data lokal milik seorang anggota (cascade delete SQLite & ObjectBox).
+  /// Dipanggil setelah penghapusan berhasil di Supabase.
+  Future<void> deleteMemberData(int organizationMemberId) async {
+    final db = await database;
+    try {
+      await db.transaction((txn) async {
+        // 1. Hapus semua data biometrik lokal (wajah & sidik jari)
+        final deletedBio = await txn.delete(
+          'biometric_data',
+          where: 'organization_member_id = ?',
+          whereArgs: [organizationMemberId],
+        );
+
+        // 2. Hapus profil anggota dari cache lokal
+        final deletedMember = await txn.delete(
+          'cached_members',
+          where: 'organization_member_id = ?',
+          whereArgs: [organizationMemberId],
+        );
+
+        // 3. Hapus biometrik wajah dari ObjectBox
+        ObjectBoxService().deleteByMemberId(organizationMemberId);
+
+        debugPrint(
+          '🗑️ Local delete: $deletedBio biometrik + $deletedMember profil dari SQLite dan ObjectBox '
+          'untuk member $organizationMemberId',
+        );
+      });
+    } catch (e) {
+      debugPrint('❌ Error deleting local member data: $e');
+      rethrow;
+    }
+  }
+
   // Find member by card number in cache
   Future<Map<String, dynamic>?> findMemberByCardInCache(
     String cardNumber,
@@ -1148,7 +1183,7 @@ class OfflineDatabaseService {
       final biometricResults = await db.rawQuery(
         '''
         SELECT 
-          bd.id,
+          COALESCE(bd.supabase_id, bd.id) as id,
           bd.organization_member_id,
           bd.template_data,
           bd.enrollment_date,
