@@ -83,6 +83,8 @@ class _FaceAttendanceMultiUserPageState
   List<Map<String, dynamic>> _availableModes = [];
   bool _isLoadingModes = false;
   bool _isRefreshing = false;
+  bool _isScreenFlashEnabled = false;
+  bool _showLowLightWarning = false;
 
   List<Map<String, dynamic>> _detectedFaces = [];
 
@@ -231,6 +233,16 @@ class _FaceAttendanceMultiUserPageState
         '${AppLanguage.tr('attendance.face.init_failed')}$e',
         MessageType.error,
       );
+    }
+  }
+
+  Future<void> _toggleTorchMode(bool enable) async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    try {
+      await _cameraController!.setFlashMode(enable ? FlashMode.torch : FlashMode.off);
+      debugPrint('📷 Hardware torch set to: ${enable ? "ON" : "OFF"}');
+    } catch (e) {
+      debugPrint('Hardware torch not supported or failed: $e');
     }
   }
 
@@ -660,7 +672,7 @@ class _FaceAttendanceMultiUserPageState
       _cameraController = CameraController(
         frontCamera,
         ResolutionPreset
-            .high, // ✅ OPTIMIZED: 720p is much faster and sharp enough
+            .medium, // ✅ OPTIMIZED: 480p/medium reduces frame data size by 66%, making detection & Isolate transfers 3x faster
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup
@@ -675,6 +687,17 @@ class _FaceAttendanceMultiUserPageState
         },
       );
       debugPrint('✅ Camera initialized successfully');
+
+      try {
+        final maxExp = await _cameraController!.getMaxExposureOffset();
+        if (maxExp > 0) {
+          final targetExposure = (maxExp * 0.3).clamp(0.5, 1.5);
+          await _cameraController!.setExposureOffset(targetExposure);
+          debugPrint('📷 Camera exposure offset set to: $targetExposure');
+        }
+      } catch (e) {
+        debugPrint('Exposure offset not supported or failed: $e');
+      }
 
       try {
         await _cameraController!.setFocusMode(FocusMode.auto);
@@ -891,6 +914,7 @@ class _FaceAttendanceMultiUserPageState
       allBytes.putUint8List(plane.bytes);
     }
     final bytes = allBytes.done().buffer.asUint8List();
+    _enhanceBgraBrightness(bytes);
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
 
@@ -967,8 +991,89 @@ class _FaceAttendanceMultiUserPageState
         }
       }
     }
-
+    _enhanceNv21Brightness(nv21, ySize);
     return nv21;
+  }
+
+  void _enhanceNv21Brightness(Uint8List nv21, int ySize) {
+    int sum = 0;
+    int sampleCount = 0;
+    for (int i = 0; i < ySize; i += 16) {
+      sum += nv21[i];
+      sampleCount++;
+    }
+    if (sampleCount == 0) return;
+    final double averageLuminance = sum / sampleCount;
+
+    final bool isDark = averageLuminance < 60.0;
+    if (_showLowLightWarning != isDark) {
+      _showLowLightWarning = isDark;
+      if (mounted) {
+        setState(() {});
+      }
+    }
+
+    const double targetLuminance = 110.0;
+    if (averageLuminance < 85.0) {
+      final double factor = targetLuminance / (averageLuminance + 1.0);
+      final double clampedFactor = factor.clamp(1.0, 2.5);
+
+      if (clampedFactor > 1.05) {
+        final lut = Uint8List(256);
+        for (int val = 0; val < 256; val++) {
+          lut[val] = (val * clampedFactor).round().clamp(0, 255);
+        }
+
+        for (int i = 0; i < ySize; i++) {
+          nv21[i] = lut[nv21[i]];
+        }
+      }
+    }
+  }
+
+  void _enhanceBgraBrightness(Uint8List bytes) {
+    final int totalBytes = bytes.length;
+    if (totalBytes == 0) return;
+    int sum = 0;
+    int sampleCount = 0;
+    for (int i = 0; i < totalBytes; i += 64) {
+      if (i + 2 >= totalBytes) break;
+      final b = bytes[i];
+      final g = bytes[i + 1];
+      final r = bytes[i + 2];
+      sum += (0.299 * r + 0.587 * g + 0.114 * b).round();
+      sampleCount++;
+    }
+    if (sampleCount == 0) return;
+    final double averageLuminance = sum / sampleCount;
+
+    final bool isDark = averageLuminance < 60.0;
+    if (_showLowLightWarning != isDark) {
+      _showLowLightWarning = isDark;
+      if (mounted) {
+        setState(() {});
+      }
+    }
+
+    const double targetLuminance = 110.0;
+    if (averageLuminance < 85.0) {
+      final double factor = targetLuminance / (averageLuminance + 1.0);
+      final double clampedFactor = factor.clamp(1.0, 2.5);
+
+      if (clampedFactor > 1.05) {
+        final lut = Uint8List(256);
+        for (int val = 0; val < 256; val++) {
+          lut[val] = (val * clampedFactor).round().clamp(0, 255);
+        }
+
+        for (int i = 0; i < totalBytes; i += 4) {
+          if (i + 2 >= totalBytes) break;
+          bytes[i] = lut[bytes[i]];
+          bytes[i + 1] = lut[bytes[i + 1]];
+          bytes[i + 2] = lut[bytes[i + 2]];
+        }
+      }
+    }
   }
 
   static final Map<DeviceOrientation, int> _orientations = {
@@ -2146,6 +2251,14 @@ class _FaceAttendanceMultiUserPageState
                 child: CircularProgressIndicator(color: Colors.white),
               ),
 
+            // Screen Flash Overlay
+            if (_isScreenFlashEnabled)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: ScreenFlashOverlay(),
+                ),
+              ),
+
             // ✅ SYNC: Using a single CustomPainter for all faces to eliminate lag (matching wajah project)
             if (_cameraController != null)
               Positioned.fill(
@@ -2290,15 +2403,22 @@ class _FaceAttendanceMultiUserPageState
                     },
                   ),
                   const SizedBox(width: 10),
-                  // Refresh Button
                   _buildCircularActionButton(
-                    icon: _isRefreshing
-                        ? Icons.hourglass_empty
-                        : Icons.refresh_rounded,
-                    onTap: _isRefreshing ? () {} : _refreshTemplates,
+                    icon: _isScreenFlashEnabled
+                        ? Icons.flash_on_rounded
+                        : Icons.flash_off_rounded,
+                    iconColor: _isScreenFlashEnabled
+                        ? Colors.yellow
+                        : Colors.white,
+                    onTap: () {
+                      setState(() {
+                        _isScreenFlashEnabled = !_isScreenFlashEnabled;
+                      });
+                      _toggleTorchMode(_isScreenFlashEnabled);
+                    },
                   ),
                   const SizedBox(width: 10),
-                  // Menu Button
+                  // Menu/More Button
                   _buildCircularActionButton(
                     icon: Icons.more_vert,
                     onTap: () => _showMenu(context),
@@ -2369,6 +2489,69 @@ class _FaceAttendanceMultiUserPageState
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ),
+
+            // Low Light Warning Notification Banner
+            if (_showLowLightWarning && !_isScreenFlashEnabled)
+              Positioned(
+                bottom: 250, // tepat di atas area bawah
+                left: 20,
+                right: 20,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade900.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.wb_incandescent_outlined, color: Colors.white),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Lingkungan redup. Silakan aktifkan Cahaya Layar.',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.amber.shade900,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          elevation: 0,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _isScreenFlashEnabled = true;
+                          });
+                          _toggleTorchMode(true);
+                        },
+                        child: const Text(
+                          'Aktifkan',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -2671,22 +2854,129 @@ class _FaceAttendanceMultiUserPageState
   Widget _buildCircularActionButton({
     required IconData icon,
     required VoidCallback onTap,
+    Color? iconColor,
+    Color? bgColor,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.4),
+          color: bgColor ?? Colors.black.withValues(alpha: 0.4),
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white12),
         ),
-        child: Icon(icon, color: Colors.white, size: 24),
+        child: Icon(icon, color: iconColor ?? Colors.white, size: 24),
       ),
     );
   }
 
   void _showMenu(BuildContext context) {
-    _openModePicker();
+    final RenderBox button = context.findRenderObject() as RenderBox;
+    final RenderBox overlay = Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+    final RelativeRect position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      color: const Color(0xFF1E1E26), // Premium dark theme matching our UI
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      items: [
+        PopupMenuItem<String>(
+          value: 'refresh',
+          child: Row(
+            children: [
+              const Icon(Icons.refresh_rounded, color: Colors.white70, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                AppLanguage.tr('attendance.face.refresh_templates'),
+                style: const TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'mode',
+          child: Row(
+            children: [
+              const Icon(Icons.settings_outlined, color: Colors.white70, size: 20),
+              const SizedBox(width: 10),
+              const Text(
+                'Pilih Mode Absensi',
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == 'refresh') {
+        if (!_isRefreshing) {
+          _refreshTemplates();
+        }
+      } else if (value == 'mode') {
+        _openModePicker();
+      }
+    });
   }
+}
+
+class ScreenFlashOverlay extends StatelessWidget {
+  const ScreenFlashOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: ScreenFlashOverlayPainter(),
+    );
+  }
+}
+
+class ScreenFlashOverlayPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1. Draw a white background over the whole screen
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    final double centerX = size.width / 2;
+    final double centerY = size.height / 2.3; // slightly above center to align with typical face positioning
+    final double radiusX = size.width * 0.32;
+    final double radiusY = radiusX * 1.35;
+
+    final path = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
+      ..addOval(Rect.fromCenter(
+        center: Offset(centerX, centerY),
+        width: radiusX * 2,
+        height: radiusY * 2,
+      ))
+      ..fillType = PathFillType.evenOdd;
+
+    canvas.drawPath(path, paint);
+
+    // 2. Draw a subtle border around the oval cutout
+    final borderPaint = Paint()
+      ..color = const Color(0xFF6366F1) // Indigo accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(centerX, centerY),
+        width: radiusX * 2,
+        height: radiusY * 2,
+      ),
+      borderPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

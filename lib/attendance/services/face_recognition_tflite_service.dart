@@ -52,7 +52,39 @@ class FaceRecognitionTFLiteService {
 
   Future<List<Face>> detectFaces(String imagePath) async {
     final inputImage = InputImage.fromFilePath(imagePath);
-    return await detectFacesFromInputImage(inputImage);
+    final faces = await detectFacesFromInputImage(inputImage);
+    if (faces.isNotEmpty) return faces;
+
+    // Fallback: Jika tidak terdeteksi wajah, coba tingkatkan kecerahan/kontras gambar secara software
+    try {
+      final file = File(imagePath);
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded != null) {
+        // Tingkatkan kecerahan (1.4x) dan kontras (1.25x) untuk mempermudah ML Kit mendeteksi fitur wajah
+        final enhanced = img.adjustColor(decoded, brightness: 1.4, contrast: 1.25);
+        final tempDir = Directory.systemTemp;
+        final tempFile = File('${tempDir.path}/temp_enhanced_${DateTime.now().millisecondsSinceEpoch}.jpg');
+        await tempFile.writeAsBytes(img.encodeJpg(enhanced, quality: 90));
+        
+        final enhancedInputImage = InputImage.fromFilePath(tempFile.path);
+        final enhancedFaces = await detectFacesFromInputImage(enhancedInputImage);
+        
+        // Hapus file sementara
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+        
+        if (enhancedFaces.isNotEmpty) {
+          debugPrint('✨ Wajah terdeteksi setelah peningkatan kecerahan software!');
+          return enhancedFaces;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error selama deteksi wajah fallback: $e');
+    }
+
+    return [];
   }
 
   /// Strict detector — used for attendance to block background faces
