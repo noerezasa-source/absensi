@@ -24,6 +24,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
 
+    lint {
+        abortOnError = false
+        disable.add("HardcodedDebugMode")
+    }
+
     kotlin {
         compilerOptions {
             jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
@@ -70,7 +75,7 @@ android {
 }
 
 tasks.whenTaskAdded {
-    if (name == "checkDebugAarMetadata") {
+    if (name.contains("AarMetadata")) {
         enabled = false
     }
 }

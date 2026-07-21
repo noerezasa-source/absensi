@@ -712,11 +712,17 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
                                 ),
                                 title: Text(
                                   AppLanguage.tr('export_report'),
-                                  style: const TextStyle(fontWeight: FontWeight.w600),
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                                  ),
                                 ),
                                 subtitle: Text(
                                   AppLanguage.tr('export_report_subtitle'),
-                                  style: const TextStyle(fontSize: 12),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: widget.isDarkMode ? Colors.white70 : Colors.black54,
+                                  ),
                                 ),
                                 trailing: const Icon(
                                   Icons.chevron_right,
