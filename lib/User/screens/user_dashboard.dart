@@ -15,6 +15,7 @@ import '../../helpers/timezone_helper.dart';
 import '../../Petugas/screens/selfie_attendance_flow_page.dart';
 import '../../helpers/language_helper.dart';
 import '../../services/timezone_service.dart';
+import '../../services/offline_database_service.dart';
 import 'join_department_screen.dart';
 
 class UserDashboardPage extends StatefulWidget {
@@ -116,7 +117,8 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           .from('user_profiles')
           .select('timezone')
           .eq('id', userId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 3));
 
       if (response != null && response['timezone'] != null) {
         setState(() {
@@ -129,6 +131,10 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     } catch (e) {
       debugPrint('Error loading user timezone: $e');
       _userTimezone = _organizationTimezone;
+      if (widget.memberData['user_profiles'] != null && 
+          (widget.memberData['user_profiles'] as Map<String, dynamic>)['timezone'] != null) {
+        _userTimezone = (widget.memberData['user_profiles'] as Map<String, dynamic>)['timezone'];
+      }
     }
   }
 
@@ -148,15 +154,25 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           .from('organizations')
           .select('id, name, logo_url')
           .eq('id', organizationId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 3));
 
       if (org != null) {
         setState(() {
           _organization = org;
         });
+      } else if (_organization == null) {
+        setState(() {
+          _organization = widget.memberData['organizations'] as Map<String, dynamic>?;
+        });
       }
     } catch (e) {
       debugPrint('Error loading organization info: $e');
+      if (mounted && _organization == null) {
+        setState(() {
+          _organization = widget.memberData['organizations'] as Map<String, dynamic>?;
+        });
+      }
     }
   }
 
@@ -165,17 +181,31 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     if (organizationId == null) return;
 
     try {
+      final cachedOrg = await OfflineDatabaseService().getOrganizationData(organizationId);
+      if (cachedOrg != null && cachedOrg['timezone'] != null) {
+        if (mounted) {
+          setState(() {
+            _organizationTimezone = cachedOrg['timezone'] as String;
+          });
+        }
+      }
+
       final org = await _supabase
           .from('organizations')
-          .select('timezone')
+          .select('timezone, id, name')
           .eq('id', organizationId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 3));
 
-      if (org != null && org['timezone'] != null) {
-        setState(() {
-          _organizationTimezone = org['timezone'] as String;
-        });
-        debugPrint('Organization timezone: $_organizationTimezone');
+      if (org != null) {
+        if (org['timezone'] != null) {
+          if (mounted) {
+            setState(() {
+              _organizationTimezone = org['timezone'] as String;
+            });
+          }
+        }
+        await OfflineDatabaseService().cacheOrganizationData(org);
       }
     } catch (e) {
       debugPrint('Error loading organization timezone: $e');
@@ -434,7 +464,8 @@ class _UserDashboardPageState extends State<UserDashboardPage>
           .from('user_profiles')
           .select()
           .eq('id', userId)
-          .single();
+          .single()
+          .timeout(const Duration(seconds: 3));
 
       if (mounted) {
         setState(() {
@@ -444,9 +475,15 @@ class _UserDashboardPageState extends State<UserDashboardPage>
     } catch (e) {
       debugPrint('!!! ERROR loading user profile: $e');
       if (mounted) {
-        setState(() {
-          _errorMessage = 'Failed to load profile: $e';
-        });
+        if (_userProfile == null && widget.memberData['user_profiles'] != null) {
+          setState(() {
+            _userProfile = widget.memberData['user_profiles'] as Map<String, dynamic>?;
+          });
+        } else if (_userProfile == null) {
+          setState(() {
+            _errorMessage = 'Failed to load profile: $e';
+          });
+        }
       }
     }
   }

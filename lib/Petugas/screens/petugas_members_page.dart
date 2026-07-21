@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -132,6 +133,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     if (organizationId == null) return;
 
     setState(() => _isInitialLoading = true);
+    
+    // Delay heavy data loading to ensure route transition animation completes smoothly
+    await Future.delayed(const Duration(milliseconds: 300));
 
     try {
       _attendanceMode = await RfidModeHelper.getAttendanceMode(organizationId);
@@ -2305,7 +2309,15 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
     if (faceData != null) {
       hasFaceData = true;
-      final template = faceData['face_template'] as Map<String, dynamic>?;
+      Map<String, dynamic>? template;
+      final templateData = faceData['template_data'];
+      if (templateData is String) {
+        try {
+          template = jsonDecode(templateData) as Map<String, dynamic>?;
+        } catch (_) {}
+      } else if (templateData is Map<String, dynamic>) {
+        template = templateData;
+      }
       if (template != null && (template['totalAngles'] ?? 0) > 1) {
         isHighAccuracy = true;
       }

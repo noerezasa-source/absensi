@@ -1,10 +1,10 @@
 // lib/models/face_tracking_state.dart
 
-/// State machine for reliable face recognition
+/// State machine untuk reliable face recognition dengan passive anti-spoofing.
 enum FaceTrackingState {
-  idle,          // No processing, face just detected
-  tracking,      // Tracking face movement
-  locked,        // Face locked for processing
-  livenessCheck, // ✅ NEW: Running anti-spoofing liveness detection
-  cooldown,      // Waiting before next recognition
+  idle,             // Wajah baru terdeteksi, belum ada proses
+  livenessCheck,    // Mengumpulkan sinyal passive liveness (blink / approach)
+  livenessRejected, // Liveness timeout — wajah tidak terkonfirmasi sebagai nyata
+  locked,           // Liveness PASS — siap inference
+  cooldown,         // Menunggu sebelum re-recognition
 }

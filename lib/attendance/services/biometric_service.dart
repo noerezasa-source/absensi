@@ -186,9 +186,42 @@ class BiometricService {
         if (cachedMember != null) {
           fullMap['organization_members'] = cachedMember['organization_members'];
         }
-        final kw = KaryawanWajah.fromSupabase(fullMap);
-        ObjectBoxService().putKaryawanWajah(kw);
-        debugPrint('✅ ObjectBox: Registered face template for member ID $organizationMemberId');
+        
+        // Clear existing local ObjectBox templates for this member to prevent duplicate accumulation
+        ObjectBoxService().deleteByMemberId(organizationMemberId);
+
+        final templateData = fullMap['template_data'];
+        Map<String, dynamic>? parsed;
+        if (templateData is String) {
+          try {
+            parsed = jsonDecode(templateData);
+          } catch (_) {}
+        } else if (templateData is Map<String, dynamic>) {
+          parsed = templateData;
+        }
+
+        if (parsed != null && parsed['templates'] != null && (parsed['templates'] as List).isNotEmpty) {
+          final subTemplates = parsed['templates'] as List;
+          int addedCount = 0;
+          for (var sub in subTemplates) {
+            if (sub is Map && sub['embedding'] != null) {
+              final doubleList = (sub['embedding'] as List)
+                  .map((e) => (e as num).toDouble())
+                  .toList();
+              final embedding = Float32List.fromList(doubleList);
+              
+              final base = KaryawanWajah.fromSupabase(fullMap);
+              base.faceEmbedding = embedding;
+              ObjectBoxService().box.put(base);
+              addedCount++;
+            }
+          }
+          debugPrint('✅ ObjectBox: Registered $addedCount multi-angle face templates for member ID $organizationMemberId');
+        } else {
+          final kw = KaryawanWajah.fromSupabase(fullMap);
+          ObjectBoxService().putKaryawanWajah(kw);
+          debugPrint('✅ ObjectBox: Registered 1 face template for member ID $organizationMemberId');
+        }
       } catch (e) {
         debugPrint('⚠️ ObjectBox failed to save registered face: $e');
       }
@@ -772,12 +805,12 @@ class BiometricService {
         return null;
       }
 
-      // ✅ MARGIN-OF-VICTORY CHECK: Reject ambiguous matches (gap < 5%)
+      // ✅ MARGIN-OF-VICTORY CHECK: Reject ambiguous matches (gap < 8%)
       if (secondHighestSimilarity > 0 && secondHighestSimilarity >= effectiveThreshold) {
         final double margin = similarity - secondHighestSimilarity;
         // ONLY reject if the top 2 candidates are DIFFERENT people
-        if (margin < 0.05 && secondCandidateMemberId != bestCandidate.object.organizationMemberId) {
-          debugPrint('⚠️ AMBIGUOUS: margin ${(margin * 100).toStringAsFixed(1)}% < 5% between DIFFERENT members');
+        if (margin < 0.08 && secondCandidateMemberId != bestCandidate.object.organizationMemberId) {
+          debugPrint('⚠️ AMBIGUOUS: margin ${(margin * 100).toStringAsFixed(1)}% < 8% between DIFFERENT members');
           return null;
         }
       }
@@ -953,6 +986,63 @@ class BiometricService {
             // debugPrint('✅ Local cache template evolved successfully');
             // Update in-memory cache too
             _parsedTemplateCache?[biometricId] = updatedTemplate;
+
+            // Update ObjectBox in the background to keep local search index fresh
+            Future(() async {
+              try {
+                final db = await _offlineDb.database;
+                final dbResult = await db.query(
+                  'biometric_data',
+                  columns: ['organization_member_id', 'organization_id'],
+                  where: 'id = ?',
+                  whereArgs: [biometricId],
+                  limit: 1,
+                );
+                if (dbResult.isNotEmpty) {
+                  final memberId = dbResult.first['organization_member_id'] as int;
+                  final orgId = dbResult.first['organization_id'] as int?;
+
+                  // Find member details
+                  final cachedMember = await _offlineDb.findMemberByOrgIdInCache(memberId);
+                  
+                  final Map<String, dynamic> fullMap = {
+                    'id': biometricId,
+                    'organization_member_id': memberId,
+                    'organization_id': orgId,
+                    'template_data': jsonString,
+                    'is_active': true,
+                  };
+                  if (cachedMember != null) {
+                    fullMap['organization_members'] = cachedMember['organization_members'];
+                  }
+
+                  // Delete existing
+                  ObjectBoxService().deleteByMemberId(memberId);
+
+                  // Re-insert evolved templates
+                  if (updatedTemplate['templates'] != null && (updatedTemplate['templates'] as List).isNotEmpty) {
+                    final subTemplates = updatedTemplate['templates'] as List;
+                    for (var sub in subTemplates) {
+                      if (sub is Map && sub['embedding'] != null) {
+                        final doubleList = (sub['embedding'] as List)
+                            .map((e) => (e as num).toDouble())
+                            .toList();
+                        final embedding = Float32List.fromList(doubleList);
+                        
+                        final base = KaryawanWajah.fromSupabase(fullMap);
+                        base.faceEmbedding = embedding;
+                        ObjectBoxService().box.put(base);
+                      }
+                    }
+                  } else {
+                    final kw = KaryawanWajah.fromSupabase(fullMap);
+                    ObjectBoxService().putKaryawanWajah(kw);
+                  }
+                }
+              } catch (e) {
+                debugPrint('⚠️ Failed to update ObjectBox after evolution: $e');
+              }
+            });
           });
     } catch (e) {
       debugPrint('⚠️ Failed to evolve template: $e');
@@ -1096,7 +1186,36 @@ class BiometricService {
       final List<KaryawanWajah> faces = [];
       for (var t in templates) {
         try {
-          faces.add(KaryawanWajah.fromSupabase(t));
+          final templateData = t['template_data'];
+          Map<String, dynamic>? parsed;
+          if (templateData is String) {
+            try {
+              parsed = jsonDecode(templateData);
+            } catch (_) {}
+          } else if (templateData is Map<String, dynamic>) {
+            parsed = templateData;
+          }
+
+          if (parsed != null && parsed['templates'] != null && (parsed['templates'] as List).isNotEmpty) {
+            final subTemplates = parsed['templates'] as List;
+            int angleIdx = 0;
+            for (var sub in subTemplates) {
+              if (sub is Map && sub['embedding'] != null) {
+                final doubleList = (sub['embedding'] as List)
+                    .map((e) => (e as num).toDouble())
+                    .toList();
+                final embedding = Float32List.fromList(doubleList);
+                
+                final base = KaryawanWajah.fromSupabase(t);
+                base.faceEmbedding = embedding;
+                faces.add(base);
+                angleIdx++;
+              }
+            }
+            debugPrint('🧬 OBX Sync: Synced $angleIdx templates for Member ID: ${t['organization_member_id']}');
+          } else {
+            faces.add(KaryawanWajah.fromSupabase(t));
+          }
         } catch (e) {
           debugPrint('⚠️ Error converting template to KaryawanWajah: $e');
         }

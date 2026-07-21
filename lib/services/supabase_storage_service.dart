@@ -53,8 +53,9 @@ class SupabaseStorageService {
   // Upload face template
   Future<String> uploadFaceTemplate(
     File imageFile,
-    int organizationMemberId,
-  ) async {
+    int organizationMemberId, {
+    String? suffix,
+  }) async {
     try {
       final user = _supabase.auth.currentUser;
       if (user == null) {
@@ -62,7 +63,8 @@ class SupabaseStorageService {
       }
 
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = '${organizationMemberId}_template_$timestamp.jpg';
+      final fileNameSuffix = suffix != null ? '${suffix}_$timestamp' : '$timestamp';
+      final fileName = '${organizationMemberId}_template_$fileNameSuffix.jpg';
 
       // FIX: Use organizationMemberId folder so photos are grouped by member, not by the petugas who registered them.
       // This assumes RLS allows writing to folders based on member_id (or is public/service role).

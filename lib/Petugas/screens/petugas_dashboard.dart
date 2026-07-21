@@ -6,6 +6,7 @@ import '../../helpers/timezone_helper.dart';
 import '../../helpers/rfid_mode_helper.dart';
 import '../../attendance/services/attendance_service.dart';
 import '../../auth/services/role_service.dart';
+import '../../services/offline_database_service.dart';
 import '../widgets/petugas_bottom_nav.dart';
 import '../../attendance/screens/face_attendance_multi_user_page.dart';
 import 'petugas_members_page.dart';
@@ -165,16 +166,26 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           .from('user_profiles')
           .select()
           .eq('id', userId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 3));
 
       if (mounted && response != null) {
         setState(() {
           _userProfile = response;
         });
         debugPrint('User profile loaded: ${_userProfile?['display_name']}');
+      } else if (mounted && _userProfile == null) {
+        setState(() {
+          _userProfile = widget.memberData['user_profiles'] as Map<String, dynamic>?;
+        });
       }
     } catch (e) {
       debugPrint('Error loading user profile: $e');
+      if (mounted && _userProfile == null) {
+        setState(() {
+          _userProfile = widget.memberData['user_profiles'] as Map<String, dynamic>?;
+        });
+      }
     }
   }
 
@@ -218,15 +229,25 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           .from('organizations')
           .select('id, name, logo_url')
           .eq('id', organizationId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 3));
 
       if (org != null) {
         setState(() {
           _organization = org;
         });
+      } else if (_organization == null) {
+        setState(() {
+          _organization = widget.memberData['organizations'] as Map<String, dynamic>?;
+        });
       }
     } catch (e) {
       debugPrint('Error loading organization info for ID $organizationId: $e');
+      if (mounted && _organization == null) {
+        setState(() {
+          _organization = widget.memberData['organizations'] as Map<String, dynamic>?;
+        });
+      }
     }
   }
 
@@ -235,17 +256,32 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     if (organizationId == null) return;
 
     try {
+      // First try local SQLite cache to prevent blocking UI
+      final cachedOrg = await OfflineDatabaseService().getOrganizationData(organizationId);
+      if (cachedOrg != null && cachedOrg['timezone'] != null) {
+        if (mounted) {
+          setState(() {
+            _organizationTimezone = cachedOrg['timezone'] as String;
+          });
+        }
+      }
+
       final org = await _supabase
           .from('organizations')
-          .select('timezone')
+          .select('timezone, id, name')
           .eq('id', organizationId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 3));
 
-      if (org != null && org['timezone'] != null) {
-        setState(() {
-          _organizationTimezone = org['timezone'] as String;
-        });
-        debugPrint('Organization timezone: $_organizationTimezone');
+      if (org != null) {
+        if (org['timezone'] != null) {
+          if (mounted) {
+            setState(() {
+              _organizationTimezone = org['timezone'] as String;
+            });
+          }
+        }
+        await OfflineDatabaseService().cacheOrganizationData(org);
       }
     } catch (e) {
       debugPrint('Error loading organization timezone: $e');

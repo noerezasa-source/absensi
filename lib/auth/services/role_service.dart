@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class RoleService {
@@ -145,6 +147,7 @@ class RoleService {
   Future<List<Map<String, dynamic>>> getAllOrganizationMembersWithRoles(
     String userId,
   ) async {
+    final String cacheKey = 'cached_memberships_$userId';
     try {
       final List<dynamic> response = await _supabase
           .from('organization_members')
@@ -177,13 +180,41 @@ class RoleService {
             )
           ''')
           .eq('user_id', userId)
-          .eq('is_active', true);
+          .eq('is_active', true)
+          .timeout(const Duration(seconds: 3));
 
       debugPrint('RAW MEMBERSHIPS RESPONSE: $response');
 
-      return List<Map<String, dynamic>>.from(response);
+      final results = List<Map<String, dynamic>>.from(response);
+
+      // Caching data untuk penggunaan offline
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(cacheKey, jsonEncode(results));
+      } catch (cacheErr) {
+        debugPrint('⚠️ Failed to cache memberships: $cacheErr');
+      }
+
+      return results;
     } catch (e) {
       debugPrint('!!! ERROR fetching all organization memberships: $e');
+      
+      // Fallback offline
+      try {
+        debugPrint('📴 Memuat data membership dari cache lokal (offline)...');
+        final prefs = await SharedPreferences.getInstance();
+        final cachedData = prefs.getString(cacheKey);
+        
+        if (cachedData != null) {
+          final List<dynamic> decoded = jsonDecode(cachedData);
+          final cachedResults = List<Map<String, dynamic>>.from(decoded);
+          debugPrint('✅ Berhasil memuat ${cachedResults.length} membership dari cache offline.');
+          return cachedResults;
+        }
+      } catch (cacheErr) {
+        debugPrint('❌ Gagal memuat cache offline membership: $cacheErr');
+      }
+      
       return [];
     }
   }

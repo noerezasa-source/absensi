@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
+import 'face_anti_spoofing_service.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 /// Request object to send to Isolate
@@ -17,6 +18,7 @@ class InferenceRequest {
   final int? rotation; // NEW: Rotation in degrees
   final Map<String, dynamic> faceData;
   final bool allowSidePose;
+  final bool checkSpoof;
 
   InferenceRequest({
     required this.requestId,
@@ -28,6 +30,7 @@ class InferenceRequest {
     required this.faceData,
     this.allowSidePose = false,
     this.debugPath, // NEW: Path to save debug image
+    this.checkSpoof = false,
   });
 
   final String? debugPath;
@@ -158,6 +161,7 @@ class IsolateInferenceService {
     required Map<String, dynamic> faceData,
     bool allowSidePose = false,
     String? debugPath, // NEW
+    bool checkSpoof = false,
   }) async {
     if (!_isInitialized) {
       await initialize();
@@ -177,6 +181,7 @@ class IsolateInferenceService {
         faceData: faceData,
         allowSidePose: allowSidePose,
         debugPath: debugPath,
+        checkSpoof: checkSpoof,
       ),
     );
 
@@ -364,8 +369,24 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           );
         }
 
-        // ✅ NEW: Enhance image clarity (Sharpen + Normalize)
+        // ✅ LIVENESS STAGE 1.5: Lighting Normalization (Wajib untuk ruangan gelap)
+        // Dulu dimatikan untuk stream karena dianggap membebani CPU, tapi sekarang sudah di-optimize
+        // sehingga sangat cepat (~15ms) dan krusial agar model W600K bisa membaca wajah di kondisi low-light.
+        final bool isFromStream = message.imageBytes != null;
         faceImage = _enhanceImage(faceImage);
+
+        // ✅ LIVENESS STAGE 2 (Anti-Spoofing Fast Blur Check)
+        // Berjalan sangat cepat (O(N) 64x64) di background isolate
+        // Hanya dijalankan pada face stream, abaikan jika upload foto manual (registration)
+        final bool checkSpoof = message.checkSpoof;
+        double laplacianScore = 1.0;
+        if (isFromStream && checkSpoof) {
+          laplacianScore = FaceAntiSpoofingService.calculateLaplacian(faceImage);
+          double dynamicThreshold = 15.0 + ((faceImage.width - 100).clamp(0, 300) / 300.0) * 35.0;
+          if (laplacianScore < dynamicThreshold) { 
+            throw Exception('Spoofing detected (Score: ${laplacianScore.toStringAsFixed(1)} < Thr: ${dynamicThreshold.toStringAsFixed(1)})');
+          }
+        }
 
         // 1. Run Recognition Model (W600K)
         // Resize if base image is larger than needed
@@ -407,7 +428,7 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
             requestId: message.requestId,
             embedding: embedding,
             landmarks3d: landmarks3d,
-            qualityScore: 1.0,
+            qualityScore: laplacianScore,
           ),
         );
       } catch (e) {
@@ -486,9 +507,13 @@ img.Image _convertYUVRegionToImage(
     cropH = min(frameHeight, 200);
   }
 
-  // 3. One-Pass Turbo Loop: Crop + Scale + Convert YUV + Rotate
+  // ✅ SPEED: Direct buffer write instead of per-pixel setPixelRgb (~3-8ms saved)
   final image = img.Image(width: targetSize, height: targetSize);
   final int frameSize = frameWidth * frameHeight;
+  final imgBuffer = image.buffer.asUint8List();
+  
+  final int numChannels = image.numChannels;
+  final int rowStride = targetSize * numChannels;
 
   final double scaleX = cropW / targetSize;
   final double scaleY = cropH / targetSize;
@@ -539,7 +564,6 @@ img.Image _convertYUVRegionToImage(
       b = b < 0 ? 0 : (b > 255 ? 255 : b);
 
       // Handle Rotation during Pixel Set (Avoid cost of img.copyRotate later)
-      // Destination calculation based on rotation
       int dx, dy;
       if (rotation == 90) {
         dx = targetSize - 1 - y;
@@ -555,7 +579,14 @@ img.Image _convertYUVRegionToImage(
         dy = y;
       }
 
-      image.setPixelRgb(dx, dy, r, g, b);
+      // ✅ SPEED: Direct buffer write
+      final int bufIdx = dy * rowStride + dx * numChannels;
+      imgBuffer[bufIdx] = r;
+      imgBuffer[bufIdx + 1] = g;
+      imgBuffer[bufIdx + 2] = b;
+      if (numChannels > 3) {
+        imgBuffer[bufIdx + 3] = 255; // Alpha
+      }
     }
   }
 

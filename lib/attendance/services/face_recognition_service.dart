@@ -11,11 +11,12 @@ class FaceRecognitionService {
   FaceRecognitionService() {
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
-        enableContours: true,
+        enableContours: false,
         enableLandmarks: true,
         enableClassification: true,
         enableTracking: true,
-        performanceMode: FaceDetectorMode.accurate,
+        performanceMode: FaceDetectorMode.fast,
+        minFaceSize: 0.05,
       ),
     );
   }

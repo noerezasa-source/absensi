@@ -29,7 +29,8 @@ class FaceRecognitionTFLiteService {
         enableLandmarks: true,
         enableClassification: true,
         enableTracking: true,
-        performanceMode: FaceDetectorMode.fast,
+        performanceMode: FaceDetectorMode.fast, // ⚡ KEMBALIKAN KE FAST: Accurate mode membuat kamera lag parah pada live stream
+        minFaceSize: 0.15, // 🔍 Increased to 15% to ignore small background false positives and speed up ML Kit
       ),
     );
   }
@@ -165,9 +166,9 @@ class FaceRecognitionTFLiteService {
 
     // 3. Check face size (Dynamic Area)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    // Lowered threshold from 12000 to 4000 to support recognition at 1-2 meters.
-    if (!forRegistration && faceArea < 4000) {
-      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 4000)');
+    // Lowered threshold to 900 (30x30 pixels) to support long distance detection up to 5 meters.
+    if (!forRegistration && faceArea < 900) {
+      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 900)');
       return false;
     }
 
@@ -190,7 +191,6 @@ class FaceRecognitionTFLiteService {
     bool allowSidePose = false,
     bool forRegistration = false, // ← use permissive detector during enrollment
   }) async {
-    final inputImage = InputImage.fromFilePath(imagePath);
     // Use permissive detector for registration so photos captured during enrollment
     // aren't rejected because the face is slightly small in the high-res photo.
     final faces = await detectFaces(imagePath);
@@ -216,6 +216,7 @@ class FaceRecognitionTFLiteService {
     Face face, {
     bool allowSidePose = false,
     String? debugPath,
+    bool checkSpoof = false,
   }) async {
     if (!_isInitialized) await initialize();
 
@@ -260,6 +261,7 @@ class FaceRecognitionTFLiteService {
       faceData: faceData,
       allowSidePose: allowSidePose,
       debugPath: debugPath,
+      checkSpoof: checkSpoof,
     );
 
     if (response.error != null) throw Exception(response.error);

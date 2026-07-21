@@ -62,6 +62,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CaptureAngle _currentAngle = CaptureAngle.front;
   final Map<CaptureAngle, Map<String, dynamic>> _capturedTemplates = {};
   String? _frontImagePath;
+  String? _leftImagePath;
+  String? _rightImagePath;
 
   // Guidance and UI
   List<Map<String, dynamic>> _painterFaces = []; // State for optimized painter
@@ -250,7 +252,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.high,
+        ResolutionPreset.high, // HD resolution
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup.yuv420
@@ -441,7 +443,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final double leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
     final double rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
 
-    if (leftEyeOpen < 0.4 || rightEyeOpen < 0.4) {
+    // Relaxed eye open probability to accommodate glasses or narrow eyes
+    if (leftEyeOpen < 0.25 || rightEyeOpen < 0.25) {
       return {'isValid': false, 'message': 'Buka mata Anda'};
     }
 
@@ -459,22 +462,22 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     // Angle specific validation
     switch (_currentAngle) {
       case CaptureAngle.front:
-        if (headY.abs() > 10.0) {
+        if (headY.abs() > 15.0) {
           return {
             'isValid': false,
             'message': 'Lihat Lurus ke Depan',
-          }; // Relaxed from 10 to 15? No, keep 10 for front but provide clear feedback
+          };
         }
-        if (headX.abs() > 10.0) {
+        if (headX.abs() > 15.0) {
           return {'isValid': false, 'message': 'Wajah sejajar kamera'};
         }
         break;
       case CaptureAngle.left:
-        // Range: 15 to 45 degrees (User turns to THEIR left - sign swapped for this device)
-        if (headY < -10.0) {
+        // Range: 20 to 50 degrees
+        if (headY < -15.0) {
           return {'isValid': false, 'message': '← Salah Arah! Toleh KIRI'};
         }
-        if (headY < 15.0) {
+        if (headY < 20.0) {
           return {
             'isValid': false,
             'message': AppLanguage.tr(
@@ -482,7 +485,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             ),
           };
         }
-        if (headY > 45.0) {
+        if (headY > 50.0) {
           return {
             'isValid': false,
             'message': AppLanguage.tr(
@@ -492,8 +495,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         }
         break;
       case CaptureAngle.right:
-        // Range: -15 to -45 degrees (User turns to THEIR right - sign swapped for this device)
-        if (headY > 10.0) {
+        // Range: -20 to -50 degrees
+        if (headY > 15.0) {
           return {
             'isValid': false,
             'message': AppLanguage.tr(
@@ -501,7 +504,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             ),
           };
         }
-        if (headY > -15.0) {
+        if (headY > -20.0) {
           return {
             'isValid': false,
             'message': AppLanguage.tr(
@@ -509,7 +512,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             ),
           };
         }
-        if (headY < -45.0) {
+        if (headY < -50.0) {
           return {
             'isValid': false,
             'message': AppLanguage.tr(
@@ -548,12 +551,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         forRegistration: true,
       );
 
-      // ✅ HIGH STANDARD VALIDATION: Mandatory thresholds
+      // ✅ BALANCED VALIDATION: Not too strict, not too loose
       double qualityScore =
           (faceTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
 
-      // 🚀 User Requirement: "Kalau tidak memenuhi standart itu tidak bisa register"
-      double minQuality = _currentAngle == CaptureAngle.front ? 0.90 : 0.65;
+      // 🚀 Relaxed Quality Standard to avoid frustrating users while maintaining decent accuracy
+      double minQuality = _currentAngle == CaptureAngle.front ? 0.80 : 0.55;
 
       if (qualityScore < minQuality) {
         _updateGuidance(
@@ -573,9 +576,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       _capturedTemplates[_currentAngle] = faceTemplate;
 
       if (_currentAngle == CaptureAngle.front) {
-        _frontImagePath = imagePath; // Keep front image
-      } else {
-        await File(imagePath).delete(); // Delete others
+        _frontImagePath = imagePath;
+      } else if (_currentAngle == CaptureAngle.left) {
+        _leftImagePath = imagePath;
+      } else if (_currentAngle == CaptureAngle.right) {
+        _rightImagePath = imagePath;
       }
 
       // PROGRESS LOGIC
@@ -722,20 +727,36 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         debugPrint('⚠️ Duplicate face check failed (non-fatal): $e');
       }
 
-      // 2. Upload Front Photo
-      if (_frontImagePath != null) {
-        final imageFile = File(_frontImagePath!);
-        final processedFile = await _processImage(imageFile);
-        await _storageService.uploadFaceTemplate(
-          processedFile,
-          widget.organizationMemberId,
-        );
+      // 2. Upload Photos (Front, Left, Right)
+      final pathsToUpload = [
+        _frontImagePath,
+        _leftImagePath,
+        _rightImagePath,
+      ];
 
-        // Clean up
-        if (await imageFile.exists()) await imageFile.delete();
-        if (processedFile.path != imageFile.path) {
-          final pf = File(processedFile.path);
-          if (await pf.exists()) await pf.delete();
+      for (int i = 0; i < pathsToUpload.length; i++) {
+        final path = pathsToUpload[i];
+        if (path != null) {
+          final imageFile = File(path);
+          if (await imageFile.exists()) {
+            final processedFile = await _processImage(imageFile);
+            
+            // Pass the angle suffix (front, left, right) so we can distinguish them in storage
+            final suffix = i == 0 ? 'front' : (i == 1 ? 'left' : 'right');
+            
+            await _storageService.uploadFaceTemplate(
+              processedFile,
+              widget.organizationMemberId,
+              suffix: suffix,
+            );
+
+            // Clean up temp files
+            if (await imageFile.exists()) await imageFile.delete();
+            if (processedFile.path != imageFile.path) {
+              final pf = File(processedFile.path);
+              if (await pf.exists()) await pf.delete();
+            }
+          }
         }
       }
 

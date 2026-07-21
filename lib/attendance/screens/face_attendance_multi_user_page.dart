@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'package:absensimassal/models/face_liveness_tracker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,6 +24,7 @@ import '../../models/offline_attendance.dart';
 import '../../models/work_schedule_models.dart';
 import 'manual_check_page.dart';
 import '../../models/face_tracking_state.dart'; // ✅ NEW: State Machine Enum
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
@@ -53,6 +55,7 @@ class _FaceAttendanceMultiUserPageState
   final SupabaseClient _supabase = Supabase.instance.client;
 
   bool _isCameraInitialized = false;
+  bool _useLiveness = false; // ⚡ DEFAULT OFF: Liveness causes lag, disable by default for speed
   bool _isProcessing = false;
   final bool _isTakingPicture =
       false; // ✅ NEW: Prevent concurrent camera captures
@@ -95,27 +98,26 @@ class _FaceAttendanceMultiUserPageState
   // Map<trackingId, {name, similarity, memberId, timestamp}>
   final Map<int, Map<String, dynamic>> _persistentFaceTracker = {};
 
-  // ✅ NEW: Face Tracking State Machine
+  // ✅ Face Tracking State Machine
   final Map<int, FaceTrackingState> _faceStates = {};
   final Map<int, int> _stabilityCounters = {};
   final Map<int, Rect> _lastFaceRects = {};
   final Map<int, DateTime> _cooldowns = {};
+  final Map<int, FaceLivenessTracker> _livenessTrackers = {};
+  // Timestamp mulai liveness check per face, untuk enforce timeout
+  final Map<int, DateTime> _livenessStartTimes = {};
 
   // ✅ NEW: Centroid Tracker State
   final Map<int, Offset> _activeTrackers = {};
+  final Map<int, DateTime> _lastSeenTimes = {};
   int _nextTrackerId = 1;
   static const double _maxTrackingDistance = 150.0;
 
   // Configuration
-  static const int _requiredStableFrames =
-      3; // ⚡ STABLE: Require 3 stable frames before recognition (prevents accidental triggers)
-  static const double _stabilityThreshold =
-      300.0; // 🚀 INCREASED: More tolerant of motion (was 200.0)
   static const Duration _recognitionCooldown = Duration(
-    seconds: 2,
-  ); // ✅ FASTER: 2s cooldown for quicker re-recognition
+    seconds: 1,
+  ); // ⚡ 1s cooldown for instant re-recognition
 
-  // ✅ Adaptive Configuration (Speed + Accuracy Balance)
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
   static const Duration _sameModeCooldown = Duration(minutes: 5);
   final Map<String, DateTime> _lastAttendanceTime = {}; // Key: "memberId_mode"
@@ -123,18 +125,18 @@ class _FaceAttendanceMultiUserPageState
   bool _isOnline = true;
   DateTime _lastCameraProcess = DateTime.fromMillisecondsSinceEpoch(
     0,
-  ); // ✅ NEW: Throttle detection loop
+  ); // Throttle detection loop
   static const Duration _cameraThrottle = Duration(
-    milliseconds: 30, // ⚡ FAST: ~33 FPS for maximum smoothness (was 150ms)
+    milliseconds: 16, // ⚡ ~60 FPS active: maximum speed detection
   );
 
   static const Duration _idleCameraThrottle = Duration(
-    milliseconds: 100, // ⚡ FAST: Quicker response even when idle (was 500ms)
+    milliseconds: 100, // ⚡ ~10 FPS idle: instant wake-up
   );
 
   DateTime _lastUIUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _uiThrottle = Duration(
-    milliseconds: 33, // ⚡ SILKY: ~30 FPS UI updates (was 150ms)
+    milliseconds: 33, // ⚡ ~30 FPS UI: smooth & fast box tracking
   );
 
   @override
@@ -155,6 +157,13 @@ class _FaceAttendanceMultiUserPageState
       });
       await _enableKioskMode();
       await Future.delayed(const Duration(milliseconds: 100));
+
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        _useLiveness = prefs.getBool('face_liveness_enabled') ?? false;
+      } catch (e) {
+        debugPrint('⚠️ Error loading liveness configuration: $e');
+      }
 
       // Step 2: Org & Settings (15%)
       setState(() {
@@ -671,8 +680,7 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset
-            .medium, // ✅ OPTIMIZED: 480p/medium reduces frame data size by 66%, making detection & Isolate transfers 3x faster
+        ResolutionPreset.high, // Ditingkatkan ke HD atas permintaan user
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup
@@ -810,23 +818,18 @@ class _FaceAttendanceMultiUserPageState
 
       final faces = await _faceService.detectFacesFromInputImage(inputImage);
 
-      // Debug: Log face detection
-      if (faces.isNotEmpty) {
-        debugPrint('👤 Detected ${faces.length} face(s)');
-      }
+      // Debug logging removed to prevent FPS drop from I/O spam
 
       // ✅ Mode Switching Logic (Hysteresis)
       if (faces.isEmpty) {
         _consecutiveNoFaceFrames++;
         if (_consecutiveNoFaceFrames >= 5 && !_isIdleMode) {
           if (mounted) setState(() => _isIdleMode = true);
-          debugPrint('📴 Entering idle mode (no faces)');
         }
       } else {
         _consecutiveNoFaceFrames = 0;
         if (_isIdleMode) {
           if (mounted) setState(() => _isIdleMode = false);
-          debugPrint('📡 Entering active mode (${faces.length} faces)');
         }
       }
 
@@ -836,9 +839,15 @@ class _FaceAttendanceMultiUserPageState
         copiedBytes = Uint8List.fromList(currentFrameBytes);
       }
 
+      // ✅ FIXED: Landscape vs Portrait Image Size Logic
+      final bool isPortrait = currentRotation == 90 || currentRotation == 270;
+      final Size logicalImageSize = isPortrait 
+          ? Size(image.height.toDouble(), image.width.toDouble()) 
+          : Size(image.width.toDouble(), image.height.toDouble());
+
       _handleStreamFaces(
         faces,
-        Size(image.height.toDouble(), image.width.toDouble()),
+        logicalImageSize,
         copiedBytes,
         currentWidth,
         currentHeight,
@@ -1094,55 +1103,62 @@ class _FaceAttendanceMultiUserPageState
   ) {
     final now = DateTime.now();
 
-    // 1. Centroid Tracking to Assign Persistent IDs
+    // 1. Centroid Tracking to Assign Persistent IDs (Ignoring unstable ML Kit trackingId)
     final Map<int, Face> currentTrackedFaces = {};
     final Set<int> usedTrackerIds = {};
 
     for (final face in faces) {
-      int? assignedId = face.trackingId;
+      final currentCentroid = face.boundingBox.center;
+      double minDistance = double.infinity;
+      int? closestId;
 
-      // If ML Kit doesn't provide trackingId, use Centroid Tracking
-      if (assignedId == null) {
-        final currentCentroid = face.boundingBox.center;
-        double minDistance = double.infinity;
-        int? closestId;
-
-        _activeTrackers.forEach((id, prevCentroid) {
-          if (!usedTrackerIds.contains(id)) {
-            final distance = (currentCentroid - prevCentroid).distance;
-            if (distance < minDistance && distance < _maxTrackingDistance) {
-              minDistance = distance;
-              closestId = id;
-            }
+      _activeTrackers.forEach((id, prevCentroid) {
+        if (!usedTrackerIds.contains(id)) {
+          final distance = (currentCentroid - prevCentroid).distance;
+          if (distance < minDistance && distance < _maxTrackingDistance) {
+            minDistance = distance;
+            closestId = id;
           }
-        });
-
-        if (closestId != null) {
-          assignedId = closestId;
-        } else {
-          assignedId = _nextTrackerId++;
         }
+      });
+
+      int assignedId;
+      if (closestId != null) {
+        assignedId = closestId!;
+      } else {
+        assignedId = _nextTrackerId++;
       }
 
-      _activeTrackers[assignedId!] = face.boundingBox.center;
+      _activeTrackers[assignedId] = currentCentroid;
+      _lastSeenTimes[assignedId] = now;
       usedTrackerIds.add(assignedId);
       currentTrackedFaces[assignedId] = face;
     }
 
-    // Clean up stale trackers
-    _activeTrackers.removeWhere((id, _) => !usedTrackerIds.contains(id));
+    // Clean up stale trackers that haven't been seen for more than 1.5 seconds (grace period)
+    const gracePeriod = Duration(milliseconds: 1500);
+    _activeTrackers.removeWhere((id, _) {
+      final lastSeen = _lastSeenTimes[id];
+      return lastSeen == null || now.difference(lastSeen) > gracePeriod;
+    });
 
-    // 2. Clean up stale states
-    _faceStates.removeWhere((id, _) => !usedTrackerIds.contains(id));
-    _stabilityCounters.removeWhere((id, _) => !usedTrackerIds.contains(id));
-    _lastFaceRects.removeWhere((id, _) => !usedTrackerIds.contains(id));
+    // 2. Clean up stale states for trackers that are no longer active
+    _faceStates.removeWhere((id, _) => !_activeTrackers.containsKey(id));
+    _stabilityCounters.removeWhere((id, _) => !_activeTrackers.containsKey(id));
+    _lastFaceRects.removeWhere((id, _) => !_activeTrackers.containsKey(id));
+    _livenessTrackers.removeWhere((id, _) => !_activeTrackers.containsKey(id));
+    _livenessStartTimes.removeWhere((id, _) => !_activeTrackers.containsKey(id));
+    _lastSeenTimes.removeWhere((id, _) => !_activeTrackers.containsKey(id));
+    _cooldowns.removeWhere((id, _) => !_activeTrackers.containsKey(id));
 
     // Check global cooldowns
     final activeCooldowns = Map<int, DateTime>.from(_cooldowns);
     activeCooldowns.forEach((id, time) {
       if (now.isAfter(time)) {
         _cooldowns.remove(id);
-        _faceStates[id] = FaceTrackingState.idle;
+        if (_activeTrackers.containsKey(id)) {
+          _faceStates[id] = FaceTrackingState.idle;
+        }
       }
     });
 
@@ -1171,77 +1187,93 @@ class _FaceAttendanceMultiUserPageState
           continue;
         } else {
           _cooldowns.remove(id);
+          _livenessTrackers.remove(id);
           _faceStates[id] = FaceTrackingState.idle;
         }
       }
 
-      // STATE MACHINE LOGIC
+      // ── STATE MACHINE ──────────────────────────────────────────────────────
       switch (currentState) {
+        // ── IDLE: Wajah baru pertama kali terdeteksi ──────────────────────
         case FaceTrackingState.idle:
-          // ✅ INSTANT RECOGNITION: Bypass Tracking, go straight to LOCKED/INFERENCE
-          _faceStates[id] = FaceTrackingState.locked;
-          _stabilityCounters[id] = 0;
-          _lastFaceRects[id] = face.boundingBox;
-          // Trigger Inference Immediately
-          _triggerRecognition(
-            face,
-            id,
-            imageSize,
-            frameBytes,
-            width,
-            height,
-            rotation,
-          );
-          displayFaces.add(
-            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
-          );
-          break;
-
-        case FaceTrackingState.tracking:
-          // Check Stability
-          final lastRect = _lastFaceRects[id] ?? face.boundingBox;
-          final movement = (face.boundingBox.center - lastRect.center).distance;
-
-          if (movement < _stabilityThreshold) {
-            _stabilityCounters[id] = (_stabilityCounters[id] ?? 0) + 1;
+          if (_useLiveness) {
+            _livenessTrackers[id] = FaceLivenessTracker(id);
+            _livenessStartTimes[id] = now;
+            _faceStates[id] = FaceTrackingState.livenessCheck;
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.livenessCheck),
+            );
           } else {
-            _stabilityCounters[id] = 0; // Reset if moved too much
-          }
-          _lastFaceRects[id] = face.boundingBox;
-
-          // Check if stable enough to LOCK
-          if ((_stabilityCounters[id] ?? 0) >= _requiredStableFrames) {
+            // ✅ BYPASS LIVENESS FOR INSTANT RECOGNITION (Zero Delay)
             _faceStates[id] = FaceTrackingState.locked;
-            // Trigger Inference
             _triggerRecognition(
-              face,
-              id,
-              imageSize,
-              frameBytes,
-              width,
-              height,
-              rotation,
+              face, id, imageSize, frameBytes, width, height, rotation,
+            );
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.locked),
             );
           }
-
-          displayFaces.add(
-            _buildFaceDisplayData(face, id, FaceTrackingState.tracking),
-          );
           break;
 
-        case FaceTrackingState.locked:
-          // Waiting for inference to complete
-          displayFaces.add(
-            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
-          );
-          break;
-
+        // ── LIVENESS CHECK: kumpulkan sinyal passive ───────────────────────
         case FaceTrackingState.livenessCheck:
+          final tracker = _livenessTrackers[id];
+          if (tracker == null) {
+            // Tracker hilang (anomali), reset ke idle
+            _faceStates[id] = FaceTrackingState.idle;
+            break;
+          }
+
+          // Feed data frame ini
+          tracker.addFrame(
+            leftEyeOpen: face.leftEyeOpenProbability,
+            rightEyeOpen: face.rightEyeOpenProbability,
+            headEulerAngleY: face.headEulerAngleY,
+            headEulerAngleX: face.headEulerAngleX,
+            faceArea: face.boundingBox.width * face.boundingBox.height,
+          );
+
+          if (tracker.isLive) {
+            // ✅ LIVENESS PASS — Kirim ke Isolate untuk Recognition
+            _faceStates[id] = FaceTrackingState.locked;
+            _triggerRecognition(
+              face, id, imageSize, frameBytes, width, height, rotation,
+            );
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.locked),
+            );
+          } else if (tracker.isTimedOut) {
+            // ❌ LIVENESS REJECTED — foto atau tidak kooperatif
+            debugPrint('🚫 Liveness TIMEOUT for tracker $id — rejected as non-live');
+            _faceStates[id] = FaceTrackingState.livenessRejected;
+            // Cooldown 5 detik sebelum boleh coba lagi
+            _cooldowns[id] = now.add(const Duration(seconds: 5));
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.livenessRejected),
+            );
+          } else {
+            // Masih mengumpulkan sinyal
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.livenessCheck),
+            );
+          }
+          break;
+
+        // ── LIVENESS REJECTED: tampilkan box merah sampai cooldown habis ──
+        case FaceTrackingState.livenessRejected:
           displayFaces.add(
-            _buildFaceDisplayData(face, id, FaceTrackingState.livenessCheck),
+            _buildFaceDisplayData(face, id, FaceTrackingState.livenessRejected),
           );
           break;
 
+        // ── LOCKED: menunggu isolate selesai ─────────
+        case FaceTrackingState.locked:
+          displayFaces.add(
+            _buildFaceDisplayData(face, id, currentState),
+          );
+          break;
+
+        // ── COOLDOWN: menunggu sebelum re-scan ─────────────────────────────
         case FaceTrackingState.cooldown:
           displayFaces.add(
             _buildFaceDisplayData(face, id, FaceTrackingState.cooldown),
@@ -1271,18 +1303,30 @@ class _FaceAttendanceMultiUserPageState
 
     switch (state) {
       case FaceTrackingState.idle:
-      case FaceTrackingState.tracking:
         boxColor = Colors.yellow;
         statusText = null;
         break;
+
+      case FaceTrackingState.livenessCheck:
+        // Kotak kuning menandakan sedang verifikasi passif — tanpa teks instruksi
+        boxColor = Colors.yellow;
+        statusText = null;
+        break;
+
+      case FaceTrackingState.livenessRejected:
+        // Kotak merah — wajah tidak terverifikasi sebagai nyata (foto/spoofing)
+        boxColor = Colors.red;
+        final trackedData = _persistentFaceTracker[trackerId];
+        statusText = (trackedData != null && trackedData['name'] != null)
+            ? trackedData['name'] as String
+            : 'Liveness Gagal';
+        break;
+
       case FaceTrackingState.locked:
         boxColor = Colors.blue;
         statusText = null;
         break;
-      case FaceTrackingState.livenessCheck:
-        boxColor = Colors.orange;
-        statusText = AppLanguage.tr('attendance.face.checking');
-        break;
+
       case FaceTrackingState.cooldown:
         final trackedData = _persistentFaceTracker[trackerId];
         if (trackedData != null) {
@@ -1297,7 +1341,6 @@ class _FaceAttendanceMultiUserPageState
             statusText = AppLanguage.tr('attendance.face.error');
           } else {
             boxColor = Colors.green;
-            // ✅ SHOW PERCENTAGE: "Name (85%)"
             if (similarity != null) {
               statusText = '$name (${similarity.toStringAsFixed(0)}%)';
             } else {
@@ -1335,9 +1378,6 @@ class _FaceAttendanceMultiUserPageState
     if (id == -1) return;
 
     try {
-      final stopwatch = Stopwatch()..start();
-      // ✅ Instant Single-Frame Inference
-      // debugPrint removed to prevent FPS drops
 
       if (frameBytes == null) {
         debugPrint('⚠️ No stream bytes available for recognition');
@@ -1346,7 +1386,6 @@ class _FaceAttendanceMultiUserPageState
       }
 
       // Capture single-frame embedding directly
-      final captureStart = stopwatch.elapsedMilliseconds;
       final template = await _faceService.buildTemplateFromBytes(
         frameBytes,
         width,
@@ -1354,24 +1393,17 @@ class _FaceAttendanceMultiUserPageState
         rotation,
         face,
         allowSidePose: false,
+        checkSpoof: _useLiveness,
       );
-      final captureEnd = stopwatch.elapsedMilliseconds;
-      // Bench logging removed to prevent FPS drops
 
-      final frameCount = template['frame_count'] ?? 1;
-      // debugPrint('✅ Using $frameCount-frame averaged embedding for matching');
-
-      final matchStart = stopwatch.elapsedMilliseconds;
       final result = template.containsKey('matched_user')
           ? template['matched_user'] as Map<String, dynamic>?
           : await _biometricService.identifyBestMatchWithUserInfo(
               capturedTemplate: template,
               organizationId: widget.organizationId,
               strict: true,
-              threshold: 0.70, // Increased from 0.60 to prevent false matches
+              threshold: 0.70,
             );
-      final matchEnd = stopwatch.elapsedMilliseconds;
-      // Bench logging removed to prevent FPS drops
 
       // Null match logging removed — handled by biometric_service compact log
       // Bench logging removed to prevent FPS drops
@@ -1427,19 +1459,28 @@ class _FaceAttendanceMultiUserPageState
         if (mounted) {
           // Silenced error sound per user request
         }
-        // ✅ UNKNOWN: Cooldown to RETRY (1 second instead of 200ms)
-        // This prevents flooding the Isolate if multiple unrecognised faces are on screen.
-        _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 1000));
+        // ✅ UNKNOWN: Cooldown 3s to prevent isolate flooding from unrecognised faces
+        _cooldowns[id] = DateTime.now().add(const Duration(seconds: 3));
       }
     } catch (e) {
-      debugPrint('Recognition error: $e');
+      final errorStr = e.toString();
+      debugPrint('Recognition error: $errorStr');
+      
+      if (errorStr.contains('Spoofing detected')) {
+        // ✅ TAHAP 2 ANTI-SPOOFING FAILED (Layar/Kertas terdeteksi)
+        _faceStates[id] = FaceTrackingState.livenessRejected;
+        _cooldowns[id] = DateTime.now().add(const Duration(seconds: 5)); // Hukuman 5 detik
+        _persistentFaceTracker[id] = {'name': 'Spoof/Photo', 'member_id': null};
+        return; // Jangan masuk ke block finally yang mengubah ke cooldown
+      }
+
       _persistentFaceTracker[id] = {'name': 'Error', 'member_id': null};
       // Error Cooldown
       _cooldowns[id] = DateTime.now().add(const Duration(seconds: 1));
     } finally {
       // Transition to COOLDOWN state (duration determined above)
-      // ONLY if not already reset to idle (capture failure)
-      if (_faceStates[id] != FaceTrackingState.idle) {
+      // ONLY if not already reset to idle (capture failure) or livenessRejected (spoofing)
+      if (_faceStates[id] != FaceTrackingState.idle && _faceStates[id] != FaceTrackingState.livenessRejected) {
         _faceStates[id] = FaceTrackingState.cooldown;
       }
     }
@@ -1458,9 +1499,13 @@ class _FaceAttendanceMultiUserPageState
     // Process directly without queue - run async in background
     try {
       final user = result; // result IS the user map from biometric service
-      final memberId = user['organization_member_id'] as int;
+      final memberId = (user['organization_member_id'] as num?)?.toInt();
+      if (memberId == null) {
+        debugPrint('⚠️ Error in handleAttendance: organization_member_id is null');
+        return;
+      }
       final userName = user['user_name'] ?? 'Unknown';
-      final biometricId = user['biometric_id'] as int;
+      final biometricId = (user['biometric_id'] as num?)?.toInt() ?? 0;
       final profilePhotoUrl = user['profile_photo_url'] as String?;
 
       final attendanceType = _attendanceMode;
@@ -1546,8 +1591,8 @@ class _FaceAttendanceMultiUserPageState
         biometricId,
         profilePhotoUrl,
       );
-    } catch (e) {
-      debugPrint('Error in handleAttendance: $e');
+    } catch (e, stack) {
+      debugPrint('Error in handleAttendance: $e\n$stack');
     }
   }
 
@@ -1617,8 +1662,8 @@ class _FaceAttendanceMultiUserPageState
           AttendanceSyncService().syncPendingAttendances();
         }
       }
-    } catch (e) {
-      debugPrint('❌ Background processing failed for $userName: $e');
+    } catch (e, stack) {
+      debugPrint('❌ Background processing failed for $userName: $e\n$stack');
     }
   }
 
@@ -2236,15 +2281,22 @@ class _FaceAttendanceMultiUserPageState
           children: [
             // Camera Preview
             if (_isCameraInitialized && _cameraController != null)
-              Positioned.fill(
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: _cameraController!.value.previewSize?.height ?? 1,
-                    height: _cameraController!.value.previewSize?.width ?? 1,
-                    child: CameraPreview(_cameraController!),
-                  ),
-                ),
+              Builder(
+                builder: (context) {
+                  final bool isPortraitUI = MediaQuery.of(context).orientation == Orientation.portrait;
+                  final double pWidth = _cameraController!.value.previewSize?.width ?? 1;
+                  final double pHeight = _cameraController!.value.previewSize?.height ?? 1;
+                  return Positioned.fill(
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      child: SizedBox(
+                        width: isPortraitUI ? pHeight : pWidth,
+                        height: isPortraitUI ? pWidth : pHeight,
+                        child: CameraPreview(_cameraController!),
+                      ),
+                    ),
+                  );
+                },
               )
             else
               const Center(
@@ -2261,18 +2313,25 @@ class _FaceAttendanceMultiUserPageState
 
             // ✅ SYNC: Using a single CustomPainter for all faces to eliminate lag (matching wajah project)
             if (_cameraController != null)
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: FaceDetectorPainter(
-                    absoluteImageSize: Size(
-                      _cameraController!.value.previewSize!.height,
-                      _cameraController!.value.previewSize!.width,
+              Builder(
+                builder: (context) {
+                  final bool isPortraitUI = MediaQuery.of(context).orientation == Orientation.portrait;
+                  final double pWidth = _cameraController!.value.previewSize?.width ?? 1;
+                  final double pHeight = _cameraController!.value.previewSize?.height ?? 1;
+                  return Positioned.fill(
+                    child: CustomPaint(
+                      painter: FaceDetectorPainter(
+                        absoluteImageSize: Size(
+                          isPortraitUI ? pHeight : pWidth,
+                          isPortraitUI ? pWidth : pHeight,
+                        ),
+                        faces: _detectedFaces,
+                        isFrontCamera:
+                            true, // Multi-user attendance is usually front camera
+                      ),
                     ),
-                    faces: _detectedFaces,
-                    isFrontCamera:
-                        true, // Multi-user attendance is usually front camera
-                  ),
-                ),
+                  );
+                },
               ),
 
             // Debug overlay to show status
@@ -2914,6 +2973,23 @@ class _FaceAttendanceMultiUserPageState
             ],
           ),
         ),
+        PopupMenuItem<String>(
+          value: 'liveness',
+          child: Row(
+            children: [
+              Icon(
+                _useLiveness ? Icons.security_rounded : Icons.security_update_warning_rounded,
+                color: _useLiveness ? Colors.greenAccent : Colors.white70,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                _useLiveness ? 'Liveness: AKTIF' : 'Liveness: NONAKTIF',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
       ],
     ).then((value) {
       if (value == 'refresh') {
@@ -2922,6 +2998,13 @@ class _FaceAttendanceMultiUserPageState
         }
       } else if (value == 'mode') {
         _openModePicker();
+      } else if (value == 'liveness') {
+        setState(() {
+          _useLiveness = !_useLiveness;
+        });
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setBool('face_liveness_enabled', _useLiveness);
+        });
       }
     });
   }

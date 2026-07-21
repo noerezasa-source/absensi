@@ -99,6 +99,9 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
   Future<void> _initializeData() async {
     if (!mounted || _isInitialized) return;
 
+    // Delay heavy data loading to ensure route transition animation completes smoothly
+    await Future.delayed(const Duration(milliseconds: 300));
+
     try {
       // Load attendance mode
       final organizationId = widget.memberData['organization_id'] as int?;

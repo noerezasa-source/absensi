@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../helpers/timezone_helper.dart';
 
 class MemberPerformanceService {
@@ -126,7 +128,8 @@ class MemberPerformanceService {
             biometric_data!left(
               id,
               is_active,
-              biometric_type
+              biometric_type,
+              template_data
             ),
             rfid_cards(
               id,
@@ -161,7 +164,8 @@ class MemberPerformanceService {
       // Execute query with range
       final response = await query
           .order('employee_id', ascending: true)
-          .range(fromIndex, toIndex);
+          .range(fromIndex, toIndex)
+          .timeout(const Duration(seconds: 4));
 
       debugPrint('Members fetched: ${response.length}');
 
@@ -198,6 +202,15 @@ class MemberPerformanceService {
         }
       }
 
+      // Caching data untuk penggunaan offline
+      final cacheKey = 'org_members_${organizationId}_page_${page}_limit_${limit}_dep_${departmentFilter ?? "all"}';
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(cacheKey, jsonEncode(members));
+      } catch (cacheErr) {
+        debugPrint('⚠️ Failed to cache org members: $cacheErr');
+      }
+
       // In-memory search filter (safer than DB-side filtering via joined tables)
       if (searchQuery != null && searchQuery.isNotEmpty) {
         final q = searchQuery.toLowerCase();
@@ -211,6 +224,30 @@ class MemberPerformanceService {
       return members;
     } catch (e) {
       debugPrint('!!! ERROR in getOrganizationMembers: $e');
+      
+      // Fallback ke offline cache jika jaringan terputus
+      final cacheKey = 'org_members_${organizationId}_page_${page}_limit_${limit}_dep_${departmentFilter ?? "all"}';
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedData = prefs.getString(cacheKey);
+        if (cachedData != null) {
+          debugPrint('✅ USING OFFLINE CACHE for org members page $page');
+          var members = List<Map<String, dynamic>>.from(jsonDecode(cachedData));
+          
+          if (searchQuery != null && searchQuery.isNotEmpty) {
+            final q = searchQuery.toLowerCase();
+            members = members.where((m) {
+              final name = (m['member_name'] as String? ?? '').toLowerCase();
+              final empId = (m['employee_id'] as String? ?? '').toLowerCase();
+              return name.contains(q) || empId.contains(q);
+            }).toList();
+          }
+          return members;
+        }
+      } catch (cacheErr) {
+        debugPrint('Error reading offline member cache: $cacheErr');
+      }
+      
       // Re-throw so the UI can surface the actual error message
       rethrow;
     }
@@ -245,10 +282,34 @@ class MemberPerformanceService {
         }
       }
 
-      final response = await query.count(CountOption.exact);
-      return response.count ?? 0;
+      final response = await query.count(CountOption.exact).timeout(const Duration(seconds: 4));
+      
+      final count = response.count ?? 0;
+      
+      // Cache the count
+      final cacheKey = 'org_members_count_${organizationId}_dep_${departmentFilter ?? "all"}_inc_${includeInactive}';
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(cacheKey, count);
+      } catch (cacheErr) {
+        debugPrint('⚠️ Failed to cache org members count: $cacheErr');
+      }
+      
+      return count;
     } catch (e) {
       debugPrint('!!! ERROR in getOrganizationMembersCount: $e');
+      
+      // Fallback to cache
+      final cacheKey = 'org_members_count_${organizationId}_dep_${departmentFilter ?? "all"}_inc_${includeInactive}';
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedCount = prefs.getInt(cacheKey);
+        if (cachedCount != null) {
+          return cachedCount;
+        }
+      } catch (cacheErr) {
+        debugPrint('Error reading offline count cache: $cacheErr');
+      }
       return 0;
     }
   }

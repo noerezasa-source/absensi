@@ -57,8 +57,8 @@ Future<void> forceDeleteDatabase() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // HAPUS DATABASE LAMA SEBELUM APLIKASI JALAN
-  await forceDeleteDatabase();
+  // HAPUS DATABASE LAMA SEBELUM APLIKASI JALAN (DINONAKTIFKAN AGAR OFFLINE JALAN)
+  // await forceDeleteDatabase();
 
   // Inisialisasi ObjectBox
   await ObjectBoxService().init();

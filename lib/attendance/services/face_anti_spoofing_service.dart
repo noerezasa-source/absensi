@@ -13,7 +13,7 @@ class FaceAntiSpoofingService {
   static const String _modelFile = "assets/models/FaceAntiSpoofing.tflite";
   static const int _inputImageSize = 256; // Model input size
   static const double _spoofingThreshold = 0.2; // Score > threshold = spoofing attack
-  static const double _laplacianThreshold = 1000; // Sharpness threshold
+  static const double _laplacianThreshold = 150; // Sharpness threshold diturunkan
   static const int _laplaceThreshold = 50; // Individual pixel threshold
   
   tfl.Interpreter? _interpreter;
@@ -53,7 +53,7 @@ class FaceAntiSpoofingService {
 
     try {
       // Step 1: Check image sharpness using Laplacian
-      final sharpness = _calculateLaplacian(faceImage);
+      final sharpness = calculateLaplacian(faceImage);
       
       if (sharpness < _laplacianThreshold) {
         debugPrint('⚠️ Image too blurry (sharpness: $sharpness)');
@@ -150,39 +150,29 @@ class FaceAntiSpoofingService {
     return score;
   }
 
-  /// Calculate image sharpness using Laplacian operator
-  /// Higher values = sharper image
-  double _calculateLaplacian(img.Image image) {
-    // Resize for consistent measurement
-    final resized = img.copyResizeCropSquare(image, size: _inputImageSize);
+  /// Calculate image sharpness using Fast Laplacian operator (O(N) unrolled)
+  /// Normalized output to be resolution-independent.
+  static double calculateLaplacian(img.Image image) {
+    // Resize to a very small square (64x64) to make it O(1) blazing fast in Dart!
+    final resized = img.copyResizeCropSquare(image, size: 64);
     
     // Convert to grayscale
     final grayscale = img.grayscale(resized);
-    
-    // Laplacian kernel (edge detection)
-    const laplace = [
-      [0, 1, 0],
-      [1, -4, 1],
-      [0, 1, 0]
-    ];
-    const size = 3;
     
     final height = grayscale.height;
     final width = grayscale.width;
     int score = 0;
 
-    // Apply Laplacian filter
-    for (int x = 0; x < height - size + 1; x++) {
-      for (int y = 0; y < width - size + 1; y++) {
-        int result = 0;
+    // Apply Fast 1D Laplacian filter (center * -4 + left + right + top + bottom)
+    for (int y = 1; y < height - 1; y++) {
+      for (int x = 1; x < width - 1; x++) {
+        int center = grayscale.getPixel(x, y).r.toInt();
+        int left = grayscale.getPixel(x - 1, y).r.toInt();
+        int right = grayscale.getPixel(x + 1, y).r.toInt();
+        int top = grayscale.getPixel(x, y - 1).r.toInt();
+        int bottom = grayscale.getPixel(x, y + 1).r.toInt();
         
-        // Convolution
-        for (int i = 0; i < size; i++) {
-          for (int j = 0; j < size; j++) {
-            final pixel = grayscale.getPixel(x + i, y + j);
-            result += (pixel.r.toInt()) * laplace[i][j];
-          }
-        }
+        int result = left + right + top + bottom - (4 * center);
         
         // Count significant edges
         if (result.abs() > _laplaceThreshold) {
@@ -191,7 +181,9 @@ class FaceAntiSpoofingService {
       }
     }
 
-    return score.toDouble();
+    // Normalize score to percentage relative to total pixels (0 to 10000 range)
+    double normalizedScore = (score / (width * height)) * 10000.0;
+    return normalizedScore;
   }
 
   /// Multi-frame liveness detection for better accuracy
