@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class MembersController extends GetxController {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -80,8 +83,33 @@ class MembersController extends GetxController {
     return members;
   }
   
+  Future<bool> prehydrateFromCache(int orgId) async {
+    final cacheKey = 'org_members_all_$orgId';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString(cacheKey);
+      if (cachedStr != null) {
+        final cachedList = List<Map<String, dynamic>>.from(jsonDecode(cachedStr));
+        if (cachedList.isNotEmpty) {
+          organizationMembers.value = cachedList;
+          isLoading.value = false;
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint('Cache read error: $e');
+    }
+    return false;
+  }
+
   Future<void> loadOrganizationMembers(int orgId) async {
-    isLoading.value = true;
+    // OFFLINE-FIRST: Try to load from cache immediately
+    final hasCache = await prehydrateFromCache(orgId);
+    if (!hasCache && organizationMembers.isEmpty) {
+      isLoading.value = true;
+    }
+
+    // BACKGROUND SYNC: Fetch fresh data from Supabase
     try {
       final response = await _supabase
           .from('organization_members')
@@ -133,9 +161,23 @@ class MembersController extends GetxController {
           }
         }
       }
+      
+      // Update reactive variable with fresh data
       organizationMembers.value = list;
+      
+      // Save to cache
+      final cacheKey = 'org_members_all_$orgId';
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(cacheKey, jsonEncode(list));
+      } catch (e) {
+        debugPrint('Cache write error: $e');
+      }
+      
     } catch (e) {
-      Get.snackbar('Error', 'Failed to load members: $e');
+      if (organizationMembers.isEmpty) {
+        Get.snackbar('Error', 'Gagal memuat anggota: $e');
+      }
     } finally {
       isLoading.value = false;
     }

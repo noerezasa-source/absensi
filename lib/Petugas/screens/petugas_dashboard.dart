@@ -485,30 +485,73 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       return;
     }
 
-    setState(() {
-      _isLoadingWeeklyData = true;
-    });
+    // 1. OFFLINE-FIRST: Pre-hydrate from cache for instant display (<5ms)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheKey = 'petugas_weekly_overview_$organizationId';
+      final cachedData = prefs.getString(cacheKey);
+      if (cachedData != null && mounted) {
+        final parsed = jsonDecode(cachedData) as Map<String, dynamic>;
+        setState(() {
+          _totalWeeklyHours = (parsed['totalWeeklyHours'] as num).toDouble();
+          _weeklyPercentageChange = (parsed['weeklyPercentageChange'] as num).toDouble();
+          _dailyHours = (parsed['dailyHours'] as List).map((e) => (e as num).toDouble()).toList();
+          _isLoadingWeeklyData = false;
+        });
+      } else {
+        setState(() {
+          _isLoadingWeeklyData = true;
+        });
+      }
+    } catch (_) {
+      setState(() {
+        _isLoadingWeeklyData = true;
+      });
+    }
 
     try {
-      // Get current week (Monday to Friday)
-      final now = DateTime.now();
-      final currentWeekday = now.weekday; // 1 = Monday, 7 = Sunday
+      // Get current week in organization timezone
+      final nowInOrg = TimezoneHelper.getCurrentTimeInOrgTimezone(_organizationTimezone);
+      final currentWeekday = nowInOrg.weekday; // 1 = Monday, 7 = Sunday
 
       // Calculate Monday of current week
-      final monday = now.subtract(Duration(days: currentWeekday - 1));
+      final monday = nowInOrg.subtract(Duration(days: currentWeekday - 1));
       final mondayStr = monday.toIso8601String().split('T')[0];
 
-      // Calculate Friday of current week
-      final friday = monday.add(const Duration(days: 4));
-      final fridayStr = friday.toIso8601String().split('T')[0];
+      // Calculate Sunday of current week (full 7-day week range)
+      final sunday = monday.add(const Duration(days: 6));
+      final sundayStr = sunday.toIso8601String().split('T')[0];
 
-      // Get last week's Monday and Friday for comparison
+      // Get last week's Monday and Sunday for comparison
       final lastMonday = monday.subtract(const Duration(days: 7));
       final lastMondayStr = lastMonday.toIso8601String().split('T')[0];
-      final lastFriday = lastMonday.add(const Duration(days: 4));
-      final lastFridayStr = lastFriday.toIso8601String().split('T')[0];
+      final lastSunday = lastMonday.add(const Duration(days: 6));
+      final lastSundayStr = lastSunday.toIso8601String().split('T')[0];
 
-      debugPrint('Loading weekly overview: $mondayStr to $fridayStr');
+      debugPrint('Loading weekly overview: $mondayStr to $sundayStr');
+
+      // Helper to compute work duration in minutes safely
+      double extractMinutes(Map<String, dynamic> record) {
+        final stored = (record['work_duration_minutes'] as num?)?.toDouble();
+        if (stored != null && stored > 0) {
+          return stored;
+        }
+        final checkInStr = record['actual_check_in'] as String?;
+        if (checkInStr != null && checkInStr.isNotEmpty) {
+          try {
+            final checkIn = DateTime.parse(checkInStr);
+            final checkOutStr = record['actual_check_out'] as String?;
+            final checkOut = (checkOutStr != null && checkOutStr.isNotEmpty)
+                ? DateTime.parse(checkOutStr)
+                : DateTime.now().toUtc();
+            final diff = checkOut.difference(checkIn).inMinutes.toDouble();
+            return diff > 0 ? diff : 0.0;
+          } catch (e) {
+            return 0.0;
+          }
+        }
+        return 0.0;
+      }
 
       // Fetch current week's attendance records
       final currentWeekRecords = await _supabase
@@ -516,24 +559,29 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           .select('''
             attendance_date,
             work_duration_minutes,
+            actual_check_in,
+            actual_check_out,
             organization_members!inner(organization_id)
           ''')
           .eq('organization_members.organization_id', organizationId)
           .gte('attendance_date', mondayStr)
-          .lte('attendance_date', fridayStr)
-          .timeout(const Duration(seconds: 4));
+          .lte('attendance_date', sundayStr)
+          .timeout(const Duration(seconds: 5));
 
       // Fetch last week's attendance records
       final lastWeekRecords = await _supabase
           .from('attendance_records')
           .select('''
+            attendance_date,
             work_duration_minutes,
+            actual_check_in,
+            actual_check_out,
             organization_members!inner(organization_id)
           ''')
           .eq('organization_members.organization_id', organizationId)
           .gte('attendance_date', lastMondayStr)
-          .lte('attendance_date', lastFridayStr)
-          .timeout(const Duration(seconds: 4));
+          .lte('attendance_date', lastSundayStr)
+          .timeout(const Duration(seconds: 5));
 
       // Calculate daily hours for current week
       final dailyHoursMap = <int, double>{
@@ -542,30 +590,33 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         3: 0.0, // Wednesday
         4: 0.0, // Thursday
         5: 0.0, // Friday
+        6: 0.0, // Saturday
+        7: 0.0, // Sunday
       };
 
       double totalMinutes = 0.0;
       for (final record in currentWeekRecords as List) {
-        final dateStr = record['attendance_date'] as String?;
-        // ✅ FIX: Cast as num? (not int?) to handle both int and double returned by Supabase
-        final minutes = (record['work_duration_minutes'] as num?)?.toDouble() ?? 0.0;
+        final recMap = record as Map<String, dynamic>;
+        final dateStr = recMap['attendance_date'] as String?;
+        final minutes = extractMinutes(recMap);
 
         if (dateStr != null && minutes > 0) {
           final date = DateTime.parse(dateStr);
           final weekday = date.weekday;
 
-          if (weekday >= 1 && weekday <= 5) {
+          if (weekday >= 1 && weekday <= 7) {
             dailyHoursMap[weekday] =
                 (dailyHoursMap[weekday] ?? 0.0) + (minutes / 60.0);
-            totalMinutes += minutes;
           }
+          totalMinutes += minutes;
         }
       }
 
       // Calculate last week's total
       double lastWeekMinutes = 0.0;
       for (final record in lastWeekRecords as List) {
-        final minutes = (record['work_duration_minutes'] as num?)?.toDouble() ?? 0.0;
+        final recMap = record as Map<String, dynamic>;
+        final minutes = extractMinutes(recMap);
         if (minutes > 0) {
           lastWeekMinutes += minutes;
         }
@@ -577,8 +628,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         percentageChange =
             ((totalMinutes - lastWeekMinutes) / lastWeekMinutes) * 100;
       } else if (totalMinutes > 0) {
-        percentageChange =
-            100.0; // If no data last week but have data this week
+        percentageChange = 100.0;
       }
 
       if (mounted) {
@@ -642,7 +692,6 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
       if (!loadedFromCache && mounted) {
         setState(() {
           _isLoadingWeeklyData = false;
-          // ✅ FIX: Set safe defaults so UI renders 0 instead of crashing
           _totalWeeklyHours = 0.0;
           _weeklyPercentageChange = 0.0;
           _dailyHours = [0.0, 0.0, 0.0, 0.0, 0.0];

@@ -82,6 +82,38 @@ class MemberPerformanceService {
     }
   }
 
+  /// Get organization members from local cache ONLY (for instant UI loading)
+  Future<List<Map<String, dynamic>>?> getOrganizationMembersOffline(
+    int organizationId, {
+    int page = 1,
+    int limit = 20,
+    String? searchQuery,
+    String? departmentFilter,
+  }) async {
+    final cacheKey = 'org_members_${organizationId}_page_${page}_limit_${limit}_dep_${departmentFilter ?? "all"}';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedData = prefs.getString(cacheKey);
+      if (cachedData != null) {
+        debugPrint('⚡ USING INSTANT OFFLINE CACHE for org members page $page');
+        var members = List<Map<String, dynamic>>.from(jsonDecode(cachedData));
+        
+        if (searchQuery != null && searchQuery.isNotEmpty) {
+          final q = searchQuery.toLowerCase();
+          members = members.where((m) {
+            final name = (m['member_name'] as String? ?? '').toLowerCase();
+            final empId = (m['employee_id'] as String? ?? '').toLowerCase();
+            return name.contains(q) || empId.contains(q);
+          }).toList();
+        }
+        return members;
+      }
+    } catch (cacheErr) {
+      debugPrint('Error reading offline member cache: $cacheErr');
+    }
+    return null; // Return null if no cache found
+  }
+
   /// Get organization members with their profile information (FAST + REAL DATA)
   /// Supports pagination with [page] (1-based) and [limit]
   Future<List<Map<String, dynamic>>> getOrganizationMembers(
@@ -589,10 +621,23 @@ class MemberPerformanceService {
         'needs_attention_count': 0,
       };
 
+      // Caching data untuk penggunaan offline
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'org_perf_summary_$organizationId';
+        await prefs.setString(cacheKey, jsonEncode(summary));
+      } catch (cacheErr) {
+        debugPrint('⚠️ Failed to cache org performance summary: $cacheErr');
+      }
+
       debugPrint('Real performance summary calculated: $summary');
       return summary;
     } catch (e) {
       debugPrint('!!! ERROR in getOrganizationPerformanceSummary: $e');
+      // Fallback ke cache jika error/offline
+      final offlineSummary = await getOrganizationPerformanceSummaryOffline(organizationId);
+      if (offlineSummary != null) return offlineSummary;
+
       // Return basic member count even if error
       return {
         'total_members': 0,
@@ -605,6 +650,24 @@ class MemberPerformanceService {
         'needs_attention_count': 0,
       };
     }
+  }
+
+  /// Get organization performance summary from local cache (FAST INSTANT UI)
+  Future<Map<String, dynamic>?> getOrganizationPerformanceSummaryOffline(
+    int organizationId,
+  ) async {
+    final cacheKey = 'org_perf_summary_$organizationId';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString(cacheKey);
+      if (cachedStr != null) {
+        debugPrint('⚡ USING INSTANT OFFLINE CACHE for org perf summary');
+        return Map<String, dynamic>.from(jsonDecode(cachedStr));
+      }
+    } catch (e) {
+      debugPrint('Error reading offline performance summary cache: $e');
+    }
+    return null;
   }
 
   /// Get department-wise performance comparison
@@ -913,14 +976,49 @@ class MemberPerformanceService {
       // Return only the requested limit
       final limitedActivities = activities.take(limit).toList();
 
+      // Caching data untuk penggunaan offline
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'org_recent_activities_$organizationId';
+        // Stripping non-serializable objects (DateTime) before JSON encoding
+        final encodableList = limitedActivities.map((act) {
+          final copy = Map<String, dynamic>.from(act);
+          copy.remove('event_datetime');
+          return copy;
+        }).toList();
+        await prefs.setString(cacheKey, jsonEncode(encodableList));
+      } catch (cacheErr) {
+        debugPrint('⚠️ Failed to cache recent activities: $cacheErr');
+      }
+
       debugPrint(
         'Processed ${limitedActivities.length} today activities (sorted by event time)',
       );
       return limitedActivities;
     } catch (e) {
       debugPrint('!!! ERROR in getRecentMemberActivities: $e');
+      final offlineActivities = await getRecentMemberActivitiesOffline(organizationId);
+      if (offlineActivities != null) return offlineActivities;
       return [];
     }
+  }
+
+  /// Get recent member activities from local cache (FAST INSTANT UI)
+  Future<List<Map<String, dynamic>>?> getRecentMemberActivitiesOffline(
+    int organizationId,
+  ) async {
+    final cacheKey = 'org_recent_activities_$organizationId';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString(cacheKey);
+      if (cachedStr != null) {
+        debugPrint('⚡ USING INSTANT OFFLINE CACHE for recent activities');
+        return List<Map<String, dynamic>>.from(jsonDecode(cachedStr));
+      }
+    } catch (e) {
+      debugPrint('Error reading offline recent activities cache: $e');
+    }
+    return null;
   }
 
   String _getMemberName(Map<String, dynamic> member) {
@@ -1437,10 +1535,47 @@ class MemberPerformanceService {
         return bValue.compareTo(aValue); // Descending order
       });
 
+      // Save to cache
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'org_filtered_perf_${organizationId}_${timePeriod ?? "month"}_${sortBy ?? "attendance"}_dep_${departmentId ?? "all"}';
+        await prefs.setString(cacheKey, jsonEncode(filteredData));
+      } catch (cacheErr) {
+        debugPrint('⚠️ Failed to cache filtered performance: $cacheErr');
+      }
+
       return filteredData;
     } catch (e) {
       debugPrint('Error getting filtered performance: $e');
+      final offline = await getFilteredPerformanceOffline(
+        organizationId,
+        timePeriod: timePeriod,
+        sortBy: sortBy,
+        departmentId: departmentId,
+      );
+      if (offline != null) return offline;
       return [];
     }
+  }
+
+  /// Get filtered performance from local cache (FAST INSTANT UI)
+  Future<List<Map<String, dynamic>>?> getFilteredPerformanceOffline(
+    int organizationId, {
+    String? timePeriod,
+    String? sortBy,
+    int? departmentId,
+  }) async {
+    final cacheKey = 'org_filtered_perf_${organizationId}_${timePeriod ?? "month"}_${sortBy ?? "attendance"}_dep_${departmentId ?? "all"}';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString(cacheKey);
+      if (cachedStr != null) {
+        debugPrint('⚡ USING INSTANT OFFLINE CACHE for filtered performance');
+        return List<Map<String, dynamic>>.from(jsonDecode(cachedStr));
+      }
+    } catch (e) {
+      debugPrint('Error reading offline filtered performance cache: $e');
+    }
+    return null;
   }
 }

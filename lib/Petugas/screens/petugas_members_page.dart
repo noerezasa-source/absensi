@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:get/get.dart';
+import 'package:shimmer/shimmer.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
@@ -129,20 +131,75 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   }
 
   Future<void> _loadDataOptimized() async {
-    final organizationId = widget.memberData['organization_id'] as int?;
+    final rawOrgId = widget.memberData['organization_id'];
+    final organizationId = rawOrgId is int
+        ? rawOrgId
+        : int.tryParse(rawOrgId.toString());
+
     if (organizationId == null) return;
 
+    // Set initial loading flag
     setState(() => _isInitialLoading = true);
-    
-    // Delay heavy data loading to ensure route transition animation completes smoothly
-    await Future.delayed(const Duration(milliseconds: 300));
 
+    // 1. FAST INSTANT HYDRATION FROM LOCAL CACHE (< 5ms)
     try {
-      _attendanceMode = await RfidModeHelper.getAttendanceMode(organizationId);
-
-      // Initialize controller with organization data
       _membersController.setOrganizationId(organizationId);
       _membersController.setOrganizationTimezone(_organizationTimezone);
+
+      final results = await Future.wait([
+        _membersController.prehydrateFromCache(organizationId),
+        _performanceService.getOrganizationMembersOffline(
+          organizationId,
+          page: 1,
+          limit: _pageSize,
+        ),
+        _performanceService.getOrganizationPerformanceSummaryOffline(organizationId),
+        _performanceService.getFilteredPerformanceOffline(
+          organizationId,
+          timePeriod: 'this_month',
+          sortBy: 'productivity',
+        ),
+        _performanceService.getRecentMemberActivitiesOffline(organizationId),
+        _loadCachedOrganizationData(organizationId),
+      ]);
+
+      final hasMembersControllerCache = results[0] as bool;
+      final offlineMembers = results[1] as List<Map<String, dynamic>>?;
+      final offlineSummary = results[2] as Map<String, dynamic>?;
+      final offlinePerformance = results[3] as List<Map<String, dynamic>>?;
+      final offlineActivities = results[4] as List<Map<String, dynamic>>?;
+
+      if (mounted) {
+        setState(() {
+          if (offlineMembers != null && offlineMembers.isNotEmpty) {
+            _organizationMembers = offlineMembers;
+          }
+          if (offlineSummary != null) {
+            _memberPerformanceStats = offlineSummary;
+          }
+          if (offlinePerformance != null && offlinePerformance.isNotEmpty) {
+            _membersPerformance = offlinePerformance;
+          }
+          if (offlineActivities != null && offlineActivities.isNotEmpty) {
+            _recentActivities = offlineActivities;
+          }
+
+          // If ANY local cache is found, UNLOCK UI IMMEDIATELY (0ms delay)!
+          if (hasMembersControllerCache ||
+              (offlineMembers != null && offlineMembers.isNotEmpty) ||
+              _membersController.organizationMembers.isNotEmpty ||
+              offlineSummary != null) {
+            _isInitialLoading = false;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('⚡ Instant cache hydration error: $e');
+    }
+
+    // 2. BACKGROUND SYNC (Fetch fresh network data silently in background)
+    try {
+      _attendanceMode = await RfidModeHelper.getAttendanceMode(organizationId);
 
       await Future.wait([
         _loadOrganizationData(),
@@ -151,11 +208,50 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       ]);
 
       await _applyFilters();
+      await _loadRecentActivitiesOptimized();
+    } catch (e) {
+      debugPrint('Background sync error: $e');
     } finally {
-      if (mounted) setState(() => _isInitialLoading = false);
+      if (mounted) {
+        setState(() => _isInitialLoading = false);
+      }
     }
+  }
 
-    _loadRecentActivitiesOptimized();
+  Future<void> _loadCachedOrganizationData(int organizationId) async {
+    try {
+      final cachedOrg = await OfflineDatabaseService().getOrganizationData(organizationId);
+      final prefs = await SharedPreferences.getInstance();
+      final cachedDeptsStr = prefs.getString('org_depts_$organizationId');
+
+      if (mounted) {
+        setState(() {
+          if (cachedOrg != null) {
+            _organization = cachedOrg;
+            if (cachedOrg['timezone'] != null) {
+              _organizationTimezone = cachedOrg['timezone'] as String;
+            }
+          }
+          if (cachedDeptsStr != null) {
+            final deptsList = List<Map<String, dynamic>>.from(jsonDecode(cachedDeptsStr));
+            final deptSet = <String>{'all'};
+            final Map<String, int> nameToId = {};
+            for (final item in deptsList) {
+              final name = item['name'] as String?;
+              final id = item['id'] as int?;
+              if (name != null && name.isNotEmpty && id != null) {
+                deptSet.add(name);
+                nameToId[name] = id;
+              }
+            }
+            _departmentNameToId = nameToId;
+            _departments = deptSet.toList()..sort();
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading cached org data: $e');
+    }
   }
 
   Future<void> _loadOrganizationMembersOptimized({
@@ -188,6 +284,23 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         '🔍 REFRESH: Query="$searchQuery", Dept="$departmentFilter", Page=$_currentPage',
       );
 
+      // OFFLINE-FIRST: Fetch offline cache first to show instantly
+      final offlineMembers = await _performanceService.getOrganizationMembersOffline(
+        organizationId,
+        page: _currentPage,
+        limit: _pageSize,
+        searchQuery: searchQuery.isNotEmpty ? searchQuery : null,
+        departmentFilter: departmentFilter,
+      );
+
+      if (offlineMembers != null && mounted) {
+        setState(() {
+          _organizationMembers = offlineMembers;
+          if (!isInitial) _isContentLoading = false;
+        });
+      }
+
+      // BACKGROUND SYNC: Fetch fresh data from network
       final futures = <Future>[
         _performanceService.getOrganizationMembers(
           organizationId,
@@ -212,8 +325,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final members = results[0] as List<Map<String, dynamic>>;
       debugPrint('📦 RESULTS: Received ${members.length} members');
 
-      // Trigger controller load in background to keep data in sync
-      _membersController.loadOrganizationMembers(organizationId);
+      // (Redundant controller call removed - controller syncs itself in initState/loadData)
 
       if (mounted) {
         setState(() {
@@ -332,6 +444,11 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           _departments = deptSet.toList()..sort();
           debugPrint('✅ Departments initialized: $_departments');
         });
+
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('org_depts_$organizationId', jsonEncode(deptsResponse));
+        } catch (_) {}
       }
     } catch (e) {
       debugPrint('Error loading organization data: $e');
@@ -1456,22 +1573,26 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         _selectedDepartment != 'all' ||
         _membersController.selectedClassFilter.value != 'all';
 
-    if (_isContentLoading) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(40.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(strokeWidth: 3),
-              const SizedBox(height: 16),
-              Text(
-                AppLanguage.tr('Petugas.members.searching'),
-                style: const TextStyle(color: Colors.grey),
+    if (_isContentLoading || _membersController.isLoading.value) {
+      return ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        itemCount: 6,
+        itemBuilder: (context, index) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Shimmer.fromColors(
+              baseColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.grey.shade300,
+              highlightColor: widget.isDarkMode ? const Color(0xFF3B1860) : Colors.grey.shade100,
+              child: Container(
+                height: 90,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       );
     }
 

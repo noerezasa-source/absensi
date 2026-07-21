@@ -747,26 +747,48 @@ class _UserDashboardPageState extends State<UserDashboardPage>
       final currentWeekday = now.weekday;
       final monday = now.subtract(Duration(days: currentWeekday - 1));
       final mondayStr = monday.toIso8601String().split('T')[0];
-      final friday = monday.add(const Duration(days: 4));
-      final fridayStr = friday.toIso8601String().split('T')[0];
+      final sunday = monday.add(const Duration(days: 6));
+      final sundayStr = sunday.toIso8601String().split('T')[0];
       final lastMonday = monday.subtract(const Duration(days: 7));
       final lastMondayStr = lastMonday.toIso8601String().split('T')[0];
-      final lastFriday = lastMonday.add(const Duration(days: 4));
-      final lastFridayStr = lastFriday.toIso8601String().split('T')[0];
+      final lastSunday = lastMonday.add(const Duration(days: 6));
+      final lastSundayStr = lastSunday.toIso8601String().split('T')[0];
+
+      double extractMinutes(Map<String, dynamic> record) {
+        final stored = (record['work_duration_minutes'] as num?)?.toDouble();
+        if (stored != null && stored > 0) {
+          return stored;
+        }
+        final checkInStr = record['actual_check_in'] as String?;
+        if (checkInStr != null && checkInStr.isNotEmpty) {
+          try {
+            final checkIn = DateTime.parse(checkInStr);
+            final checkOutStr = record['actual_check_out'] as String?;
+            final checkOut = (checkOutStr != null && checkOutStr.isNotEmpty)
+                ? DateTime.parse(checkOutStr)
+                : DateTime.now().toUtc();
+            final diff = checkOut.difference(checkIn).inMinutes.toDouble();
+            return diff > 0 ? diff : 0.0;
+          } catch (e) {
+            return 0.0;
+          }
+        }
+        return 0.0;
+      }
 
       final currentWeekRecords = await _supabase
           .from('attendance_records')
-          .select('attendance_date, work_duration_minutes')
+          .select('attendance_date, work_duration_minutes, actual_check_in, actual_check_out')
           .eq('organization_member_id', widget.organizationMemberId)
           .gte('attendance_date', mondayStr)
-          .lte('attendance_date', fridayStr);
+          .lte('attendance_date', sundayStr);
 
       final lastWeekRecords = await _supabase
           .from('attendance_records')
-          .select('work_duration_minutes')
+          .select('attendance_date, work_duration_minutes, actual_check_in, actual_check_out')
           .eq('organization_member_id', widget.organizationMemberId)
           .gte('attendance_date', lastMondayStr)
-          .lte('attendance_date', lastFridayStr);
+          .lte('attendance_date', lastSundayStr);
 
       final dailyHoursMap = <int, double>{
         1: 0.0,
@@ -774,27 +796,31 @@ class _UserDashboardPageState extends State<UserDashboardPage>
         3: 0.0,
         4: 0.0,
         5: 0.0,
+        6: 0.0,
+        7: 0.0,
       };
 
       double totalMinutes = 0.0;
       for (final record in currentWeekRecords as List) {
-        final dateStr = record['attendance_date'] as String?;
-        final minutes = record['work_duration_minutes'] as int?;
-        if (dateStr != null && minutes != null && minutes > 0) {
+        final recMap = record as Map<String, dynamic>;
+        final dateStr = recMap['attendance_date'] as String?;
+        final minutes = extractMinutes(recMap);
+        if (dateStr != null && minutes > 0) {
           final date = DateTime.parse(dateStr);
           final weekday = date.weekday;
-          if (weekday >= 1 && weekday <= 5) {
+          if (weekday >= 1 && weekday <= 7) {
             dailyHoursMap[weekday] =
                 (dailyHoursMap[weekday] ?? 0.0) + (minutes / 60.0);
-            totalMinutes += minutes;
           }
+          totalMinutes += minutes;
         }
       }
 
       double lastWeekMinutes = 0.0;
       for (final record in lastWeekRecords as List) {
-        final minutes = record['work_duration_minutes'] as int?;
-        if (minutes != null && minutes > 0) {
+        final recMap = record as Map<String, dynamic>;
+        final minutes = extractMinutes(recMap);
+        if (minutes > 0) {
           lastWeekMinutes += minutes;
         }
       }
