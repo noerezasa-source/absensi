@@ -247,8 +247,10 @@ class MemberPerformanceService {
       } catch (cacheErr) {
         debugPrint('Error reading offline member cache: $cacheErr');
       }
-      
-      // Re-throw so the UI can surface the actual error message
+      // Re-throw a friendly error if it's a network issue and no cache is available
+      if (e.toString().contains('SocketException') || e.toString().contains('ClientException')) {
+        throw Exception('Koneksi terputus dan tidak ada data offline yang tersimpan.');
+      }
       rethrow;
     }
   }
