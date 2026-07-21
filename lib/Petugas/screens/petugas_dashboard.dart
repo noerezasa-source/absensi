@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -518,7 +519,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           ''')
           .eq('organization_members.organization_id', organizationId)
           .gte('attendance_date', mondayStr)
-          .lte('attendance_date', fridayStr);
+          .lte('attendance_date', fridayStr)
+          .timeout(const Duration(seconds: 4));
 
       // Fetch last week's attendance records
       final lastWeekRecords = await _supabase
@@ -529,7 +531,8 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
           ''')
           .eq('organization_members.organization_id', organizationId)
           .gte('attendance_date', lastMondayStr)
-          .lte('attendance_date', lastFridayStr);
+          .lte('attendance_date', lastFridayStr)
+          .timeout(const Duration(seconds: 4));
 
       // Calculate daily hours for current week
       final dailyHoursMap = <int, double>{
@@ -592,12 +595,50 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
         });
       }
 
+      // Save to cache
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'petugas_weekly_overview_$organizationId';
+        await prefs.setString(cacheKey, jsonEncode({
+          'totalWeeklyHours': _totalWeeklyHours,
+          'weeklyPercentageChange': _weeklyPercentageChange,
+          'dailyHours': _dailyHours,
+        }));
+      } catch (e) {
+        debugPrint('⚠️ Error saving weekly overview cache: $e');
+      }
+
       debugPrint(
         'Weekly overview loaded: ${_totalWeeklyHours.toStringAsFixed(1)} hrs, ${_weeklyPercentageChange.toStringAsFixed(1)}% change',
       );
     } catch (e) {
       debugPrint('!!! ERROR loading weekly overview: $e');
-      if (mounted) {
+      
+      // Fallback to cache
+      bool loadedFromCache = false;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'petugas_weekly_overview_$organizationId';
+        final cachedData = prefs.getString(cacheKey);
+        
+        if (cachedData != null) {
+          final parsed = jsonDecode(cachedData) as Map<String, dynamic>;
+          if (mounted) {
+            setState(() {
+              _totalWeeklyHours = (parsed['totalWeeklyHours'] as num).toDouble();
+              _weeklyPercentageChange = (parsed['weeklyPercentageChange'] as num).toDouble();
+              _dailyHours = (parsed['dailyHours'] as List).map((e) => (e as num).toDouble()).toList();
+              _isLoadingWeeklyData = false;
+            });
+          }
+          loadedFromCache = true;
+          debugPrint('✅ USING OFFLINE CACHE for weekly overview: ${_totalWeeklyHours.toStringAsFixed(1)} hrs');
+        }
+      } catch (cacheErr) {
+        debugPrint('Error reading offline weekly overview cache: $cacheErr');
+      }
+
+      if (!loadedFromCache && mounted) {
         setState(() {
           _isLoadingWeeklyData = false;
           // ✅ FIX: Set safe defaults so UI renders 0 instead of crashing

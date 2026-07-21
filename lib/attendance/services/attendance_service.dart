@@ -510,7 +510,8 @@ class AttendanceService {
 
       // Calculate work duration
       final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
-      final workDuration = nowUtc.difference(checkInTime).inMinutes;
+      final diffSeconds = nowUtc.difference(checkInTime).inSeconds;
+      final workDuration = diffSeconds < 60 ? (diffSeconds > 0 ? 1 : 0) : (diffSeconds / 60).round();
 
       // --- [CALCULATION START] ---
       int earlyLeaveMinutes = 0;
