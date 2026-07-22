@@ -132,8 +132,7 @@ class MembersController extends GetxController {
             biometric_data (
               id,
               is_active,
-              biometric_type,
-              template_data
+              biometric_type
             ),
             rfid_cards (
               id,

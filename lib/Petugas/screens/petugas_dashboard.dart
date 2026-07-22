@@ -2117,7 +2117,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: _isDarkMode ? Colors.white : Colors.green.shade50,
+                    color: _isDarkMode
+                        ? Colors.white10
+                        : Colors.green.shade50,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
@@ -2173,9 +2175,15 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.green.shade50,
+                          color: _isDarkMode
+                              ? Colors.green.withValues(alpha: 0.15)
+                              : Colors.green.shade50,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.green.shade100),
+                          border: Border.all(
+                            color: _isDarkMode
+                                ? Colors.green.withValues(alpha: 0.3)
+                                : Colors.green.shade100,
+                          ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -2183,7 +2191,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                             Icon(
                               _getMethodIcon(activity['checkInMethod']),
                               size: 10,
-                              color: Colors.green.shade700,
+                              color: _isDarkMode
+                                  ? Colors.greenAccent
+                                  : Colors.green.shade700,
                             ),
                             const SizedBox(width: 4),
                             Text(
@@ -2191,7 +2201,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                               style: TextStyle(
                                 fontSize: 9,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.green.shade700,
+                                color: _isDarkMode
+                                    ? Colors.greenAccent
+                                    : Colors.green.shade700,
                               ),
                             ),
                           ],
@@ -2215,7 +2227,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: _isDarkMode ? Colors.white : Colors.red.shade50,
+                    color: _isDarkMode
+                        ? Colors.white10
+                        : Colors.red.shade50,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
@@ -2273,16 +2287,24 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                         ),
                         margin: const EdgeInsets.only(bottom: 4),
                         decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
+                          color: _isDarkMode
+                              ? Colors.blue.withValues(alpha: 0.15)
+                              : Colors.blue.shade50,
                           borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.blue.shade200),
+                          border: Border.all(
+                            color: _isDarkMode
+                                ? Colors.blue.withValues(alpha: 0.3)
+                                : Colors.blue.shade200,
+                          ),
                         ),
                         child: Text(
                           activity['shiftName']!.toString().toUpperCase(),
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
-                            color: Colors.blue.shade700,
+                            color: _isDarkMode
+                                ? Colors.blueAccent
+                                : Colors.blue.shade700,
                           ),
                         ),
                       ),
@@ -2294,9 +2316,15 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
+                          color: _isDarkMode
+                              ? Colors.white10
+                              : Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: Colors.grey.shade300),
+                          border: Border.all(
+                            color: _isDarkMode
+                                ? Colors.white12
+                                : Colors.grey.shade300,
+                          ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -2304,7 +2332,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                             Icon(
                               _getMethodIcon(activity['checkOutMethod']),
                               size: 10,
-                              color: Colors.grey.shade700,
+                              color: _isDarkMode
+                                  ? Colors.white70
+                                  : Colors.grey.shade700,
                             ),
                             const SizedBox(width: 4),
                             Text(
@@ -2312,7 +2342,9 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
                               style: TextStyle(
                                 fontSize: 9,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey.shade700,
+                                color: _isDarkMode
+                                    ? Colors.white70
+                                    : Colors.grey.shade700,
                               ),
                             ),
                           ],

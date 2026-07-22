@@ -29,6 +29,47 @@ class ExportService {
     return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
+  // Helper untuk mendapatkan nama user secara aman
+  String _getItemUserName(Map<String, dynamic> item) {
+    final member = item['organization_members'] as Map<String, dynamic>?;
+    if (member != null) {
+      final profile = member['user_profiles'] as Map<String, dynamic>?;
+      if (profile != null) {
+        final displayName = (profile['display_name'] as String?)?.trim();
+        final firstName = profile['first_name'] as String? ?? '';
+        final lastName = profile['last_name'] as String? ?? '';
+        final fullName = '$firstName $lastName'.trim();
+        if (fullName.isNotEmpty) return fullName;
+        if (displayName != null && displayName.isNotEmpty) return displayName;
+      }
+    }
+    final user = item['users'] as Map<String, dynamic>?;
+    return user?['name'] ?? 'Unknown User';
+  }
+
+  // Helper untuk mendapatkan DateTime dari record
+  DateTime _parseItemDate(Map<String, dynamic> item) {
+    final checkIn = item['actual_check_in'] as String?;
+    if (checkIn != null && checkIn.isNotEmpty) {
+      try {
+        return DateTime.parse(checkIn);
+      } catch (_) {}
+    }
+    final dateStr = item['attendance_date'] as String?;
+    if (dateStr != null && dateStr.isNotEmpty) {
+      try {
+        return DateTime.parse(dateStr);
+      } catch (_) {}
+    }
+    final tsStr = item['timestamp'] as String?;
+    if (tsStr != null && tsStr.isNotEmpty) {
+      try {
+        return DateTime.parse(tsStr);
+      } catch (_) {}
+    }
+    return DateTime.now();
+  }
+
   // Ambil data absensi berdasarkan rentang tanggal
   Future<List<Map<String, dynamic>>> getAttendanceData({
     required DateTime startDate,
@@ -37,33 +78,40 @@ class ExportService {
     String? department,
   }) async {
     try {
+      final startDateStr = startDate.toIso8601String().split('T')[0];
+      final endDateStr = endDate.toIso8601String().split('T')[0];
+
       var query = _supabase
-          .from('attendance')
+          .from('attendance_records')
           .select('''
-            *,
-            users!inner(
+            id,
+            attendance_date,
+            actual_check_in,
+            actual_check_out,
+            status,
+            check_in_method,
+            check_out_method,
+            work_duration_minutes,
+            late_minutes,
+            organization_members!inner (
               id,
-              name,
-              email,
-              role,
-              user_profiles!inner(
+              employee_id,
+              organization_id,
+              user_profiles (
                 display_name,
                 first_name,
-                last_name,
-                department_id,
-                phone_number
+                last_name
               )
             )
           ''')
-          .gte('timestamp', startDate.toIso8601String())
-          .lte('timestamp', endDate.toIso8601String())
-          .order('timestamp', ascending: false);
+          .gte('attendance_date', startDateStr)
+          .lte('attendance_date', endDateStr);
 
       if (organizationId != null) {
-        // Filter by organization
+        query = query.eq('organization_members.organization_id', organizationId);
       }
 
-      final response = await query;
+      final response = await query.order('attendance_date', ascending: false);
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
       debugPrint('Error getting attendance data: $e');
@@ -146,16 +194,16 @@ class ExportService {
 
       for (int i = 0; i < data.length; i++) {
         final item = data[i];
-        final timestamp = DateTime.parse(item['timestamp']);
-        final user = item['users'] as Map<String, dynamic>?;
-        final userName = user?['name'] ?? 'Unknown';
+        final timestamp = _parseItemDate(item);
+        final userName = _getItemUserName(item);
+        final method = item['check_in_method'] ?? item['method'] ?? '-';
 
         rows.add([
           pw.Text((i + 1).toString()),
           pw.Text('${timestamp.day}/${timestamp.month}/${timestamp.year}'),
           pw.Text(userName),
           pw.Text(item['status'] ?? '-'),
-          pw.Text(item['method'] ?? '-'),
+          pw.Text(method),
           pw.Text(
             '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}',
           ),
@@ -293,10 +341,10 @@ class ExportService {
       // Data
       for (int i = 0; i < data.length; i++) {
         final item = data[i];
-        final timestamp = DateTime.parse(item['timestamp']);
-        final user = item['users'] as Map<String, dynamic>?;
-        final userName = user?['name'] ?? 'Unknown';
-        final userEmail = user?['email'] ?? '-';
+        final timestamp = _parseItemDate(item);
+        final userName = _getItemUserName(item);
+        final method = item['check_in_method'] ?? item['method'] ?? '-';
+        final checkOut = item['actual_check_out'] != null ? item['actual_check_out'].toString() : '-';
 
         sheet.appendRow([
           TextCellValue((i + 1).toString()),
@@ -304,13 +352,13 @@ class ExportService {
             '${timestamp.day}/${timestamp.month}/${timestamp.year}',
           ),
           TextCellValue(userName),
-          TextCellValue(userEmail),
+          TextCellValue('-'),
           TextCellValue(item['status'] ?? '-'),
-          TextCellValue(item['method'] ?? '-'),
+          TextCellValue(method.toString()),
           TextCellValue(
             '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}',
           ),
-          TextCellValue('-'), // Check out time bisa ditambah nanti
+          TextCellValue(checkOut),
         ]);
       }
 

@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../services/export_service.dart';
 
 class ExportReportScreen extends StatefulWidget {
-  const ExportReportScreen({super.key});
+  final int? organizationId;
+  const ExportReportScreen({super.key, this.organizationId});
 
   @override
   State<ExportReportScreen> createState() => _ExportReportScreenState();
@@ -20,6 +21,16 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
   String? _errorMessage;
 
   final List<String> _formats = ['PDF', 'Excel'];
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-set start date to beginning of current month
+    final now = DateTime.now();
+    _startDate = DateTime(now.year, now.month, 1);
+    _endDate = now;
+    _loadData();
+  }
 
   Future<void> _selectStartDate() async {
     final picked = await showDatePicker(
@@ -55,6 +66,7 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
       final data = await _exportService.getAttendanceData(
         startDate: _startDate,
         endDate: _endDate,
+        organizationId: widget.organizationId,
       );
       setState(() {
         _attendanceData = data;

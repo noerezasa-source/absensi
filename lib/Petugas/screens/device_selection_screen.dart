@@ -13,6 +13,7 @@ class DeviceSelectionScreen extends StatefulWidget {
   final bool isRequired;
   final bool allowCurrentLocation;
   final int? memberId;
+  final bool isDarkMode;
 
   const DeviceSelectionScreen({
     super.key,
@@ -21,6 +22,7 @@ class DeviceSelectionScreen extends StatefulWidget {
     this.isRequired = false,
     this.allowCurrentLocation = true,
     this.memberId,
+    this.isDarkMode = false,
   });
 
   @override
@@ -44,10 +46,18 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   geolocator.Position? _currentPosition;
   Map<String, double> _distances = {};
 
-  static const Color primaryColor = Color(0xFF9333EA);
-  static const Color pageBackground = Color(0xFFF8FAFC);
-  static const Color titleColor = Color(0xFF1E293B);
-  static const Color subtitleColor = Color(0xFF64748B);
+  bool get _isDark =>
+      widget.isDarkMode || Theme.of(context).brightness == Brightness.dark;
+
+  Color get primaryColor => const Color(0xFF9333EA);
+  Color get pageBackground =>
+      _isDark ? const Color(0xFF1F0B38) : const Color(0xFFF8FAFC);
+  Color get titleColor => _isDark ? Colors.white : const Color(0xFF1E293B);
+  Color get subtitleColor => _isDark ? Colors.white70 : const Color(0xFF64748B);
+  Color get cardBackground =>
+      _isDark ? const Color(0xFF2D1B4E) : Colors.white;
+  Color get badgeBackground =>
+      _isDark ? const Color(0xFF382060) : const Color(0xFFF8FAFC);
   static const Color searchBarBg = Color(0xFFFFFFFF);
   static const Color cardBg = Color(0xFFFFFFFF);
 
@@ -67,14 +77,16 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   }
 
   void _filterDevices() {
-    final query = _searchController.text.toLowerCase();
+    final query = _searchController.text.trim().toLowerCase();
     setState(() {
       if (query.isEmpty) {
         _filteredDevices = List.from(_devices);
       } else {
         _filteredDevices = _devices.where((device) {
-          return (device.location?.toLowerCase().contains(query) ?? false) ||
-              device.deviceName.toLowerCase().contains(query);
+          final loc = (device.location ?? '').toLowerCase();
+          final name = device.deviceName.toLowerCase();
+          final code = device.deviceCode.toLowerCase();
+          return loc.contains(query) || name.contains(query) || code.contains(query);
         }).toList();
       }
     });
@@ -240,7 +252,10 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     try {
       setState(() => _isLoading = true);
 
-      final devices = await _deviceService.loadDevices(widget.organizationId);
+      final devices = await _deviceService.loadDevices(
+        widget.organizationId,
+        forceRefresh: true,
+      );
       final selectedDevice = await _deviceService.loadSelectedDevice(
         widget.organizationId,
       );
@@ -474,7 +489,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                             color: const Color(0xFFF3E8FF),
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.map_rounded,
                             color: primaryColor,
                             size: 24,
@@ -489,7 +504,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                                 AppLanguage.tr(
                                   'attendance.device_selection.verification_title',
                                 ),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                   color: titleColor,
@@ -500,7 +515,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                                 AppLanguage.tr(
                                   'attendance.device_selection.verification_subtitle',
                                 ),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
                                   color: subtitleColor,
                                 ),
@@ -575,7 +590,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                             ),
                             Text(
                               '${distance.toInt()} ${AppLanguage.tr('attendance.device_selection.distance_from_target')}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 10,
                                 color: subtitleColor,
                               ),
@@ -728,7 +743,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: cardBackground,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
@@ -740,7 +755,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
               ),
               child: IconButton(
                 padding: EdgeInsets.zero,
-                icon: const Icon(
+                icon: Icon(
                   Icons.chevron_left,
                   color: titleColor,
                   size: 28,
@@ -762,7 +777,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     return RefreshIndicator(
       onRefresh: _handleRefresh,
       color: primaryColor,
-      backgroundColor: Colors.white,
+      backgroundColor: cardBackground,
       displacement: 20,
       strokeWidth: 2,
       child: CustomScrollView(
@@ -815,10 +830,10 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                 children: [
                   Text(
                     AppLanguage.tr('attendance.device_selection.nearby_header'),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF94A3B8),
+                      color: subtitleColor,
                       letterSpacing: 0.5,
                     ),
                   ),
@@ -863,17 +878,17 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
             AppLanguage.tr(
               'attendance.device_selection.current_location_header',
             ),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF94A3B8),
+              color: subtitleColor,
               letterSpacing: 0.5,
             ),
           ),
         ),
         Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: cardBackground,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: _selectedDevice == null
@@ -968,9 +983,9 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.map_outlined,
-                        color: Color(0xFF94A3B8),
+                        color: subtitleColor,
                         size: 24,
                       ),
                       onPressed: () => _showMapPreviewDialog(
@@ -994,7 +1009,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   Widget _buildSearchBar() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardBackground,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -1007,12 +1022,12 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       child: TextField(
         controller: _searchController,
         onChanged: (value) => _filterDevices(),
-        style: const TextStyle(color: titleColor, fontSize: 15),
+        style: TextStyle(color: titleColor, fontSize: 15),
         decoration: InputDecoration(
           hintText: AppLanguage.tr(
             'attendance.device_selection.search_placeholder',
           ),
-          hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 15),
+          hintStyle: TextStyle(color: subtitleColor, fontSize: 15),
           prefixIcon: const Padding(
             padding: EdgeInsets.only(left: 16, right: 12),
             child: Icon(Icons.search, color: Color(0xFF8B5CF6), size: 24),
@@ -1020,7 +1035,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
           prefixIconConstraints: const BoxConstraints(minWidth: 40),
           suffixIcon: _searchController.text.isNotEmpty
               ? IconButton(
-                  icon: const Icon(Icons.clear, color: subtitleColor, size: 18),
+                  icon: Icon(Icons.clear, color: subtitleColor, size: 18),
                   onPressed: () {
                     _searchController.clear();
                     _filterDevices();
@@ -1042,7 +1057,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardBackground,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: isSelected ? primaryColor : Colors.transparent,
@@ -1072,12 +1087,12 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF1F5F9),
+                    color: _isDark ? Colors.white10 : const Color(0xFFF1F5F9),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
                     Icons.location_on,
-                    color: isSelected ? primaryColor : const Color(0xFF94A3B8),
+                    color: isSelected ? primaryColor : subtitleColor,
                     size: 24,
                   ),
                 ),
@@ -1088,7 +1103,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                     children: [
                       Text(
                         displayName,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                           color: titleColor,
@@ -1097,7 +1112,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                       const SizedBox(height: 4),
                       Text(
                         device.location ?? 'No address',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           color: subtitleColor,
                         ),
@@ -1128,9 +1143,9 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.map_outlined,
-                    color: Color(0xFF94A3B8),
+                    color: subtitleColor,
                     size: 24,
                   ),
                   onPressed: () => _showMapPreviewDialog(
@@ -1151,7 +1166,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: badgeBackground,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -1166,10 +1181,10 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
           Flexible(
             child: Text(
               text,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF64748B),
+                color: subtitleColor,
               ),
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
@@ -1185,6 +1200,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       padding: const EdgeInsets.all(40),
       child: Text(
         AppLanguage.tr('attendance.device_selection.no_locations_available'),
+        style: TextStyle(color: subtitleColor, fontSize: 14),
       ),
     ),
   );
@@ -1194,6 +1210,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       padding: const EdgeInsets.all(40),
       child: Text(
         AppLanguage.tr('attendance.device_selection.no_locations_found'),
+        style: TextStyle(color: subtitleColor, fontSize: 14),
       ),
     ),
   );
@@ -1401,7 +1418,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                                   ),
                                 ),
                                 if (isSelected)
-                                  const Icon(
+                                  Icon(
                                     Icons.check_circle,
                                     color: primaryColor,
                                   ),

@@ -160,8 +160,7 @@ class MemberPerformanceService {
             biometric_data!left(
               id,
               is_active,
-              biometric_type,
-              template_data
+              biometric_type
             ),
             rfid_cards(
               id,
@@ -430,14 +429,12 @@ class MemberPerformanceService {
 
       debugPrint('Fetching attendance from $start to $end');
 
-      final memberIds = members.map((m) => m['id'] as int).toList();
-
       final attendanceRecords = await _supabase
           .from('attendance_records')
           .select(
-            'organization_member_id, status, actual_check_in, actual_check_out, work_duration_minutes, late_minutes, overtime_minutes',
+            'organization_member_id, status, actual_check_in, actual_check_out, work_duration_minutes, late_minutes, overtime_minutes, organization_members!inner(organization_id)',
           )
-          .filter('organization_member_id', 'in', memberIds)
+          .eq('organization_members.organization_id', organizationId)
           .gte('attendance_date', start)
           .lte('attendance_date', end);
 
@@ -549,19 +546,21 @@ class MemberPerformanceService {
         'Organization ID: $organizationId | Timezone: $organizationTimezone',
       );
 
-      // Get real member count
-      final allMembersCount = await getOrganizationMembersCount(
-        organizationId,
-        includeInactive: true,
-      );
-      final activeMembersCount = await getOrganizationMembersCount(
-        organizationId,
-        includeInactive: false,
-      );
+      // Get real member count in parallel
+      final counts = await Future.wait([
+        getOrganizationMembersCount(
+          organizationId,
+          includeInactive: true,
+        ),
+        getOrganizationMembersCount(
+          organizationId,
+          includeInactive: false,
+        ),
+      ]);
+      final allMembersCount = counts[0];
+      final activeMembersCount = counts[1];
 
-      final members = await getOrganizationMembers(organizationId);
-
-      if (members.isEmpty && allMembersCount == 0) {
+      if (allMembersCount == 0) {
         debugPrint('No members found, returning empty summary');
         return {
           'total_members': 0,

@@ -204,11 +204,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       await Future.wait([
         _loadOrganizationData(),
         _loadOrganizationMembersOptimized(page: 1, isInitial: true),
-        _membersController.loadOrganizationMembers(organizationId),
+        _applyFilters(),
+        _loadRecentActivitiesOptimized(),
       ]);
-
-      await _applyFilters();
-      await _loadRecentActivitiesOptimized();
     } catch (e) {
       debugPrint('Background sync error: $e');
     } finally {
@@ -575,12 +573,6 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     try {
       final organizationId = widget.memberData['organization_id'] as int;
 
-      final summary = await _performanceService
-          .getOrganizationPerformanceSummary(
-            organizationId,
-            organizationTimezone: _organizationTimezone,
-          );
-
       String timePeriod;
       if (_selectedTimePeriod == 'today') {
         timePeriod = 'today';
@@ -609,12 +601,21 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         sortBy = 'attendance';
       }
 
-      final filteredData = await _performanceService.getFilteredPerformance(
-        organizationId,
-        timePeriod: timePeriod,
-        sortBy: sortBy,
-        organizationTimezone: _organizationTimezone,
-      );
+      final results = await Future.wait([
+        _performanceService.getOrganizationPerformanceSummary(
+          organizationId,
+          organizationTimezone: _organizationTimezone,
+        ),
+        _performanceService.getFilteredPerformance(
+          organizationId,
+          timePeriod: timePeriod,
+          sortBy: sortBy,
+          organizationTimezone: _organizationTimezone,
+        ),
+      ]);
+
+      final summary = results[0] as Map<String, dynamic>;
+      final filteredData = results[1] as List<Map<String, dynamic>>;
 
       if (mounted) {
         setState(() {
@@ -4174,44 +4175,60 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                 final isSelected = _selectedTimePeriod == key;
                 return Padding(
                   padding: const EdgeInsets.only(right: 6),
-                  child: FilterChip(
-                    label: Text(label),
-                    labelStyle: TextStyle(
-                      fontSize: 11,
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
-                      color: isSelected
-                          ? Colors.white
-                          : (widget.isDarkMode
-                                ? Colors.white70
-                                : Colors.black87),
-                    ),
-                    selected: isSelected,
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() => _selectedTimePeriod = key);
-                        _applyFilters();
-                      }
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() => _selectedTimePeriod = key);
+                      _applyFilters();
                     },
-                    backgroundColor: widget.isDarkMode
-                        ? Colors.white10
-                        : Colors.grey.shade100,
-                    selectedColor: const Color(0xFF8938DF),
-                    checkmarkColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                      side: BorderSide(
-                        color: isSelected
-                            ? Colors.transparent
-                            : (widget.isDarkMode
-                                  ? Colors.white10
-                                  : Colors.grey.shade200),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
                       ),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? const Color(0xFF8938DF)
+                            : (widget.isDarkMode
+                                  ? const Color(0xFF2A1845)
+                                  : Colors.grey.shade100),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: isSelected
+                              ? Colors.transparent
+                              : (widget.isDarkMode
+                                    ? Colors.white12
+                                    : Colors.grey.shade300),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isSelected) ...[
+                            const Icon(
+                              Icons.check_rounded,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 4),
+                          ],
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.w500,
+                              color: isSelected
+                                  ? Colors.white
+                                  : (widget.isDarkMode
+                                        ? Colors.white70
+                                        : Colors.black87),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -4307,17 +4324,16 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final productivityScore =
         performance['productivity_score'] as double? ?? 0.0;
 
+    final photoUrl = _getMemberPhotoUrl(member);
+
     final rankColors = [
       const Color(0xFF8B5CF6),
       const Color(0xFF9333EA),
       const Color(0xFFA855F7),
     ];
-    final circleColor = rank <= 3
+    final rankBadgeBg = rank <= 3
         ? rankColors[rank - 1]
-        : (widget.isDarkMode ? Colors.white12 : Colors.grey.shade100);
-    final textColor = rank <= 3
-        ? Colors.white
-        : (widget.isDarkMode ? Colors.white70 : Colors.black87);
+        : (widget.isDarkMode ? const Color(0xFF3B1860) : const Color(0xFF7C3AED));
 
     return InkWell(
       onTap: () {
@@ -4344,30 +4360,97 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         ),
         child: Row(
           children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: circleColor,
-                shape: BoxShape.circle,
-                boxShadow: rank <= 3
-                    ? [
-                        BoxShadow(
-                          color: circleColor.withValues(alpha: 0.3),
-                          blurRadius: 8,
-                          offset: const Offset(0, 3),
+            SizedBox(
+              width: 44,
+              height: 44,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: rank <= 3
+                              ? rankColors[rank - 1]
+                              : (widget.isDarkMode
+                                    ? Colors.white12
+                                    : Colors.grey.shade200),
+                          width: rank <= 3 ? 2.0 : 1.2,
                         ),
-                      ]
-                    : null,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                '$rank',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: textColor,
-                ),
+                        boxShadow: rank <= 3
+                            ? [
+                                BoxShadow(
+                                  color: rankColors[rank - 1].withValues(
+                                    alpha: 0.35,
+                                  ),
+                                  blurRadius: 6,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: CircleAvatar(
+                        backgroundColor: widget.isDarkMode
+                            ? Colors.white10
+                            : const Color(0xFFF3E8FF),
+                        backgroundImage: photoUrl != null
+                            ? CachedNetworkImageProvider(photoUrl)
+                            : null,
+                        child: photoUrl == null
+                            ? Icon(
+                                Icons.person,
+                                color: widget.isDarkMode
+                                    ? Colors.white54
+                                    : const Color(0xFF8B5CF6),
+                                size: 22,
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1.5,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 20,
+                        minHeight: 18,
+                      ),
+                      decoration: BoxDecoration(
+                        color: rankBadgeBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: widget.isDarkMode
+                              ? const Color(0xFF1F0B38)
+                              : Colors.white,
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            blurRadius: 3,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '#$rank',
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 12),

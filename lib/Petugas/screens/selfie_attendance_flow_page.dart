@@ -329,6 +329,8 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
   }
 
   Future<Map<String, dynamic>?> _selectLocation(int memberId) async {
+    final isDark = (widget.petugasData['is_dark_mode'] == true) ||
+        Theme.of(context).brightness == Brightness.dark;
     return await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
@@ -338,6 +340,7 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
           isRequired: false,
           allowCurrentLocation: true,
           memberId: memberId,
+          isDarkMode: isDark,
         ),
       ),
     );
@@ -603,14 +606,17 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
               ),
               Center(
                 child: Container(
-                  width: MediaQuery.of(context).size.width * 0.85,
+                  width: MediaQuery.of(context).size.width * 0.88,
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.85,
+                  ),
                   padding: const EdgeInsets.symmetric(
-                    vertical: 40,
-                    horizontal: 24,
+                    vertical: 24,
+                    horizontal: 20,
                   ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF1E1B2E).withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(32),
+                    borderRadius: BorderRadius.circular(28),
                     border: Border.all(
                       color: Colors.white.withValues(alpha: 0.1),
                       width: 1,
@@ -618,70 +624,74 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.5),
-                        blurRadius: 40,
-                        offset: const Offset(0, 20),
+                        blurRadius: 30,
+                        offset: const Offset(0, 15),
                       ),
                     ],
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 80,
-                        height: 80,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF8B5CF6),
-                          shape: BoxShape.circle,
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF8B5CF6),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.check_rounded,
+                            color: Colors.white,
+                            size: 38,
+                          ),
                         ),
-                        child: const Icon(
-                          Icons.check_rounded,
-                          color: Colors.white,
-                          size: 48,
+                        const SizedBox(height: 16),
+                        Text(
+                          AppLanguage.tr('attendance.selfie.attendance_success'),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        AppLanguage.tr('attendance.selfie.attendance_success'),
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
+                        const SizedBox(height: 20),
+                        _buildInfoRow(
+                          icon: Icons.person_rounded,
+                          label: AppLanguage.tr('attendance.selfie.member'),
+                          value: memberName ?? 'Unknown',
                         ),
-                      ),
-                      const SizedBox(height: 32),
-                      _buildInfoRow(
-                        icon: Icons.person_rounded,
-                        label: AppLanguage.tr('attendance.selfie.member'),
-                        value: memberName ?? 'Unknown',
-                      ),
-                      const SizedBox(height: 12),
-                      _buildInfoRow(
-                        icon: Icons.access_time_filled_rounded,
-                        label: AppLanguage.tr('attendance.selfie.time'),
-                        value: time,
-                      ),
-                      const SizedBox(height: 12),
-                      _buildInfoRow(
-                        icon: Icons.calendar_today_rounded,
-                        label: AppLanguage.tr('attendance.selfie.shift'),
-                        value:
-                            shiftName ??
-                            AppLanguage.tr('attendance.selfie.non_scheduled'),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildInfoRow(
-                        icon: Icons.location_on_rounded,
-                        label: AppLanguage.tr('attendance.selfie.location'),
-                        value: locationName,
-                      ),
-                      const SizedBox(height: 12),
-                      _buildInfoRow(
-                        icon: Icons.info_outline_rounded,
-                        label: AppLanguage.tr('attendance.selfie.action'),
-                        value: _getActionDisplayName(action),
-                      ),
-                    ],
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          icon: Icons.access_time_filled_rounded,
+                          label: AppLanguage.tr('attendance.selfie.time'),
+                          value: time,
+                        ),
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          icon: Icons.calendar_today_rounded,
+                          label: AppLanguage.tr('attendance.selfie.shift'),
+                          value:
+                              shiftName ??
+                              AppLanguage.tr('attendance.selfie.non_scheduled'),
+                        ),
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          icon: Icons.location_on_rounded,
+                          label: AppLanguage.tr('attendance.selfie.location'),
+                          value: locationName,
+                        ),
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          icon: Icons.info_outline_rounded,
+                          label: AppLanguage.tr('attendance.selfie.action'),
+                          value: _getActionDisplayName(action),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -721,36 +731,41 @@ class _SelfieAttendanceFlowPageState extends State<SelfieAttendanceFlowPage> {
     required String value,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
               color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: const Color(0xFFA78BFA), size: 18),
+            child: Icon(icon, color: const Color(0xFFA78BFA), size: 16),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Text(
             label,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.6),
-              fontSize: 14,
+              fontSize: 13,
             ),
           ),
-          const Spacer(),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],

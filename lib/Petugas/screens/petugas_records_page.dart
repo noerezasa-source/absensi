@@ -95,15 +95,10 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
     super.dispose();
   }
 
-  // Initialize all data
   Future<void> _initializeData() async {
     if (!mounted || _isInitialized) return;
 
-    // Delay heavy data loading to ensure route transition animation completes smoothly
-    await Future.delayed(const Duration(milliseconds: 300));
-
     try {
-      // Load attendance mode
       final organizationId = widget.memberData['organization_id'] as int?;
       if (organizationId != null) {
         _attendanceMode = await RfidModeHelper.getAttendanceMode(
@@ -111,27 +106,21 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
         );
       }
 
-      await _loadOrganizationData();
+      await Future.wait([
+        _loadOrganizationData(),
+        _loadAttendanceRecords(),
+      ]);
 
-      // After loading org data, we have the timezone. Update Today.
       final nowOrg = TimezoneHelper.getCurrentTimeInOrgTimezone(
         _organizationTimezone,
       );
+
       if (mounted) {
         setState(() {
           _selectedMonth = nowOrg.month;
           _selectedYear = nowOrg.year;
           _selectedDay = nowOrg;
           _focusedDay = nowOrg;
-        });
-      }
-
-      await _loadOrganizationMembers();
-      await _loadDeviceLocations();
-      await _loadAttendanceRecords();
-
-      if (mounted) {
-        setState(() {
           _isInitialized = true;
           _isLoading = false;
         });
@@ -242,12 +231,22 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
       final formattedStartDate = DateFormat('yyyy-MM-dd').format(startDate);
       final formattedEndDate = DateFormat('yyyy-MM-dd').format(endDate);
 
-      // Query records with user profiles
       final response = await supabase
           .from('attendance_records')
           .select('''
-            *,
+            id,
+            attendance_date,
+            actual_check_in,
+            actual_check_out,
+            status,
+            check_in_method,
+            check_out_method,
+            work_duration_minutes,
+            late_minutes,
+            overtime_minutes,
             organization_members!inner (
+              id,
+              employee_id,
               organization_id,
               user_profiles (
                 display_name,

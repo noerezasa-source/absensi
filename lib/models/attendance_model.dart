@@ -415,23 +415,43 @@ class AttendanceDevice {
   });
 
   factory AttendanceDevice.fromJson(Map<String, dynamic> json) {
+    int radius = 100;
+    final rVal = json['radius_meters'] ?? json['radius'];
+    if (rVal is num) {
+      radius = rVal.toInt();
+    } else if (rVal is String) {
+      radius = int.tryParse(rVal) ?? (double.tryParse(rVal)?.toInt() ?? 100);
+    }
+
+    DateTime? lastSync;
+    if (json['last_sync_at'] != null) {
+      try {
+        lastSync = DateTime.parse(json['last_sync_at'].toString());
+      } catch (_) {}
+    }
+
+    Map<String, dynamic>? configMap;
+    if (json['configuration'] is Map<String, dynamic>) {
+      configMap = json['configuration'] as Map<String, dynamic>;
+    }
+
     return AttendanceDevice(
       id: json['id']?.toString() ?? '',
       organizationId: json['organization_id']?.toString() ?? '',
       deviceTypeId: json['device_type_id']?.toString() ?? '',
       deviceCode: json['device_code']?.toString() ?? '',
-      deviceName: json['device_name']?.toString() ?? '',
-      serialNumber: json['serial_number'],
-      ipAddress: json['ip_address'],
-      macAddress: json['mac_address'],
-      location: json['location']?.toString(),
+      deviceName: (json['device_name'] ?? json['name'] ?? json['location'] ?? 'Lokasi Absensi').toString(),
+      serialNumber: json['serial_number']?.toString(),
+      ipAddress: json['ip_address']?.toString(),
+      macAddress: json['mac_address']?.toString(),
+      location: json['location']?.toString() ?? json['device_name']?.toString() ?? json['name']?.toString(),
       latitude: _parseDouble(json['latitude']),
       longitude: _parseDouble(json['longitude']),
-      radiusMeters: json['radius_meters'] ?? 100,
-      firmwareVersion: json['firmware_version'],
-      lastSyncAt: json['last_sync_at'] != null ? DateTime.parse(json['last_sync_at']) : null,
-      isActive: json['is_active'] ?? true,
-      configuration: json['configuration'] as Map<String, dynamic>?,
+      radiusMeters: radius,
+      firmwareVersion: json['firmware_version']?.toString(),
+      lastSyncAt: lastSync,
+      isActive: json['is_active'] == true || json['is_active'] == 1 || json['is_active'] == null,
+      configuration: configMap,
     );
   }
 

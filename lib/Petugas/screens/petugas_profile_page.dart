@@ -729,11 +729,14 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
                                   color: Colors.grey,
                                 ),
                                 onTap: () {
+                                  final rawOrgId = widget.memberData['organization_id'];
+                                  final orgId = rawOrgId is int ? rawOrgId : int.tryParse(rawOrgId.toString());
+
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
                                       builder: (context) =>
-                                          const ExportReportScreen(),
+                                          ExportReportScreen(organizationId: orgId),
                                     ),
                                   );
                                 },

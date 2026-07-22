@@ -2805,10 +2805,14 @@ class _FaceAttendanceMultiUserPageState
                                             ],
                                           ),
                                         ),
-                                        // Checkmark
-                                        const Icon(
-                                          Icons.check_circle,
-                                          color: Color(0xFF27AE60),
+                                        // Icon based on attendance type
+                                        Icon(
+                                          item['type'] == 'check_out'
+                                              ? Icons.exit_to_app
+                                              : Icons.check_circle,
+                                          color: item['type'] == 'check_out'
+                                              ? const Color(0xFFE74C3C)
+                                              : const Color(0xFF27AE60),
                                           size: 24,
                                         ),
                                       ],
