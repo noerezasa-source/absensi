@@ -14,6 +14,8 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import '../../services/tts_service.dart';
 import '../../helpers/language_helper.dart';
+import '../../services/offline_database_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FaceRegistrationPage extends StatefulWidget {
   final int organizationMemberId;
@@ -37,6 +39,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   _faceService; // Use shared instance from BiometricService
   final BiometricService _biometricService = BiometricService();
   final SupabaseStorageService _storageService = SupabaseStorageService();
+  final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
 
   bool _isLoading = false;
   bool _isCameraInitialized = false;
@@ -734,6 +737,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _rightImagePath,
       ];
 
+      String? frontPhotoUrl;
+
       for (int i = 0; i < pathsToUpload.length; i++) {
         final path = pathsToUpload[i];
         if (path != null) {
@@ -744,11 +749,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             // Pass the angle suffix (front, left, right) so we can distinguish them in storage
             final suffix = i == 0 ? 'front' : (i == 1 ? 'left' : 'right');
             
-            await _storageService.uploadFaceTemplate(
+            final uploadedUrl = await _storageService.uploadFaceTemplate(
               processedFile,
               widget.organizationMemberId,
               suffix: suffix,
             );
+
+            // Jika ini foto FRONT, simpan URL-nya untuk jadi foto profil
+            if (i == 0) {
+              frontPhotoUrl = uploadedUrl;
+            }
 
             // Clean up temp files
             if (await imageFile.exists()) await imageFile.delete();
@@ -757,6 +767,56 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               if (await pf.exists()) await pf.delete();
             }
           }
+        }
+      }
+
+      // 2.5 Update user profile photo with the FRONT photo if profile photo is empty or is a previous face-template photo
+      if (frontPhotoUrl != null) {
+        try {
+          // Cari user_id dan profile_photo_url yang terhubung dengan organization_member_id ini
+          final memberData = await Supabase.instance.client
+              .from('organization_members')
+              .select('user_id, user_profiles(profile_photo_url)')
+              .eq('id', widget.organizationMemberId)
+              .maybeSingle();
+          
+          final userId = memberData?['user_id'];
+          if (userId != null) {
+            final userProfile = memberData?['user_profiles'] as Map<String, dynamic>?;
+            final existingPhoto = userProfile?['profile_photo_url'] as String?;
+
+            // Hanya update jika belum ada foto profil, ATAU foto profil saat ini adalah foto otomatis dari registrasi wajah sebelumnya
+            final shouldUpdate = existingPhoto == null ||
+                existingPhoto.trim().isEmpty ||
+                existingPhoto.contains('face-templates');
+
+            if (shouldUpdate) {
+              // 1. Update ke Server Supabase
+              await Supabase.instance.client
+                  .from('user_profiles')
+                  .update({'profile_photo_url': frontPhotoUrl})
+                  .eq('id', userId);
+              
+              // 2. Update ke Cache Lokal SQLite agar UI langsung berubah
+              await _offlineDb.database.then((db) async {
+                await db.update(
+                  'cached_members',
+                  {'profile_photo_url': frontPhotoUrl},
+                  where: 'organization_member_id = ?',
+                  whereArgs: [widget.organizationMemberId],
+                );
+              });
+
+              // 3. Hapus cache SharedPreferences anggota agar daftar anggota langsung ter-refresh
+              await _clearMemberCaches();
+              
+              debugPrint('✅ Profile photo updated automatically in Server, SQLite, & SharedPreferences');
+            } else {
+              debugPrint('ℹ️ Preserved existing custom profile photo for user $userId');
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ Failed to auto-update profile photo: $e');
         }
       }
 
@@ -976,10 +1036,51 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       // Upload front image as profile photo
       final imageFile = File(imagePath);
       final processedFile = await _processImage(imageFile);
-      await _storageService.uploadFaceTemplate(
+      final uploadedUrl = await _storageService.uploadFaceTemplate(
         processedFile,
         widget.organizationMemberId,
       );
+
+      // Auto-update profile photo for single template as well if profile photo is empty or from face-templates
+      try {
+        final memberData = await Supabase.instance.client
+            .from('organization_members')
+            .select('user_id, user_profiles(profile_photo_url)')
+            .eq('id', widget.organizationMemberId)
+            .maybeSingle();
+        
+        final userId = memberData?['user_id'];
+        if (userId != null) {
+          final userProfile = memberData?['user_profiles'] as Map<String, dynamic>?;
+          final existingPhoto = userProfile?['profile_photo_url'] as String?;
+
+          final shouldUpdate = existingPhoto == null ||
+              existingPhoto.trim().isEmpty ||
+              existingPhoto.contains('face-templates');
+
+          if (shouldUpdate) {
+            await Supabase.instance.client
+                .from('user_profiles')
+                .update({'profile_photo_url': uploadedUrl})
+                .eq('id', userId);
+
+            await _offlineDb.database.then((db) async {
+              await db.update(
+                'cached_members',
+                {'profile_photo_url': uploadedUrl},
+                where: 'organization_member_id = ?',
+                whereArgs: [widget.organizationMemberId],
+              );
+            });
+
+            await _clearMemberCaches();
+
+            debugPrint('✅ Profile photo updated automatically (single capture)');
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ Failed to auto-update profile photo: $e');
+      }
 
       // Clean up image files
       if (await imageFile.exists()) {
@@ -1776,8 +1877,18 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     return base + 5; // Started step
   }
 
-  // Helper for progress percentage removed as it's defined elsewhere if needed
-  // ...
+  Future<void> _clearMemberCaches() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final keys = prefs.getKeys().where((k) => k.startsWith('org_members')).toList();
+      for (final key in keys) {
+        await prefs.remove(key);
+      }
+      debugPrint('🧹 Cleared ${keys.length} member list cache keys in SharedPreferences');
+    } catch (e) {
+      debugPrint('⚠️ Error clearing member cache: $e');
+    }
+  }
 }
 
 /// ✅ SYNC: Optimized Custom Painter for all faces (matching attendance page)
