@@ -30,7 +30,7 @@ class FaceRecognitionTFLiteService {
         enableClassification: true,
         enableTracking: true,
         performanceMode: FaceDetectorMode.fast, // ⚡ KEMBALIKAN KE FAST: Accurate mode membuat kamera lag parah pada live stream
-        minFaceSize: 0.15, // 🔍 Increased to 15% to ignore small background false positives and speed up ML Kit
+        minFaceSize: 0.05, // 🔍 Decreased to 5% to allow detection from ~5 meters away
       ),
     );
   }
@@ -133,50 +133,55 @@ class FaceRecognitionTFLiteService {
   }
 
   bool isValidFaceForRecognition(Face face, {bool allowSidePose = false, bool forRegistration = false}) {
-    // 1. Check eye openness
-    final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
-    final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
+    // 1. Check eye openness (Only strictly enforce for registration, allow sleeping/closed eyes for attendance)
+    if (forRegistration) {
+      final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
+      final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
 
-    // Relaxed threshold for real-world usage
-    if (leftEyeOpen < minEyeOpenProbability ||
-        rightEyeOpen < minEyeOpenProbability) {
-      debugPrint(
-        '❌ Face rejected: Eyes closed (L:${leftEyeOpen.toStringAsFixed(2)}, R:${rightEyeOpen.toStringAsFixed(2)}) < $minEyeOpenProbability',
-      );
-      return false;
-    }
-
-    // 2. Check head rotation
-    final headY = (face.headEulerAngleY ?? 0.0).abs();
-    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
-
-    if (!allowSidePose) {
-      if (headY > maxHeadRotation || headZ > maxHeadRotation) {
+      if (leftEyeOpen < minEyeOpenProbability ||
+          rightEyeOpen < minEyeOpenProbability) {
         debugPrint(
-          '❌ Face rejected: Bad Rotation (Y:${headY.toStringAsFixed(1)}, Z:${headZ.toStringAsFixed(1)}) > $maxHeadRotation',
+          '❌ Face rejected: Eyes closed (L:${leftEyeOpen.toStringAsFixed(2)}, R:${rightEyeOpen.toStringAsFixed(2)}) < $minEyeOpenProbability',
         );
         return false;
       }
-    } else {
-      // Slightly more lenient for turbo/side checks if enabled
-      if (headZ > maxHeadRotation * 1.5 || headY > 50.0) {
-        return false;
+    }
+
+    // 2. Check head rotation (Only enforce for registration to allow "bengkok" and "noleh" during attendance)
+    if (forRegistration) {
+      final headY = (face.headEulerAngleY ?? 0.0).abs();
+      final headZ = (face.headEulerAngleZ ?? 0.0).abs();
+
+      if (!allowSidePose) {
+        if (headY > maxHeadRotation || headZ > maxHeadRotation) {
+          debugPrint(
+            '❌ Face rejected: Bad Rotation (Y:${headY.toStringAsFixed(1)}, Z:${headZ.toStringAsFixed(1)}) > $maxHeadRotation',
+          );
+          return false;
+        }
+      } else {
+        // Slightly more lenient for turbo/side checks if enabled
+        if (headZ > maxHeadRotation * 1.5 || headY > 50.0) {
+          return false;
+        }
       }
     }
 
     // 3. Check face size (Dynamic Area)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    // Lowered threshold to 900 (30x30 pixels) to support long distance detection up to 5 meters.
-    if (!forRegistration && faceArea < 900) {
-      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 900)');
+    // Lowered threshold to 400 (20x20 pixels) to support long distance detection up to 5 meters.
+    if (!forRegistration && faceArea < 400) {
+      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 400)');
       return false;
     }
 
     // 4. Overall Quality Score
+    // For attendance, we lower the min quality score so sleeping/tilted faces are not rejected by the quality multiplier
+    final double currentMinQuality = forRegistration ? minFaceQualityScore : 0.10;
     final quality = calculateFaceQuality(face);
-    if (quality < minFaceQualityScore) {
+    if (quality < currentMinQuality) {
       debugPrint(
-        '❌ Face REJECTED: Low quality (${(quality * 100).toInt()}%) < ${(minFaceQualityScore * 100).toInt()}%',
+        '❌ Face REJECTED: Low quality (${(quality * 100).toInt()}%) < ${(currentMinQuality * 100).toInt()}%',
       );
       return false;
     }

@@ -551,7 +551,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
   String? _getMemberPhotoUrl(Map<String, dynamic> member) {
     final profile = member['user_profiles'] as Map<String, dynamic>?;
-    final photoPath = profile?['profile_photo_url'] as String?;
+    final photoPath = (profile?['profile_photo_url'] ?? member['profile_photo_url']) as String?;
 
     if (photoPath == null || photoPath.trim().isEmpty) return null;
 
