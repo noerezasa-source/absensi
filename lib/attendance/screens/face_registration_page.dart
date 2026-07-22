@@ -45,6 +45,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   bool _isCameraInitialized = false;
   bool _isScreenFlashEnabled = false;
   bool _showLowLightWarning = false;
+  int _lightCheckFrameCount = 0;
   bool _isProcessing = false;
   bool _isTakingPicture = false;
   bool _isModelInitialized = false;
@@ -1239,12 +1240,18 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
     if (rotation == null) return null;
 
-    // ✅ CRITICAL FIX: Convert to NV21 — the ONLY format reliably supported
-    // by Google ML Kit on all Android devices. The camera may output YUV420
-    // in a layout ML Kit cannot parse directly, causing InputImageConverterError.
     if (Platform.isAndroid) {
       try {
         final nv21Bytes = _yuv420ToNv21(image);
+        debugPrint('📷 [REG] InputImage: size=${image.width}x${image.height}, format=${InputImageFormat.nv21.name} (${InputImageFormat.nv21.rawValue}), bytes=${nv21Bytes.length}');
+
+        // Throttled low-light check (once every 30 frames)
+        _lightCheckFrameCount++;
+        if (_lightCheckFrameCount >= 30) {
+          _lightCheckFrameCount = 0;
+          _enhanceNv21Brightness(nv21Bytes, image.width * image.height);
+        }
+
         return InputImage.fromBytes(
           bytes: nv21Bytes,
           metadata: InputImageMetadata(
@@ -1255,7 +1262,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           ),
         );
       } catch (e) {
-        debugPrint('NV21 conversion error: $e');
+        debugPrint('YUV conversion error: $e');
         return null;
       }
     }
@@ -1266,7 +1273,14 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       allBytes.putUint8List(plane.bytes);
     }
     final bytes = allBytes.done().buffer.asUint8List();
-    _enhanceBgraBrightness(bytes);
+
+    // Throttled low-light check (once every 30 frames)
+    _lightCheckFrameCount++;
+    if (_lightCheckFrameCount >= 30) {
+      _lightCheckFrameCount = 0;
+      _enhanceBgraBrightness(bytes);
+    }
+
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
 
@@ -1281,8 +1295,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     );
   }
 
-  /// Converts a YUV420 CameraImage to NV21 byte array.
-  /// NV21 layout: Y plane (width*height bytes) + interleaved V,U plane.
   Uint8List _yuv420ToNv21(CameraImage image) {
     final int width = image.width;
     final int height = image.height;
@@ -1311,22 +1323,33 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     final Uint8List vPlane = image.planes[2].bytes;
     final int uvRowStride = image.planes[1].bytesPerRow;
     final int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
-    int pos = ySize;
-    for (int row = 0; row < height ~/ 2; row++) {
-      for (int col = 0; col < width ~/ 2; col++) {
-        final int uvIndex = row * uvRowStride + col * uvPixelStride;
-        nv21[pos++] = vPlane[uvIndex]; // V first (NV21)
-        nv21[pos++] = uPlane[uvIndex]; // then U
+
+    if (uvPixelStride == 2) {
+      // Semi-planar (interleaved VU) - Copy the entire V plane directly!
+      final int toCopy = vPlane.length < uvSize ? vPlane.length : uvSize;
+      nv21.setRange(ySize, ySize + toCopy, vPlane);
+    } else {
+      // Planar - Manual interleave
+      int pos = ySize;
+      for (int row = 0; row < height ~/ 2; row++) {
+        for (int col = 0; col < width ~/ 2; col++) {
+          final int uvIndex = row * uvRowStride + col * uvPixelStride;
+          nv21[pos++] = vPlane[uvIndex];
+          nv21[pos++] = uPlane[uvIndex];
+        }
       }
     }
-    _enhanceNv21Brightness(nv21, ySize);
+    
     return nv21;
   }
 
+
   void _enhanceNv21Brightness(Uint8List nv21, int ySize) {
+    if (ySize == 0 || nv21.isEmpty) return;
     int sum = 0;
     int sampleCount = 0;
-    for (int i = 0; i < ySize; i += 16) {
+    for (int i = 0; i < ySize; i += 64) {
+      if (i >= nv21.length) break;
       sum += nv21[i];
       sampleCount++;
     }
@@ -1340,23 +1363,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         setState(() {});
       }
     }
-
-    const double targetLuminance = 110.0;
-    if (averageLuminance < 85.0) {
-      final double factor = targetLuminance / (averageLuminance + 1.0);
-      final double clampedFactor = factor.clamp(1.0, 2.5);
-
-      if (clampedFactor > 1.05) {
-        final lut = Uint8List(256);
-        for (int val = 0; val < 256; val++) {
-          lut[val] = (val * clampedFactor).round().clamp(0, 255);
-        }
-
-        for (int i = 0; i < ySize; i++) {
-          nv21[i] = lut[nv21[i]];
-        }
-      }
-    }
   }
 
   void _enhanceBgraBrightness(Uint8List bytes) {
@@ -1364,7 +1370,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     if (totalBytes == 0) return;
     int sum = 0;
     int sampleCount = 0;
-    for (int i = 0; i < totalBytes; i += 64) {
+    for (int i = 0; i < totalBytes; i += 256) {
       if (i + 2 >= totalBytes) break;
       final b = bytes[i];
       final g = bytes[i + 1];
@@ -1380,26 +1386,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       _showLowLightWarning = isDark;
       if (mounted) {
         setState(() {});
-      }
-    }
-
-    const double targetLuminance = 110.0;
-    if (averageLuminance < 85.0) {
-      final double factor = targetLuminance / (averageLuminance + 1.0);
-      final double clampedFactor = factor.clamp(1.0, 2.5);
-
-      if (clampedFactor > 1.05) {
-        final lut = Uint8List(256);
-        for (int val = 0; val < 256; val++) {
-          lut[val] = (val * clampedFactor).round().clamp(0, 255);
-        }
-
-        for (int i = 0; i < totalBytes; i += 4) {
-          if (i + 2 >= totalBytes) break;
-          bytes[i] = lut[bytes[i]];
-          bytes[i + 1] = lut[bytes[i + 1]];
-          bytes[i + 2] = lut[bytes[i + 2]];
-        }
       }
     }
   }

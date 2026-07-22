@@ -88,6 +88,7 @@ class _FaceAttendanceMultiUserPageState
   bool _isRefreshing = false;
   bool _isScreenFlashEnabled = false;
   bool _showLowLightWarning = false;
+  int _lightCheckFrameCount = 0;
 
   List<Map<String, dynamic>> _detectedFaces = [];
 
@@ -119,7 +120,7 @@ class _FaceAttendanceMultiUserPageState
   ); // ⚡ 1s cooldown for instant re-recognition
 
   // ✅ Same-Mode Attendance Cooldown (5 minutes)
-  static const Duration _sameModeCooldown = Duration(minutes: 5);
+  static const Duration _sameModeCooldown = Duration(seconds: 15);
   final Map<String, DateTime> _lastAttendanceTime = {}; // Key: "memberId_mode"
 
   bool _isOnline = true;
@@ -127,17 +128,13 @@ class _FaceAttendanceMultiUserPageState
     0,
   ); // Throttle detection loop
   static const Duration _cameraThrottle = Duration(
-    milliseconds: 16, // ⚡ ~60 FPS active: maximum speed detection
+    milliseconds: 20, // ⚡ ~50 FPS active: extremely snappy
   );
 
   static const Duration _idleCameraThrottle = Duration(
-    milliseconds: 100, // ⚡ ~10 FPS idle: instant wake-up
+    milliseconds: 100, // ⚡ ~10 FPS idle: fast initial detection reaction
   );
 
-  DateTime _lastUIUpdate = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _uiThrottle = Duration(
-    milliseconds: 33, // ⚡ ~30 FPS UI: smooth & fast box tracking
-  );
 
   @override
   void initState() {
@@ -883,24 +880,18 @@ class _FaceAttendanceMultiUserPageState
     }
     if (rotation == null) return null;
 
-    // ✅ CRITICAL FIX: Convert to NV21 — the ONLY format reliably supported
-    // by Google ML Kit on all Android devices.
     if (Platform.isAndroid) {
       try {
-        // Validate planes before conversion
-        if (image.planes.length < 3) {
-          debugPrint('⚠️ Not enough planes for YUV420: ${image.planes.length}');
-          return null;
-        }
-
-        if (image.planes[0].bytes.isEmpty ||
-            image.planes[1].bytes.isEmpty ||
-            image.planes[2].bytes.isEmpty) {
-          debugPrint('⚠️ One or more planes are empty');
-          return null;
-        }
-
         final nv21Bytes = _yuv420ToNv21(image);
+        // debugPrint('📷 [MULTI] InputImage: size=${image.width}x${image.height}, format=${InputImageFormat.nv21.name} (${InputImageFormat.nv21.rawValue}), bytes=${nv21Bytes.length}');
+
+        // Throttled low-light check (once every 30 frames)
+        _lightCheckFrameCount++;
+        if (_lightCheckFrameCount >= 30) {
+          _lightCheckFrameCount = 0;
+          _enhanceNv21Brightness(nv21Bytes, image.width * image.height);
+        }
+
         return InputImage.fromBytes(
           bytes: nv21Bytes,
           metadata: InputImageMetadata(
@@ -911,7 +902,7 @@ class _FaceAttendanceMultiUserPageState
           ),
         );
       } catch (e, stackTrace) {
-        debugPrint('❌ NV21 conversion error: $e');
+        debugPrint('❌ YUV to NV21 conversion error: $e');
         debugPrint('Stack trace: $stackTrace');
         return null;
       }
@@ -923,7 +914,14 @@ class _FaceAttendanceMultiUserPageState
       allBytes.putUint8List(plane.bytes);
     }
     final bytes = allBytes.done().buffer.asUint8List();
-    _enhanceBgraBrightness(bytes);
+
+    // Throttled low-light check (once every 30 frames)
+    _lightCheckFrameCount++;
+    if (_lightCheckFrameCount >= 30) {
+      _lightCheckFrameCount = 0;
+      _enhanceBgraBrightness(bytes);
+    }
+
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
 
@@ -938,9 +936,6 @@ class _FaceAttendanceMultiUserPageState
     );
   }
 
-  /// Converts a YUV420 CameraImage to NV21 byte array.
-  /// NV21 layout: Y plane (width*height bytes) + interleaved V,U plane.
-  /// Handles both planar (pixelStride=1) and semi-planar (pixelStride=2) formats.
   Uint8List _yuv420ToNv21(CameraImage image) {
     final int width = image.width;
     final int height = image.height;
@@ -948,66 +943,53 @@ class _FaceAttendanceMultiUserPageState
     final int uvSize = width * height ~/ 2;
     final Uint8List nv21 = Uint8List(ySize + uvSize);
 
-    // Validate planes
-    if (image.planes.length < 3) {
-      throw Exception(
-        'Expected 3 planes for YUV420, got ${image.planes.length}',
-      );
-    }
-
     // Copy Y plane
     final Uint8List yPlane = image.planes[0].bytes;
     final int yRowStride = image.planes[0].bytesPerRow;
-
     if (yRowStride == width) {
-      final copyLength = yPlane.length < ySize ? yPlane.length : ySize;
-      nv21.setRange(0, copyLength, yPlane);
+      nv21.setRange(0, ySize, yPlane);
     } else {
       for (int row = 0; row < height; row++) {
-        final int srcOffset = row * yRowStride;
-        final int dstOffset = row * width;
-        final int available = yPlane.length - srcOffset;
-        final int toCopy = available < width ? available : width;
-        if (toCopy <= 0) break;
-        nv21.setRange(dstOffset, dstOffset + toCopy, yPlane, srcOffset);
+        nv21.setRange(
+          row * width,
+          row * width + width,
+          yPlane,
+          row * yRowStride,
+        );
       }
     }
 
-    // Handle UV planes
+    // Interleave V and U planes for NV21 (V first, then U)
     final Uint8List uPlane = image.planes[1].bytes;
     final Uint8List vPlane = image.planes[2].bytes;
     final int uvRowStride = image.planes[1].bytesPerRow;
     final int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
 
-    int pos = ySize;
-    final int uvRows = height ~/ 2;
-    final int uvCols = width ~/ 2;
-
-    for (int row = 0; row < uvRows; row++) {
-      for (int col = 0; col < uvCols; col++) {
-        final int uvIndex = row * uvRowStride + col * uvPixelStride;
-
-        if (uvIndex >= 0 &&
-            uvIndex < vPlane.length &&
-            uvIndex < uPlane.length) {
-          nv21[pos++] = vPlane[uvIndex]; // V first (NV21)
-          if (pos < nv21.length) {
-            nv21[pos++] = uPlane[uvIndex]; // then U
-          }
-        } else {
-          if (pos < nv21.length) nv21[pos++] = 128;
-          if (pos < nv21.length) nv21[pos++] = 128;
+    if (uvPixelStride == 2) {
+      // Semi-planar (interleaved VU) - Copy the entire V plane directly!
+      final int toCopy = vPlane.length < uvSize ? vPlane.length : uvSize;
+      nv21.setRange(ySize, ySize + toCopy, vPlane);
+    } else {
+      // Planar - Manual interleave
+      int pos = ySize;
+      for (int row = 0; row < height ~/ 2; row++) {
+        for (int col = 0; col < width ~/ 2; col++) {
+          final int uvIndex = row * uvRowStride + col * uvPixelStride;
+          nv21[pos++] = vPlane[uvIndex];
+          nv21[pos++] = uPlane[uvIndex];
         }
       }
     }
-    _enhanceNv21Brightness(nv21, ySize);
+    
     return nv21;
   }
 
   void _enhanceNv21Brightness(Uint8List nv21, int ySize) {
+    if (ySize == 0 || nv21.isEmpty) return;
     int sum = 0;
     int sampleCount = 0;
-    for (int i = 0; i < ySize; i += 16) {
+    for (int i = 0; i < ySize; i += 64) {
+      if (i >= nv21.length) break;
       sum += nv21[i];
       sampleCount++;
     }
@@ -1021,23 +1003,6 @@ class _FaceAttendanceMultiUserPageState
         setState(() {});
       }
     }
-
-    const double targetLuminance = 110.0;
-    if (averageLuminance < 85.0) {
-      final double factor = targetLuminance / (averageLuminance + 1.0);
-      final double clampedFactor = factor.clamp(1.0, 2.5);
-
-      if (clampedFactor > 1.05) {
-        final lut = Uint8List(256);
-        for (int val = 0; val < 256; val++) {
-          lut[val] = (val * clampedFactor).round().clamp(0, 255);
-        }
-
-        for (int i = 0; i < ySize; i++) {
-          nv21[i] = lut[nv21[i]];
-        }
-      }
-    }
   }
 
   void _enhanceBgraBrightness(Uint8List bytes) {
@@ -1045,7 +1010,7 @@ class _FaceAttendanceMultiUserPageState
     if (totalBytes == 0) return;
     int sum = 0;
     int sampleCount = 0;
-    for (int i = 0; i < totalBytes; i += 64) {
+    for (int i = 0; i < totalBytes; i += 256) {
       if (i + 2 >= totalBytes) break;
       final b = bytes[i];
       final g = bytes[i + 1];
@@ -1061,26 +1026,6 @@ class _FaceAttendanceMultiUserPageState
       _showLowLightWarning = isDark;
       if (mounted) {
         setState(() {});
-      }
-    }
-
-    const double targetLuminance = 110.0;
-    if (averageLuminance < 85.0) {
-      final double factor = targetLuminance / (averageLuminance + 1.0);
-      final double clampedFactor = factor.clamp(1.0, 2.5);
-
-      if (clampedFactor > 1.05) {
-        final lut = Uint8List(256);
-        for (int val = 0; val < 256; val++) {
-          lut[val] = (val * clampedFactor).round().clamp(0, 255);
-        }
-
-        for (int i = 0; i < totalBytes; i += 4) {
-          if (i + 2 >= totalBytes) break;
-          bytes[i] = lut[bytes[i]];
-          bytes[i + 1] = lut[bytes[i + 1]];
-          bytes[i + 2] = lut[bytes[i + 2]];
-        }
       }
     }
   }
@@ -1282,10 +1227,8 @@ class _FaceAttendanceMultiUserPageState
       }
     }
 
-    // ✅ UI THROTTLE: Only update visual boxes every 150ms to keep camera smooth
-    final nowUI = DateTime.now();
-    if (mounted && nowUI.difference(_lastUIUpdate) >= _uiThrottle) {
-      _lastUIUpdate = nowUI;
+    // ✅ Immediate UI update (no throttling) to prevent face border lag
+    if (mounted) {
       setState(() {
         _detectedFaces = displayFaces;
       });
@@ -1560,6 +1503,18 @@ class _FaceAttendanceMultiUserPageState
         seconds: 2,
       );
 
+      // Get profile photo base64 from local cache database first (extremely fast, <5ms)
+      String? cachedPhotoBase64;
+      try {
+        final cached = await _offlineDb.findMemberByOrgIdInCache(memberId);
+        final cachedProfile =
+            cached?['organization_members']?['user_profiles']
+                as Map<String, dynamic>?;
+        cachedPhotoBase64 = cachedProfile?['profile_photo_base64'] as String?;
+      } catch (e) {
+        debugPrint('⚠️ Error pre-fetching cached profile photo: $e');
+      }
+
       if (mounted) {
         setState(() {
           _totalProcessedToday++;
@@ -1570,7 +1525,8 @@ class _FaceAttendanceMultiUserPageState
           _recentAttendanceList.insert(0, {
             'name': userName,
             'department': user['department_name'], // ✅ Removed fallback to '-'
-            'photo_base64': null,
+            'photo_base64': cachedPhotoBase64,     // Pre-populated instantly if cached
+            'photo_url': profilePhotoUrl,          // Fallback remote URL for NetworkImage
             'time': timeStr,
             'type': attendanceType,
             'timestamp': now,
@@ -1581,7 +1537,7 @@ class _FaceAttendanceMultiUserPageState
         });
       }
 
-      // 📥 BACKGROUND TASKS: Non-blocking (Duplicate check & Database Save)
+      // 📥 BACKGROUND TASKS: Non-blocking (Duplicate check, Database Save, and download if needed)
       _processBackgroundAttendance(
         user,
         template,
@@ -1590,6 +1546,7 @@ class _FaceAttendanceMultiUserPageState
         userName,
         biometricId,
         profilePhotoUrl,
+        cachedPhotoBase64,
       );
     } catch (e, stack) {
       debugPrint('Error in handleAttendance: $e\n$stack');
@@ -1605,24 +1562,45 @@ class _FaceAttendanceMultiUserPageState
     String userName,
     int biometricId,
     String? profilePhotoUrl,
+    String? initialPhotoBase64,
   ) async {
     try {
-      // 1. Photo Fetch
-      final profilePhotoBase64 = await _getProfilePhotoBase64(
-        memberId,
-        profilePhotoUrl,
-      ).timeout(const Duration(seconds: 3), onTimeout: () => null);
+      String? activePhotoBase64 = initialPhotoBase64;
 
-      // Update UI with photo if found
-      if (mounted && profilePhotoBase64 != null) {
-        setState(() {
-          for (var item in _recentAttendanceList) {
-            if (item['name'] == userName && item['photo_base64'] == null) {
-              item['photo_base64'] = profilePhotoBase64;
-              break;
-            }
+      // 1. Photo Fetch & Database Cache if not present
+      if (activePhotoBase64 == null) {
+        activePhotoBase64 = await _getProfilePhotoBase64(
+          memberId,
+          profilePhotoUrl,
+        ).timeout(const Duration(seconds: 3), onTimeout: () => null);
+
+        if (activePhotoBase64 != null) {
+          // Save to cache database so it is loaded instantly next time offline!
+          try {
+            final db = await _offlineDb.database;
+            await db.update(
+              'cached_members',
+              {'profile_photo_base64': activePhotoBase64},
+              where: 'organization_member_id = ?',
+              whereArgs: [memberId],
+            );
+            debugPrint('💾 Cached downloaded profile photo for member $memberId');
+          } catch (e) {
+            debugPrint('⚠️ Failed to cache profile photo: $e');
           }
-        });
+
+          // Update UI list item
+          if (mounted) {
+            setState(() {
+              for (var item in _recentAttendanceList) {
+                if (item['name'] == userName && item['photo_base64'] == null) {
+                  item['photo_base64'] = activePhotoBase64;
+                  break;
+                }
+              }
+            });
+          }
+        }
       }
 
       // 2. Duplicate Check & Database Save
@@ -1648,7 +1626,7 @@ class _FaceAttendanceMultiUserPageState
         attendanceType: attendanceType,
         template: template,
         localPhotoPath: null,
-        profilePhotoBase64: profilePhotoBase64,
+        profilePhotoBase64: activePhotoBase64,
       );
 
       // 3. Biometric Evolution & Usage Update
@@ -2292,7 +2270,9 @@ class _FaceAttendanceMultiUserPageState
                       child: SizedBox(
                         width: isPortraitUI ? pHeight : pWidth,
                         height: isPortraitUI ? pWidth : pHeight,
-                        child: CameraPreview(_cameraController!),
+                        child: RepaintBoundary(
+                          child: CameraPreview(_cameraController!),
+                        ),
                       ),
                     ),
                   );
@@ -2319,15 +2299,17 @@ class _FaceAttendanceMultiUserPageState
                   final double pWidth = _cameraController!.value.previewSize?.width ?? 1;
                   final double pHeight = _cameraController!.value.previewSize?.height ?? 1;
                   return Positioned.fill(
-                    child: CustomPaint(
-                      painter: FaceDetectorPainter(
-                        absoluteImageSize: Size(
-                          isPortraitUI ? pHeight : pWidth,
-                          isPortraitUI ? pWidth : pHeight,
+                    child: RepaintBoundary(
+                      child: CustomPaint(
+                        painter: FaceDetectorPainter(
+                          absoluteImageSize: Size(
+                            isPortraitUI ? pHeight : pWidth,
+                            isPortraitUI ? pWidth : pHeight,
+                          ),
+                          faces: _detectedFaces,
+                          isFrontCamera:
+                              true, // Multi-user attendance is usually front camera
                         ),
-                        faces: _detectedFaces,
-                        isFrontCamera:
-                            true, // Multi-user attendance is usually front camera
                       ),
                     ),
                   );
