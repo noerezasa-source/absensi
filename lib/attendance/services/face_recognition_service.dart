@@ -16,7 +16,7 @@ class FaceRecognitionService {
         enableClassification: true,
         enableTracking: true,
         performanceMode: FaceDetectorMode.fast,
-        minFaceSize: 0.05,
+        minFaceSize: 0.15, // ⚡ Increased to 15% to speed up ML Kit and prevent false detections from background objects
       ),
     );
   }

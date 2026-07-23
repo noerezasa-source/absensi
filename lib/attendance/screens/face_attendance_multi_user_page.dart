@@ -2,7 +2,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
-import 'package:absensimassal/models/face_liveness_tracker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,7 +23,6 @@ import '../../models/offline_attendance.dart';
 import '../../models/work_schedule_models.dart';
 import 'manual_check_page.dart';
 import '../../models/face_tracking_state.dart'; // ✅ NEW: State Machine Enum
-import 'package:shared_preferences/shared_preferences.dart';
 
 class FaceAttendanceMultiUserPage extends StatefulWidget {
   final int organizationId;
@@ -55,10 +53,7 @@ class _FaceAttendanceMultiUserPageState
   final SupabaseClient _supabase = Supabase.instance.client;
 
   bool _isCameraInitialized = false;
-  bool _useLiveness = false; // ⚡ DEFAULT OFF: Liveness causes lag, disable by default for speed
   bool _isProcessing = false;
-  final bool _isTakingPicture =
-      false; // ✅ NEW: Prevent concurrent camera captures
   String? _currentMessage;
   MessageType _messageType = MessageType.idle;
   Position? _currentPosition;
@@ -104,9 +99,6 @@ class _FaceAttendanceMultiUserPageState
   final Map<int, int> _stabilityCounters = {};
   final Map<int, Rect> _lastFaceRects = {};
   final Map<int, DateTime> _cooldowns = {};
-  final Map<int, FaceLivenessTracker> _livenessTrackers = {};
-  // Timestamp mulai liveness check per face, untuk enforce timeout
-  final Map<int, DateTime> _livenessStartTimes = {};
 
   // ✅ NEW: Centroid Tracker State
   final Map<int, Offset> _activeTrackers = {};
@@ -119,22 +111,22 @@ class _FaceAttendanceMultiUserPageState
     seconds: 1,
   ); // ⚡ 1s cooldown for instant re-recognition
 
-  // ✅ Same-Mode Attendance Cooldown (5 minutes)
-  static const Duration _sameModeCooldown = Duration(seconds: 15);
-  final Map<String, DateTime> _lastAttendanceTime = {}; // Key: "memberId_mode"
-
   bool _isOnline = true;
   DateTime _lastCameraProcess = DateTime.fromMillisecondsSinceEpoch(
     0,
   ); // Throttle detection loop
   static const Duration _cameraThrottle = Duration(
-    milliseconds: 20, // ⚡ ~50 FPS active: extremely snappy
+    milliseconds: 50, // ⚡ ~20 FPS active: extremely snappy
   );
 
   static const Duration _idleCameraThrottle = Duration(
     milliseconds: 100, // ⚡ ~10 FPS idle: fast initial detection reaction
   );
 
+  DateTime _lastUIUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _uiThrottle = Duration(
+    milliseconds: 33, // ⚡ ~30 FPS UI: smooth & fast box tracking
+  );
 
   @override
   void initState() {
@@ -154,13 +146,6 @@ class _FaceAttendanceMultiUserPageState
       });
       await _enableKioskMode();
       await Future.delayed(const Duration(milliseconds: 100));
-
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        _useLiveness = prefs.getBool('face_liveness_enabled') ?? false;
-      } catch (e) {
-        debugPrint('⚠️ Error loading liveness configuration: $e');
-      }
 
       // Step 2: Org & Settings (15%)
       setState(() {
@@ -243,9 +228,12 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<void> _toggleTorchMode(bool enable) async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized)
+      return;
     try {
-      await _cameraController!.setFlashMode(enable ? FlashMode.torch : FlashMode.off);
+      await _cameraController!.setFlashMode(
+        enable ? FlashMode.torch : FlashMode.off,
+      );
       debugPrint('📷 Hardware torch set to: ${enable ? "ON" : "OFF"}');
     } catch (e) {
       debugPrint('Hardware torch not supported or failed: $e');
@@ -773,7 +761,7 @@ class _FaceAttendanceMultiUserPageState
   int _consecutiveNoFaceFrames = 0;
 
   Future<void> _processCameraImage(CameraImage image) async {
-    if (_isProcessing || _isTakingPicture) return;
+    if (_isProcessing) return;
 
     // ✅ DYNAMIC THROTTLE: Slow down to 2 FPS when idle (no faces) to save CPU
     final now = DateTime.now();
@@ -838,8 +826,8 @@ class _FaceAttendanceMultiUserPageState
 
       // ✅ FIXED: Landscape vs Portrait Image Size Logic
       final bool isPortrait = currentRotation == 90 || currentRotation == 270;
-      final Size logicalImageSize = isPortrait 
-          ? Size(image.height.toDouble(), image.width.toDouble()) 
+      final Size logicalImageSize = isPortrait
+          ? Size(image.height.toDouble(), image.width.toDouble())
           : Size(image.width.toDouble(), image.height.toDouble());
 
       _handleStreamFaces(
@@ -883,7 +871,6 @@ class _FaceAttendanceMultiUserPageState
     if (Platform.isAndroid) {
       try {
         final nv21Bytes = _yuv420ToNv21(image);
-        // debugPrint('📷 [MULTI] InputImage: size=${image.width}x${image.height}, format=${InputImageFormat.nv21.name} (${InputImageFormat.nv21.rawValue}), bytes=${nv21Bytes.length}');
 
         // Throttled low-light check (once every 30 frames)
         _lightCheckFrameCount++;
@@ -980,7 +967,7 @@ class _FaceAttendanceMultiUserPageState
         }
       }
     }
-    
+
     return nv21;
   }
 
@@ -1091,8 +1078,6 @@ class _FaceAttendanceMultiUserPageState
     _faceStates.removeWhere((id, _) => !_activeTrackers.containsKey(id));
     _stabilityCounters.removeWhere((id, _) => !_activeTrackers.containsKey(id));
     _lastFaceRects.removeWhere((id, _) => !_activeTrackers.containsKey(id));
-    _livenessTrackers.removeWhere((id, _) => !_activeTrackers.containsKey(id));
-    _livenessStartTimes.removeWhere((id, _) => !_activeTrackers.containsKey(id));
     _lastSeenTimes.removeWhere((id, _) => !_activeTrackers.containsKey(id));
     _cooldowns.removeWhere((id, _) => !_activeTrackers.containsKey(id));
 
@@ -1132,90 +1117,32 @@ class _FaceAttendanceMultiUserPageState
           continue;
         } else {
           _cooldowns.remove(id);
-          _livenessTrackers.remove(id);
           _faceStates[id] = FaceTrackingState.idle;
         }
       }
 
       // ── STATE MACHINE ──────────────────────────────────────────────────────
       switch (currentState) {
-        // ── IDLE: Wajah baru pertama kali terdeteksi ──────────────────────
+        // ── IDLE: Wajah baru — langsung kirim ke recognition (instant) ──
         case FaceTrackingState.idle:
-          if (_useLiveness) {
-            _livenessTrackers[id] = FaceLivenessTracker(id);
-            _livenessStartTimes[id] = now;
-            _faceStates[id] = FaceTrackingState.livenessCheck;
-            displayFaces.add(
-              _buildFaceDisplayData(face, id, FaceTrackingState.livenessCheck),
-            );
-          } else {
-            // ✅ BYPASS LIVENESS FOR INSTANT RECOGNITION (Zero Delay)
-            _faceStates[id] = FaceTrackingState.locked;
-            _triggerRecognition(
-              face, id, imageSize, frameBytes, width, height, rotation,
-            );
-            displayFaces.add(
-              _buildFaceDisplayData(face, id, FaceTrackingState.locked),
-            );
-          }
-          break;
-
-        // ── LIVENESS CHECK: kumpulkan sinyal passive ───────────────────────
-        case FaceTrackingState.livenessCheck:
-          final tracker = _livenessTrackers[id];
-          if (tracker == null) {
-            // Tracker hilang (anomali), reset ke idle
-            _faceStates[id] = FaceTrackingState.idle;
-            break;
-          }
-
-          // Feed data frame ini
-          tracker.addFrame(
-            leftEyeOpen: face.leftEyeOpenProbability,
-            rightEyeOpen: face.rightEyeOpenProbability,
-            headEulerAngleY: face.headEulerAngleY,
-            headEulerAngleX: face.headEulerAngleX,
-            faceArea: face.boundingBox.width * face.boundingBox.height,
+          _faceStates[id] = FaceTrackingState.locked;
+          _triggerRecognition(
+            face,
+            id,
+            imageSize,
+            frameBytes,
+            width,
+            height,
+            rotation,
           );
-
-          if (tracker.isLive) {
-            // ✅ LIVENESS PASS — Kirim ke Isolate untuk Recognition
-            _faceStates[id] = FaceTrackingState.locked;
-            _triggerRecognition(
-              face, id, imageSize, frameBytes, width, height, rotation,
-            );
-            displayFaces.add(
-              _buildFaceDisplayData(face, id, FaceTrackingState.locked),
-            );
-          } else if (tracker.isTimedOut) {
-            // ❌ LIVENESS REJECTED — foto atau tidak kooperatif
-            debugPrint('🚫 Liveness TIMEOUT for tracker $id — rejected as non-live');
-            _faceStates[id] = FaceTrackingState.livenessRejected;
-            // Cooldown 5 detik sebelum boleh coba lagi
-            _cooldowns[id] = now.add(const Duration(seconds: 5));
-            displayFaces.add(
-              _buildFaceDisplayData(face, id, FaceTrackingState.livenessRejected),
-            );
-          } else {
-            // Masih mengumpulkan sinyal
-            displayFaces.add(
-              _buildFaceDisplayData(face, id, FaceTrackingState.livenessCheck),
-            );
-          }
-          break;
-
-        // ── LIVENESS REJECTED: tampilkan box merah sampai cooldown habis ──
-        case FaceTrackingState.livenessRejected:
           displayFaces.add(
-            _buildFaceDisplayData(face, id, FaceTrackingState.livenessRejected),
+            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
           );
           break;
 
         // ── LOCKED: menunggu isolate selesai ─────────
         case FaceTrackingState.locked:
-          displayFaces.add(
-            _buildFaceDisplayData(face, id, currentState),
-          );
+          displayFaces.add(_buildFaceDisplayData(face, id, currentState));
           break;
 
         // ── COOLDOWN: menunggu sebelum re-scan ─────────────────────────────
@@ -1224,11 +1151,18 @@ class _FaceAttendanceMultiUserPageState
             _buildFaceDisplayData(face, id, FaceTrackingState.cooldown),
           );
           break;
+
+        // Dead states (liveness removed) — treat as idle
+        default:
+          _faceStates[id] = FaceTrackingState.idle;
+          break;
       }
     }
 
-    // ✅ Immediate UI update (no throttling) to prevent face border lag
-    if (mounted) {
+    // ✅ UI THROTTLE: Only update visual boxes every 150ms to keep camera smooth
+    final nowUI = DateTime.now();
+    if (mounted && nowUI.difference(_lastUIUpdate) >= _uiThrottle) {
+      _lastUIUpdate = nowUI;
       setState(() {
         _detectedFaces = displayFaces;
       });
@@ -1248,21 +1182,6 @@ class _FaceAttendanceMultiUserPageState
       case FaceTrackingState.idle:
         boxColor = Colors.yellow;
         statusText = null;
-        break;
-
-      case FaceTrackingState.livenessCheck:
-        // Kotak kuning menandakan sedang verifikasi passif — tanpa teks instruksi
-        boxColor = Colors.yellow;
-        statusText = null;
-        break;
-
-      case FaceTrackingState.livenessRejected:
-        // Kotak merah — wajah tidak terverifikasi sebagai nyata (foto/spoofing)
-        boxColor = Colors.red;
-        final trackedData = _persistentFaceTracker[trackerId];
-        statusText = (trackedData != null && trackedData['name'] != null)
-            ? trackedData['name'] as String
-            : 'Liveness Gagal';
         break;
 
       case FaceTrackingState.locked:
@@ -1295,6 +1214,12 @@ class _FaceAttendanceMultiUserPageState
           statusText = AppLanguage.tr('attendance.face.done');
         }
         break;
+
+      // Catch-all for any other states
+      default:
+        boxColor = Colors.grey;
+        statusText = null;
+        break;
     }
 
     return {
@@ -1305,9 +1230,6 @@ class _FaceAttendanceMultiUserPageState
     };
   }
 
-  // ✅ REMOVED _captureMultiFrameEmbedding entirely.
-
-  /* Behavioral Liveness Analysis Removed */
 
   Future<void> _triggerRecognition(
     Face face,
@@ -1321,7 +1243,6 @@ class _FaceAttendanceMultiUserPageState
     if (id == -1) return;
 
     try {
-
       if (frameBytes == null) {
         debugPrint('⚠️ No stream bytes available for recognition');
         _faceStates[id] = FaceTrackingState.idle; // Reset
@@ -1335,8 +1256,8 @@ class _FaceAttendanceMultiUserPageState
         height,
         rotation,
         face,
-        allowSidePose: false,
-        checkSpoof: _useLiveness,
+        allowSidePose: true, // ✅ ALLOW turned/angled/tilted faces
+        checkSpoof: false,   // ✅ Liveness permanently disabled for max speed
       );
 
       final result = template.containsKey('matched_user')
@@ -1344,8 +1265,8 @@ class _FaceAttendanceMultiUserPageState
           : await _biometricService.identifyBestMatchWithUserInfo(
               capturedTemplate: template,
               organizationId: widget.organizationId,
-              strict: true,
-              threshold: 0.70,
+              strict: false, // ✅ DISABLE strict quality check (allows non-flat, bent, side poses)
+              threshold: 0.65, // ✅ Permissive threshold for angled faces
             );
 
       // Null match logging removed — handled by biometric_service compact log
@@ -1399,40 +1320,21 @@ class _FaceAttendanceMultiUserPageState
           'similarity': 0.0,
           'timestamp': DateTime.now(),
         };
-        if (mounted) {
-          // Silenced error sound per user request
-        }
-        // ✅ UNKNOWN: Cooldown 3s to prevent isolate flooding from unrecognised faces
-        _cooldowns[id] = DateTime.now().add(const Duration(seconds: 3));
+        // ✅ UNKNOWN: Cooldown 800ms to allow fast retry
+        _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 800));
       }
     } catch (e) {
-      final errorStr = e.toString();
-      debugPrint('Recognition error: $errorStr');
-      
-      if (errorStr.contains('Spoofing detected')) {
-        // ✅ TAHAP 2 ANTI-SPOOFING FAILED (Layar/Kertas terdeteksi)
-        _faceStates[id] = FaceTrackingState.livenessRejected;
-        _cooldowns[id] = DateTime.now().add(const Duration(seconds: 5)); // Hukuman 5 detik
-        _persistentFaceTracker[id] = {'name': 'Spoof/Photo', 'member_id': null};
-        return; // Jangan masuk ke block finally yang mengubah ke cooldown
-      }
-
+      debugPrint('Recognition error: $e');
       _persistentFaceTracker[id] = {'name': 'Error', 'member_id': null};
-      // Error Cooldown
-      _cooldowns[id] = DateTime.now().add(const Duration(seconds: 1));
+      // Error Cooldown 500ms
+      _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 500));
     } finally {
-      // Transition to COOLDOWN state (duration determined above)
-      // ONLY if not already reset to idle (capture failure) or livenessRejected (spoofing)
-      if (_faceStates[id] != FaceTrackingState.idle && _faceStates[id] != FaceTrackingState.livenessRejected) {
+      // Transition to COOLDOWN state
+      if (_faceStates[id] != FaceTrackingState.idle) {
         _faceStates[id] = FaceTrackingState.cooldown;
       }
     }
   }
-
-  // Reuse logic but modify to update persistent tracker
-
-  // ✅ REMOVED: Processing queue eliminated to prevent delays
-  // Attendance is now processed directly without queue overhead
 
   // ✅ OPTIMIZED: Direct Attendance Handling (No Queue)
   Future<void> _handleAttendance(
@@ -1444,7 +1346,9 @@ class _FaceAttendanceMultiUserPageState
       final user = result; // result IS the user map from biometric service
       final memberId = (user['organization_member_id'] as num?)?.toInt();
       if (memberId == null) {
-        debugPrint('⚠️ Error in handleAttendance: organization_member_id is null');
+        debugPrint(
+          '⚠️ Error in handleAttendance: organization_member_id is null',
+        );
         return;
       }
       final userName = user['user_name'] ?? 'Unknown';
@@ -1452,32 +1356,6 @@ class _FaceAttendanceMultiUserPageState
       final profilePhotoUrl = user['profile_photo_url'] as String?;
 
       final attendanceType = _attendanceMode;
-
-      // 🏁 RACE FIX: Cooldown check MUST be the very first thing (Sync Check)
-      // Before any await.
-      final cooldownKey = '${memberId}_$attendanceType';
-      final lastTime = _lastAttendanceTime[cooldownKey];
-
-      if (lastTime != null) {
-        final timeSinceLastAttendance = DateTime.now().difference(lastTime);
-        final remainingCooldown = _sameModeCooldown - timeSinceLastAttendance;
-
-        if (remainingCooldown.isNegative == false) {
-          // ... Cooldown Rejection Logic ...
-          final remainingMinutes = remainingCooldown.inMinutes;
-          final remainingSeconds = remainingCooldown.inSeconds % 60;
-          debugPrint(
-            '⏳ USER $userName: Same-mode cooldown active. Wait ${remainingMinutes}m ${remainingSeconds}s',
-          );
-          return;
-        }
-      }
-
-      // 🔒 IMMEDIATE LOCK (Before DB Check or any Await)
-      _lastAttendanceTime[cooldownKey] = DateTime.now();
-      debugPrint(
-        '🔒 LOCKED Cooldown for $userName ($attendanceType) immediately.',
-      );
 
       String typeName;
       switch (attendanceType) {
@@ -1503,18 +1381,6 @@ class _FaceAttendanceMultiUserPageState
         seconds: 2,
       );
 
-      // Get profile photo base64 from local cache database first (extremely fast, <5ms)
-      String? cachedPhotoBase64;
-      try {
-        final cached = await _offlineDb.findMemberByOrgIdInCache(memberId);
-        final cachedProfile =
-            cached?['organization_members']?['user_profiles']
-                as Map<String, dynamic>?;
-        cachedPhotoBase64 = cachedProfile?['profile_photo_base64'] as String?;
-      } catch (e) {
-        debugPrint('⚠️ Error pre-fetching cached profile photo: $e');
-      }
-
       if (mounted) {
         setState(() {
           _totalProcessedToday++;
@@ -1525,8 +1391,7 @@ class _FaceAttendanceMultiUserPageState
           _recentAttendanceList.insert(0, {
             'name': userName,
             'department': user['department_name'], // ✅ Removed fallback to '-'
-            'photo_base64': cachedPhotoBase64,     // Pre-populated instantly if cached
-            'photo_url': profilePhotoUrl,          // Fallback remote URL for NetworkImage
+            'photo_base64': null,
             'time': timeStr,
             'type': attendanceType,
             'timestamp': now,
@@ -1537,7 +1402,7 @@ class _FaceAttendanceMultiUserPageState
         });
       }
 
-      // 📥 BACKGROUND TASKS: Non-blocking (Duplicate check, Database Save, and download if needed)
+      // 📥 BACKGROUND TASKS: Non-blocking (Duplicate check & Database Save)
       _processBackgroundAttendance(
         user,
         template,
@@ -1546,7 +1411,6 @@ class _FaceAttendanceMultiUserPageState
         userName,
         biometricId,
         profilePhotoUrl,
-        cachedPhotoBase64,
       );
     } catch (e, stack) {
       debugPrint('Error in handleAttendance: $e\n$stack');
@@ -1562,45 +1426,24 @@ class _FaceAttendanceMultiUserPageState
     String userName,
     int biometricId,
     String? profilePhotoUrl,
-    String? initialPhotoBase64,
   ) async {
     try {
-      String? activePhotoBase64 = initialPhotoBase64;
+      // 1. Photo Fetch
+      final profilePhotoBase64 = await _getProfilePhotoBase64(
+        memberId,
+        profilePhotoUrl,
+      ).timeout(const Duration(seconds: 3), onTimeout: () => null);
 
-      // 1. Photo Fetch & Database Cache if not present
-      if (activePhotoBase64 == null) {
-        activePhotoBase64 = await _getProfilePhotoBase64(
-          memberId,
-          profilePhotoUrl,
-        ).timeout(const Duration(seconds: 3), onTimeout: () => null);
-
-        if (activePhotoBase64 != null) {
-          // Save to cache database so it is loaded instantly next time offline!
-          try {
-            final db = await _offlineDb.database;
-            await db.update(
-              'cached_members',
-              {'profile_photo_base64': activePhotoBase64},
-              where: 'organization_member_id = ?',
-              whereArgs: [memberId],
-            );
-            debugPrint('💾 Cached downloaded profile photo for member $memberId');
-          } catch (e) {
-            debugPrint('⚠️ Failed to cache profile photo: $e');
+      // Update UI with photo if found
+      if (mounted && profilePhotoBase64 != null) {
+        setState(() {
+          for (var item in _recentAttendanceList) {
+            if (item['name'] == userName && item['photo_base64'] == null) {
+              item['photo_base64'] = profilePhotoBase64;
+              break;
+            }
           }
-
-          // Update UI list item
-          if (mounted) {
-            setState(() {
-              for (var item in _recentAttendanceList) {
-                if (item['name'] == userName && item['photo_base64'] == null) {
-                  item['photo_base64'] = activePhotoBase64;
-                  break;
-                }
-              }
-            });
-          }
-        }
+        });
       }
 
       // 2. Duplicate Check & Database Save
@@ -1626,7 +1469,7 @@ class _FaceAttendanceMultiUserPageState
         attendanceType: attendanceType,
         template: template,
         localPhotoPath: null,
-        profilePhotoBase64: activePhotoBase64,
+        profilePhotoBase64: profilePhotoBase64,
       );
 
       // 3. Biometric Evolution & Usage Update
@@ -2261,9 +2104,13 @@ class _FaceAttendanceMultiUserPageState
             if (_isCameraInitialized && _cameraController != null)
               Builder(
                 builder: (context) {
-                  final bool isPortraitUI = MediaQuery.of(context).orientation == Orientation.portrait;
-                  final double pWidth = _cameraController!.value.previewSize?.width ?? 1;
-                  final double pHeight = _cameraController!.value.previewSize?.height ?? 1;
+                  final bool isPortraitUI =
+                      MediaQuery.of(context).orientation ==
+                      Orientation.portrait;
+                  final double pWidth =
+                      _cameraController!.value.previewSize?.width ?? 1;
+                  final double pHeight =
+                      _cameraController!.value.previewSize?.height ?? 1;
                   return Positioned.fill(
                     child: FittedBox(
                       fit: BoxFit.cover,
@@ -2286,18 +2133,20 @@ class _FaceAttendanceMultiUserPageState
             // Screen Flash Overlay
             if (_isScreenFlashEnabled)
               const Positioned.fill(
-                child: IgnorePointer(
-                  child: ScreenFlashOverlay(),
-                ),
+                child: IgnorePointer(child: ScreenFlashOverlay()),
               ),
 
             // ✅ SYNC: Using a single CustomPainter for all faces to eliminate lag (matching wajah project)
             if (_cameraController != null)
               Builder(
                 builder: (context) {
-                  final bool isPortraitUI = MediaQuery.of(context).orientation == Orientation.portrait;
-                  final double pWidth = _cameraController!.value.previewSize?.width ?? 1;
-                  final double pHeight = _cameraController!.value.previewSize?.height ?? 1;
+                  final bool isPortraitUI =
+                      MediaQuery.of(context).orientation ==
+                      Orientation.portrait;
+                  final double pWidth =
+                      _cameraController!.value.previewSize?.width ?? 1;
+                  final double pHeight =
+                      _cameraController!.value.previewSize?.height ?? 1;
                   return Positioned.fill(
                     child: RepaintBoundary(
                       child: CustomPaint(
@@ -2555,7 +2404,10 @@ class _FaceAttendanceMultiUserPageState
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.wb_incandescent_outlined, color: Colors.white),
+                      const Icon(
+                        Icons.wb_incandescent_outlined,
+                        color: Colors.white,
+                      ),
                       const SizedBox(width: 12),
                       const Expanded(
                         child: Text(
@@ -2572,7 +2424,10 @@ class _FaceAttendanceMultiUserPageState
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white,
                           foregroundColor: Colors.amber.shade900,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10),
                           ),
@@ -2918,11 +2773,15 @@ class _FaceAttendanceMultiUserPageState
 
   void _showMenu(BuildContext context) {
     final RenderBox button = context.findRenderObject() as RenderBox;
-    final RenderBox overlay = Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+    final RenderBox overlay =
+        Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
     final RelativeRect position = RelativeRect.fromRect(
       Rect.fromPoints(
         button.localToGlobal(Offset.zero, ancestor: overlay),
-        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
       ),
       Offset.zero & overlay.size,
     );
@@ -2937,7 +2796,11 @@ class _FaceAttendanceMultiUserPageState
           value: 'refresh',
           child: Row(
             children: [
-              const Icon(Icons.refresh_rounded, color: Colors.white70, size: 20),
+              const Icon(
+                Icons.refresh_rounded,
+                color: Colors.white70,
+                size: 20,
+              ),
               const SizedBox(width: 10),
               Text(
                 AppLanguage.tr('attendance.face.refresh_templates'),
@@ -2950,28 +2813,15 @@ class _FaceAttendanceMultiUserPageState
           value: 'mode',
           child: Row(
             children: [
-              const Icon(Icons.settings_outlined, color: Colors.white70, size: 20),
+              const Icon(
+                Icons.settings_outlined,
+                color: Colors.white70,
+                size: 20,
+              ),
               const SizedBox(width: 10),
               const Text(
                 'Pilih Mode Absensi',
                 style: TextStyle(color: Colors.white),
-              ),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: 'liveness',
-          child: Row(
-            children: [
-              Icon(
-                _useLiveness ? Icons.security_rounded : Icons.security_update_warning_rounded,
-                color: _useLiveness ? Colors.greenAccent : Colors.white70,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Text(
-                _useLiveness ? 'Liveness: AKTIF' : 'Liveness: NONAKTIF',
-                style: const TextStyle(color: Colors.white),
               ),
             ],
           ),
@@ -2984,13 +2834,6 @@ class _FaceAttendanceMultiUserPageState
         }
       } else if (value == 'mode') {
         _openModePicker();
-      } else if (value == 'liveness') {
-        setState(() {
-          _useLiveness = !_useLiveness;
-        });
-        SharedPreferences.getInstance().then((prefs) {
-          prefs.setBool('face_liveness_enabled', _useLiveness);
-        });
       }
     });
   }
@@ -3001,9 +2844,7 @@ class ScreenFlashOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: ScreenFlashOverlayPainter(),
-    );
+    return CustomPaint(painter: ScreenFlashOverlayPainter());
   }
 }
 
@@ -3016,24 +2857,29 @@ class ScreenFlashOverlayPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     final double centerX = size.width / 2;
-    final double centerY = size.height / 2.3; // slightly above center to align with typical face positioning
+    final double centerY =
+        size.height /
+        2.3; // slightly above center to align with typical face positioning
     final double radiusX = size.width * 0.32;
     final double radiusY = radiusX * 1.35;
 
     final path = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
-      ..addOval(Rect.fromCenter(
-        center: Offset(centerX, centerY),
-        width: radiusX * 2,
-        height: radiusY * 2,
-      ))
+      ..addOval(
+        Rect.fromCenter(
+          center: Offset(centerX, centerY),
+          width: radiusX * 2,
+          height: radiusY * 2,
+        ),
+      )
       ..fillType = PathFillType.evenOdd;
 
     canvas.drawPath(path, paint);
 
     // 2. Draw a subtle border around the oval cutout
     final borderPaint = Paint()
-      ..color = const Color(0xFF6366F1) // Indigo accent
+      ..color =
+          const Color(0xFF6366F1) // Indigo accent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3;
     canvas.drawOval(
