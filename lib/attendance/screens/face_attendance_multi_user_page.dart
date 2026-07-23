@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -85,7 +86,62 @@ class _FaceAttendanceMultiUserPageState
   bool _showLowLightWarning = false;
   int _lightCheckFrameCount = 0;
 
-  List<Map<String, dynamic>> _detectedFaces = [];
+  final ValueNotifier<List<Map<String, dynamic>>> _detectedFacesNotifier =
+      ValueNotifier([]);
+
+  // ✅ NMS / IOU Box Deduplication Helper Functions
+  static double _calculateIOU(Rect boxA, Rect boxB) {
+    final double intersectionLeft = max(boxA.left, boxB.left);
+    final double intersectionTop = max(boxA.top, boxB.top);
+    final double intersectionRight = min(boxA.right, boxB.right);
+    final double intersectionBottom = min(boxA.bottom, boxB.bottom);
+
+    final double intersectionWidth =
+        max(0.0, intersectionRight - intersectionLeft);
+    final double intersectionHeight =
+        max(0.0, intersectionBottom - intersectionTop);
+    final double intersectionArea = intersectionWidth * intersectionHeight;
+
+    if (intersectionArea <= 0) return 0.0;
+
+    final double areaA = boxA.width * boxA.height;
+    final double areaB = boxB.width * boxB.height;
+    final double unionArea = areaA + areaB - intersectionArea;
+
+    if (unionArea <= 0) return 0.0;
+    return intersectionArea / unionArea;
+  }
+
+  /// Filters candidate face bounding boxes using Intersection Over Union (IOU).
+  /// If two boxes overlap by > 35%, keeps only the larger box.
+  List<Face> _suppressOverlappingFaces(List<Face> faces) {
+    if (faces.length <= 1) return faces;
+
+    final sortedFaces = List<Face>.from(faces)
+      ..sort((a, b) {
+        final areaA = a.boundingBox.width * a.boundingBox.height;
+        final areaB = b.boundingBox.width * b.boundingBox.height;
+        return areaB.compareTo(areaA);
+      });
+
+    final selectedFaces = <Face>[];
+
+    for (final face in sortedFaces) {
+      bool shouldSuppress = false;
+      for (final selected in selectedFaces) {
+        final iou = _calculateIOU(face.boundingBox, selected.boundingBox);
+        if (iou > 0.35) {
+          shouldSuppress = true;
+          break;
+        }
+      }
+      if (!shouldSuppress) {
+        selectedFaces.add(face);
+      }
+    }
+
+    return selectedFaces;
+  }
 
   // ✅ Store face data with user info for better UI
   final Map<int, Map<String, dynamic>> _faceDataMap = {};
@@ -104,7 +160,7 @@ class _FaceAttendanceMultiUserPageState
   final Map<int, Offset> _activeTrackers = {};
   final Map<int, DateTime> _lastSeenTimes = {};
   int _nextTrackerId = 1;
-  static const double _maxTrackingDistance = 150.0;
+  static const double _maxTrackingDistance = 80.0;
 
   // Configuration
   static const Duration _recognitionCooldown = Duration(
@@ -121,11 +177,6 @@ class _FaceAttendanceMultiUserPageState
 
   static const Duration _idleCameraThrottle = Duration(
     milliseconds: 100, // ⚡ ~10 FPS idle: fast initial detection reaction
-  );
-
-  DateTime _lastUIUpdate = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _uiThrottle = Duration(
-    milliseconds: 33, // ⚡ ~30 FPS UI: smooth & fast box tracking
   );
 
   @override
@@ -228,8 +279,9 @@ class _FaceAttendanceMultiUserPageState
   }
 
   Future<void> _toggleTorchMode(bool enable) async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized)
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
       return;
+    }
     try {
       await _cameraController!.setFlashMode(
         enable ? FlashMode.torch : FlashMode.off,
@@ -247,7 +299,7 @@ class _FaceAttendanceMultiUserPageState
     _scheduleCheckTimer?.cancel();
     _isProcessing = false;
     _faceDataMap.clear();
-    _detectedFaces.clear();
+    _detectedFacesNotifier.dispose();
     _recentAttendanceList.clear();
     _cameraController?.dispose();
     // ❌ REMOVED: _faceService.dispose(); // KEEP MODEL PERSISTENT IN MEMORY
@@ -1024,7 +1076,7 @@ class _FaceAttendanceMultiUserPageState
     DeviceOrientation.landscapeRight: 270,
   };
 
-  // ✅ REFACTORED: State Machine Core Logic + Centroid Tracker
+  // ✅ REFACTORED: State Machine Core Logic + Centroid Tracker + NMS Deduplication
   void _handleStreamFaces(
     List<Face> faces,
     Size imageSize,
@@ -1033,13 +1085,28 @@ class _FaceAttendanceMultiUserPageState
     int height,
     int rotation,
   ) {
+    // 1. Non-Maximum Suppression (NMS) to eliminate duplicate/overlapping boxes (> 35% IOU)
+    final cleanFaces = _suppressOverlappingFaces(faces);
+
+    if (cleanFaces.isEmpty) {
+      _activeTrackers.clear();
+      _lastSeenTimes.clear();
+      _faceStates.clear();
+      _stabilityCounters.clear();
+      _lastFaceRects.clear();
+      _cooldowns.clear();
+      _persistentFaceTracker.clear();
+      _detectedFacesNotifier.value = [];
+      return;
+    }
+
     final now = DateTime.now();
 
-    // 1. Centroid Tracking to Assign Persistent IDs (Ignoring unstable ML Kit trackingId)
+    // 2. Centroid Tracking to Assign Persistent IDs (Ignoring unstable ML Kit trackingId)
     final Map<int, Face> currentTrackedFaces = {};
     final Set<int> usedTrackerIds = {};
 
-    for (final face in faces) {
+    for (final face in cleanFaces) {
       final currentCentroid = face.boundingBox.center;
       double minDistance = double.infinity;
       int? closestId;
@@ -1067,14 +1134,14 @@ class _FaceAttendanceMultiUserPageState
       currentTrackedFaces[assignedId] = face;
     }
 
-    // Clean up stale trackers that haven't been seen for more than 1.5 seconds (grace period)
-    const gracePeriod = Duration(milliseconds: 1500);
+    // Clean up stale trackers that haven't been seen for more than 400ms (grace period)
+    const gracePeriod = Duration(milliseconds: 400);
     _activeTrackers.removeWhere((id, _) {
       final lastSeen = _lastSeenTimes[id];
       return lastSeen == null || now.difference(lastSeen) > gracePeriod;
     });
 
-    // 2. Clean up stale states for trackers that are no longer active
+    // 3. Clean up stale states for trackers that are no longer active
     _faceStates.removeWhere((id, _) => !_activeTrackers.containsKey(id));
     _stabilityCounters.removeWhere((id, _) => !_activeTrackers.containsKey(id));
     _lastFaceRects.removeWhere((id, _) => !_activeTrackers.containsKey(id));
@@ -1093,7 +1160,7 @@ class _FaceAttendanceMultiUserPageState
     });
 
     if (currentTrackedFaces.isEmpty) {
-      if (mounted) setState(() => _detectedFaces = []);
+      _detectedFacesNotifier.value = [];
       return;
     }
 
@@ -1152,21 +1219,15 @@ class _FaceAttendanceMultiUserPageState
           );
           break;
 
-        // Dead states (liveness removed) — treat as idle
+        // Dead states — treat as idle
         default:
           _faceStates[id] = FaceTrackingState.idle;
           break;
       }
     }
 
-    // ✅ UI THROTTLE: Only update visual boxes every 150ms to keep camera smooth
-    final nowUI = DateTime.now();
-    if (mounted && nowUI.difference(_lastUIUpdate) >= _uiThrottle) {
-      _lastUIUpdate = nowUI;
-      setState(() {
-        _detectedFaces = displayFaces;
-      });
-    }
+    // ⚡ ZERO-LAG 60 FPS CANVAS UPDATE: Update ValueNotifier directly without calling setState
+    _detectedFacesNotifier.value = displayFaces;
   }
 
   Map<String, dynamic> _buildFaceDisplayData(
@@ -1266,23 +1327,55 @@ class _FaceAttendanceMultiUserPageState
               capturedTemplate: template,
               organizationId: widget.organizationId,
               strict: false, // ✅ DISABLE strict quality check (allows non-flat, bent, side poses)
-              threshold: 0.65, // ✅ Permissive threshold for angled faces
+              threshold: 0.72, // ✅ Tightened threshold for high accuracy
             );
 
       // Null match logging removed — handled by biometric_service compact log
       // Bench logging removed to prevent FPS drops
 
       if (result != null) {
+        final organizationMemberId = result['organization_member_id'] as int?;
+        final matchedName = result['user_name'] as String? ?? 'Unknown';
+        final matchedSim = (result['similarity'] as num?)?.toDouble() ?? 0.0;
+        final matchedBiometricId = result['biometric_id'] as int?;
+
+        if (organizationMemberId != null) {
+          final attendanceType = _attendanceMode;
+          final existingRecord = await _getExistingAttendanceToday(
+            memberId: organizationMemberId,
+            attendanceType: attendanceType,
+          );
+
+          if (existingRecord != null) {
+            final now = DateTime.now();
+            // Set 10s cooldown to prevent constant DB query spam on the same face
+            _cooldowns[id] = now.add(const Duration(seconds: 10));
+            
+            _persistentFaceTracker[id] = {
+              'name': '$matchedName (Sudah Absen)',
+              'member_id': organizationMemberId,
+              'id': matchedBiometricId,
+              'similarity': matchedSim * 100,
+              'timestamp': now,
+            };
+
+            _handleDuplicateAttendanceUI(
+              matchedName,
+              result['department_name'],
+              organizationMemberId,
+              attendanceType,
+              existingRecord,
+            );
+            return;
+          }
+        }
+
         // ✅ INSTANT FEEDBACK: Sound + UI First
         if (mounted) {
           SoundHelper.playSuccessSound();
         }
 
         final now = DateTime.now();
-        final matchedName = result['user_name'] as String? ?? 'Unknown';
-        final matchedSim = (result['similarity'] as num?)?.toDouble() ?? 0.0;
-        final matchedBiometricId = result['biometric_id'] as int?;
-        final organizationMemberId = result['organization_member_id'] as int?;
 
         // debugPrint('✅ Valid match found: $matchedName ...') removed for FPS
 
@@ -1334,6 +1427,118 @@ class _FaceAttendanceMultiUserPageState
         _faceStates[id] = FaceTrackingState.cooldown;
       }
     }
+  }
+
+  Future<Map<String, dynamic>?> _getExistingAttendanceToday({
+    required int memberId,
+    required String attendanceType,
+  }) async {
+    try {
+      final db = await _offlineDb.database;
+      final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(_organizationTimezone);
+
+      final results = await db.query(
+        'offline_attendances',
+        where: 'organization_member_id = ? AND event_type = ?',
+        whereArgs: [memberId, attendanceType],
+        orderBy: 'created_at DESC',
+        limit: 1,
+      );
+
+      if (results.isNotEmpty) {
+        final record = results.first;
+        final createdAtStr = record['created_at'] as String;
+        final createdAtUtc = DateTime.parse(createdAtStr);
+        final recordDateStr = TimezoneHelper.getDateInOrgTimezone(
+          createdAtUtc,
+          _organizationTimezone,
+        );
+
+        if (recordDateStr == todayStr) {
+          return record;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error getting existing attendance today: $e');
+    }
+    return null;
+  }
+
+  void _handleDuplicateAttendanceUI(
+    String userName,
+    String? departmentName,
+    int memberId,
+    String attendanceType,
+    Map<String, dynamic> existingRecord,
+  ) {
+    if (!mounted) return;
+
+    SoundHelper.playSuccessSound();
+
+    String typeName;
+    switch (attendanceType) {
+      case 'check_in':
+        typeName = "MASUK";
+        break;
+      case 'check_out':
+        typeName = "KELUAR";
+        break;
+      case 'break_out':
+        typeName = "ISTIRAHAT KELUAR";
+        break;
+      case 'break_in':
+        typeName = "ISTIRAHAT MASUK";
+        break;
+      default:
+        typeName = attendanceType.toUpperCase();
+    }
+
+    _showMessage(
+      'Sukses: $userName ($typeName)',
+      MessageType.success,
+      seconds: 2,
+    );
+
+    setState(() {
+      final createdAtStr = existingRecord['created_at'] as String;
+      final createdAtUtc = DateTime.parse(createdAtStr);
+      final localTime = TimezoneHelper.convertUtcToOrgTimezone(createdAtUtc, _organizationTimezone);
+      final timeStr = '${localTime.hour.toString().padLeft(2, '0')}:${localTime.minute.toString().padLeft(2, '0')}';
+
+      // 1. Find if we have an existing item in the list
+      Map<String, dynamic>? existingItem;
+      for (var item in _recentAttendanceList) {
+        if ((item['member_id'] == memberId || item['name'] == userName) && item['type'] == attendanceType) {
+          existingItem = item;
+          break;
+        }
+      }
+
+      // 2. Remove ALL duplicate entries for this user and type from the list to ensure strict uniqueness
+      _recentAttendanceList.removeWhere(
+        (item) => (item['member_id'] == memberId || item['name'] == userName) && item['type'] == attendanceType
+      );
+
+      // 3. Move/Insert to the top
+      if (existingItem != null) {
+        existingItem['time'] = timeStr; // Keep original check-in time
+        _recentAttendanceList.insert(0, existingItem);
+      } else {
+        _recentAttendanceList.insert(0, {
+          'name': userName,
+          'department': departmentName,
+          'photo_base64': existingRecord['profile_photo_base64'] ?? existingRecord['captured_photo_base64'],
+          'time': timeStr,
+          'type': attendanceType,
+          'timestamp': localTime,
+          'member_id': memberId,
+        });
+      }
+
+      if (_recentAttendanceList.length > 10) {
+        _recentAttendanceList.removeLast();
+      }
+    });
   }
 
   // ✅ OPTIMIZED: Direct Attendance Handling (No Queue)
@@ -1388,6 +1593,11 @@ class _FaceAttendanceMultiUserPageState
           final timeStr =
               '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
 
+          // Prevent any duplicate card in the list
+          _recentAttendanceList.removeWhere(
+            (item) => (item['member_id'] == memberId || item['name'] == userName) && item['type'] == attendanceType
+          );
+
           _recentAttendanceList.insert(0, {
             'name': userName,
             'department': user['department_name'], // ✅ Removed fallback to '-'
@@ -1395,6 +1605,7 @@ class _FaceAttendanceMultiUserPageState
             'time': timeStr,
             'type': attendanceType,
             'timestamp': now,
+            'member_id': memberId,
           });
           if (_recentAttendanceList.length > 10) {
             _recentAttendanceList.removeLast();
@@ -2149,16 +2360,21 @@ class _FaceAttendanceMultiUserPageState
                       _cameraController!.value.previewSize?.height ?? 1;
                   return Positioned.fill(
                     child: RepaintBoundary(
-                      child: CustomPaint(
-                        painter: FaceDetectorPainter(
-                          absoluteImageSize: Size(
-                            isPortraitUI ? pHeight : pWidth,
-                            isPortraitUI ? pWidth : pHeight,
-                          ),
-                          faces: _detectedFaces,
-                          isFrontCamera:
-                              true, // Multi-user attendance is usually front camera
-                        ),
+                      child: ValueListenableBuilder<List<Map<String, dynamic>>>(
+                        valueListenable: _detectedFacesNotifier,
+                        builder: (context, facesList, _) {
+                          return CustomPaint(
+                            painter: FaceDetectorPainter(
+                              absoluteImageSize: Size(
+                                isPortraitUI ? pHeight : pWidth,
+                                isPortraitUI ? pWidth : pHeight,
+                              ),
+                              faces: facesList,
+                              isFrontCamera:
+                                  true, // Multi-user attendance is usually front camera
+                            ),
+                          );
+                        },
                       ),
                     ),
                   );
@@ -2187,9 +2403,12 @@ class _FaceAttendanceMultiUserPageState
                       'Streaming: ${_isStreaming ? "✅" : "❌"}',
                       style: const TextStyle(color: Colors.white, fontSize: 10),
                     ),
-                    Text(
-                      'Faces: ${_detectedFaces.length}',
-                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                    ValueListenableBuilder<List<Map<String, dynamic>>>(
+                      valueListenable: _detectedFacesNotifier,
+                      builder: (context, facesList, _) => Text(
+                        'Faces: ${facesList.length}',
+                        style: const TextStyle(color: Colors.white, fontSize: 10),
+                      ),
                     ),
                     Text(
                       'Idle: ${_isIdleMode ? "✅" : "❌"}',

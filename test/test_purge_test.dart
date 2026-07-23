@@ -1,8 +1,7 @@
 import 'package:absensimassal/services/objectbox_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:absensi/services/objectbox_service.dart';
-import 'package:absensi/models/karyawan_wajah.dart';
+import 'package:absensimassal/models/karyawan_wajah.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

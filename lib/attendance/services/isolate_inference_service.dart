@@ -228,80 +228,72 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
   int landmarkInputSize = 0;
 
   try {
-    // 1. Define Options with Threads
-    InterpreterOptions recognitionOptions = InterpreterOptions()..threads = 4;
-    InterpreterOptions landmarkOptions = InterpreterOptions()..threads = 2;
-
+    bool loaded = false;
     if (Platform.isAndroid) {
-      // ✅ ATTEMPT 1: NNAPI (Neural Network API)
-      // This is the SAFER way to use acceleration on Android.
-      // The OS handles whether to use GPU, NPU, or CPU based on device capability.
-      recognitionOptions.useNnApiForAndroid = true;
-      // landmarkOptions.useNnApiForAndroid = true;
-      debugPrint('ISOLATE: Using NNAPI Acceleration (Safest for Android)');
-
-      /* 
-      // NOTE: GpuDelegateV2 caused SIGSEGV (Native Crash) on some Adreno devices.
-      // We will skip explicit GPU delegation for now to ensure stability.
+      // ✅ TIER 1: GPU Delegate V2 (Fastest sub-10ms)
       try {
-        final gpuDelegate = GpuDelegateV2();
-        recognitionOptions.addDelegate(gpuDelegate);
-        landmarkOptions.addDelegate(gpuDelegate);
+        final options = InterpreterOptions()..threads = 4;
+        options.addDelegate(GpuDelegateV2());
+        recognitionInterpreter = Interpreter.fromBuffer(
+          initData.recognitionModelBytes,
+          options: options,
+        );
+        loaded = true;
+        debugPrint('ISOLATE: Successfully initialized TFLite with GPU Delegate V2');
       } catch (e) {
-        debugPrint('ISOLATE: GPU Delegate failed: $e');
+        debugPrint('ISOLATE: GPU Delegate V2 failed ($e), attempting NNAPI fallback...');
       }
-      */
+
+      // ✅ TIER 2: NNAPI Acceleration Fallback
+      if (!loaded) {
+        try {
+          final options = InterpreterOptions()..threads = 4;
+          options.useNnApiForAndroid = true;
+          recognitionInterpreter = Interpreter.fromBuffer(
+            initData.recognitionModelBytes,
+            options: options,
+          );
+          loaded = true;
+          debugPrint('ISOLATE: Successfully initialized TFLite with NNAPI Acceleration');
+        } catch (e) {
+          debugPrint('ISOLATE: NNAPI failed ($e), falling back to CPU...');
+        }
+      }
     } else if (Platform.isIOS) {
-      // ✅ IOS: Use Metal/CoreML if available (GpuDelegate for iOS)
+      // ✅ IOS: Metal / CoreML GPU Acceleration
       try {
-        final gpuDelegate = GpuDelegate();
-        recognitionOptions.addDelegate(gpuDelegate);
-        landmarkOptions.addDelegate(gpuDelegate);
-        debugPrint('ISOLATE: Using iOS GPU Acceleration');
+        final options = InterpreterOptions()..threads = 4;
+        options.addDelegate(GpuDelegate());
+        recognitionInterpreter = Interpreter.fromBuffer(
+          initData.recognitionModelBytes,
+          options: options,
+        );
+        loaded = true;
+        debugPrint('ISOLATE: Successfully initialized TFLite with iOS GPU Acceleration');
       } catch (e) {
-        debugPrint('ISOLATE: iOS GPU initialization failed: $e');
+        debugPrint('ISOLATE: iOS GPU initialization failed ($e), falling back to CPU...');
       }
     }
 
-    try {
+    // ✅ TIER 3: Standard 4-Thread CPU Fallback
+    if (!loaded) {
+      final options = InterpreterOptions()..threads = 4;
       recognitionInterpreter = Interpreter.fromBuffer(
         initData.recognitionModelBytes,
-        options: recognitionOptions,
+        options: options,
       );
-      /*
-      landmarkInterpreter = Interpreter.fromBuffer(
-        initData.landmarkModelBytes,
-        options: landmarkOptions,
-      );
-      */
-    } catch (e) {
-      debugPrint(
-        'ISOLATE: Accelerated initialization failed, falling back to CPU: $e',
-      );
-      // ✅ ATTEMPT 2: Standard CPU (Final Fallback)
-      recognitionOptions = InterpreterOptions()..threads = 4;
-      landmarkOptions = InterpreterOptions()..threads = 2;
-
-      recognitionInterpreter = Interpreter.fromBuffer(
-        initData.recognitionModelBytes,
-        options: recognitionOptions,
-      );
-      /*
-      landmarkInterpreter = Interpreter.fromBuffer(
-        initData.landmarkModelBytes,
-        options: landmarkOptions,
-      );
-      */
+      debugPrint('ISOLATE: Initialized TFLite with 4-Thread CPU Fallback');
     }
 
-    // Configure Recognition Model
-    final recInTensor = recognitionInterpreter.getInputTensor(0);
-    final recOutTensor = recognitionInterpreter.getOutputTensor(0);
-    if (recInTensor.shape.length >= 3) {
-      recognitionInputSize = recInTensor.shape[1];
-    }
-    if (recOutTensor.shape.length >= 2) {
-      embeddingSize = recOutTensor.shape[1];
+    if (recognitionInterpreter != null) {
+      final recInTensor = recognitionInterpreter.getInputTensor(0);
+      final recOutTensor = recognitionInterpreter.getOutputTensor(0);
+      if (recInTensor.shape.length >= 3) {
+        recognitionInputSize = recInTensor.shape[1];
+      }
+      if (recOutTensor.shape.length >= 2) {
+        embeddingSize = recOutTensor.shape[1];
+      }
     }
 
     // Landmark model removed for speed parity with wajah project

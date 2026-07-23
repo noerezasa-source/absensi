@@ -1,4 +1,3 @@
-import 'dart:ui' show Rect;
 import 'package:flutter/material.dart';
 
 /// ✅ SYNC: Optimized Custom Painter for all faces (matching wajah project)
@@ -144,5 +143,9 @@ class FaceDetectorPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(FaceDetectorPainter oldDelegate) => true;
+  bool shouldRepaint(FaceDetectorPainter oldDelegate) {
+    return oldDelegate.absoluteImageSize != absoluteImageSize ||
+        oldDelegate.isFrontCamera != isFrontCamera ||
+        oldDelegate.faces != faces;
+  }
 }

@@ -1017,9 +1017,9 @@ class OfflineDatabaseService {
       final db = await database;
 
       final now = DateTime.now().toUtc();
-      final twoMinutesAgo = now
-          .subtract(const Duration(minutes: 2))
-          .toIso8601String();
+      final twoMinutesAgo = TimezoneHelper.formatUtcForSupabase(
+        now.subtract(const Duration(minutes: 2)),
+      );
 
       String whereClause =
           'organization_member_id = ? AND event_type = ? AND created_at > ?';
