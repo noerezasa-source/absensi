@@ -4342,6 +4342,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             memberId: member['id'] as int,
             memberName: _getMemberName(member),
             isDarkMode: widget.isDarkMode,
+            profilePhotoUrl: photoUrl,
           ),
         );
       },

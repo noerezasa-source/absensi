@@ -535,6 +535,27 @@ class OfflineDatabaseService {
     }
   }
 
+  /// Get attendances for a specific member ID from local database
+  Future<List<Map<String, dynamic>>> getAttendancesByMemberId(
+    int memberId, {
+    int limit = 100,
+  }) async {
+    try {
+      final db = await database;
+      final results = await db.query(
+        'offline_attendances',
+        where: 'organization_member_id = ?',
+        whereArgs: [memberId],
+        orderBy: 'created_at DESC',
+        limit: limit,
+      );
+      return results;
+    } catch (e) {
+      debugPrint('Error getting attendances for member $memberId: $e');
+      return [];
+    }
+  }
+
   // Update attendance sync status
   Future<int> updateSyncStatus({
     required int id,
