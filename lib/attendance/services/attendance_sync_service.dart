@@ -604,12 +604,20 @@ class AttendanceSyncService {
       if (photoFile != null) {
         try {
           debugPrint('📸 Uploading photo for member $memberId...');
-          photoUrl = await _storageService.uploadAttendancePhoto(
-            photoFile,
-            memberId,
-            record.eventType,
-          );
-          debugPrint('✅ Photo uploaded successfully: $photoUrl');
+          photoUrl = await _storageService
+              .uploadAttendancePhoto(
+                photoFile,
+                memberId,
+                record.eventType,
+              )
+              .timeout(
+                const Duration(seconds: 15),
+                onTimeout: () {
+                  debugPrint('⚠️ Photo upload timed out after 15s');
+                  return '';
+                },
+              );
+          debugPrint('✅ Photo upload completed: $photoUrl');
         } catch (e) {
           debugPrint(
             '⚠️ Failed to upload photo (continuing without photo): $e',

@@ -17,10 +17,10 @@ class FaceRecognitionTFLiteService {
   int inputSize = 160;
   int embeddingSize = 512;
 
-  // ✅ OPTIMIZED: Realistic Quality Thresholds for Mobile Attendance
-  static const double minFaceQualityScore = 0.28; // Lowered from 0.35
-  static const double minEyeOpenProbability = 0.30; // Lowered from 0.40/0.50
-  static const double maxHeadRotation = 25.0; // Increased from 20.0
+  // ✅ OPTIMIZED: Adjusted Quality Thresholds for Better Accuracy
+  static const double minFaceQualityScore = 0.50; // Reverted to 0.50 for strict quality
+  static const double minEyeOpenProbability = 0.50; // Reverted to 0.50
+  static const double maxHeadRotation = 20.0; // Reverted to 20.0 for accuracy
 
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -29,8 +29,8 @@ class FaceRecognitionTFLiteService {
         enableLandmarks: true,
         enableClassification: true,
         enableTracking: true,
-        performanceMode: FaceDetectorMode.fast, // ⚡ KEMBALIKAN KE FAST: Accurate mode membuat kamera lag parah pada live stream
-        minFaceSize: 0.05, // 🔍 Decreased to 5% to allow detection from ~5 meters away
+        performanceMode: FaceDetectorMode.fast,
+        minFaceSize: 0.05,
       ),
     );
   }
@@ -53,48 +53,12 @@ class FaceRecognitionTFLiteService {
 
   Future<List<Face>> detectFaces(String imagePath) async {
     final inputImage = InputImage.fromFilePath(imagePath);
-    final faces = await detectFacesFromInputImage(inputImage);
-    if (faces.isNotEmpty) return faces;
-
-    // Fallback: Jika tidak terdeteksi wajah, coba tingkatkan kecerahan/kontras gambar secara software
-    try {
-      final file = File(imagePath);
-      final bytes = await file.readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded != null) {
-        // Tingkatkan kecerahan (1.4x) dan kontras (1.25x) untuk mempermudah ML Kit mendeteksi fitur wajah
-        final enhanced = img.adjustColor(decoded, brightness: 1.4, contrast: 1.25);
-        final tempDir = Directory.systemTemp;
-        final tempFile = File('${tempDir.path}/temp_enhanced_${DateTime.now().millisecondsSinceEpoch}.jpg');
-        await tempFile.writeAsBytes(img.encodeJpg(enhanced, quality: 90));
-        
-        final enhancedInputImage = InputImage.fromFilePath(tempFile.path);
-        final enhancedFaces = await detectFacesFromInputImage(enhancedInputImage);
-        
-        // Hapus file sementara
-        try {
-          await tempFile.delete();
-        } catch (_) {}
-        
-        if (enhancedFaces.isNotEmpty) {
-          debugPrint('✨ Wajah terdeteksi setelah peningkatan kecerahan software!');
-          return enhancedFaces;
-        }
-      }
-    } catch (e) {
-      debugPrint('Error selama deteksi wajah fallback: $e');
-    }
-
-    return [];
+    return await detectFacesFromInputImage(inputImage);
   }
 
-  /// Strict detector — used for attendance to block background faces
   Future<List<Face>> detectFacesFromInputImage(InputImage inputImage) async {
     return await _faceDetector.processImage(inputImage);
   }
-
-
-
 
   // ✅ IMPROVED: L2 Normalization Helper
   List<double> l2Normalize(List<double> vector) {
@@ -132,8 +96,12 @@ class FaceRecognitionTFLiteService {
     return qualityScore.clamp(0.0, 1.0);
   }
 
-  bool isValidFaceForRecognition(Face face, {bool allowSidePose = false, bool forRegistration = false}) {
-    // 1. Check eye openness (Only strictly enforce for registration, allow sleeping/closed eyes for attendance)
+  bool isValidFaceForRecognition(
+    Face face, {
+    bool allowSidePose = false,
+    bool forRegistration = false,
+  }) {
+    // 1. Check eye openness (Only strictly enforce for registration)
     if (forRegistration) {
       final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;
       final rightEyeOpen = face.rightEyeOpenProbability ?? 0.0;
@@ -147,7 +115,7 @@ class FaceRecognitionTFLiteService {
       }
     }
 
-    // 2. Check head rotation (Only enforce for registration to allow "bengkok" and "noleh" during attendance)
+    // 2. Check head rotation (Only strictly enforce for registration)
     if (forRegistration) {
       final headY = (face.headEulerAngleY ?? 0.0).abs();
       final headZ = (face.headEulerAngleZ ?? 0.0).abs();
@@ -160,7 +128,6 @@ class FaceRecognitionTFLiteService {
           return false;
         }
       } else {
-        // Slightly more lenient for turbo/side checks if enabled
         if (headZ > maxHeadRotation * 1.5 || headY > 50.0) {
           return false;
         }
@@ -169,14 +136,12 @@ class FaceRecognitionTFLiteService {
 
     // 3. Check face size (Dynamic Area)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    // Lowered threshold to 400 (20x20 pixels) to support long distance detection up to 5 meters.
     if (!forRegistration && faceArea < 400) {
       debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 400)');
       return false;
     }
 
-    // 4. Overall Quality Score
-    // For attendance, we lower the min quality score so sleeping/tilted faces are not rejected by the quality multiplier
+    // 4. Overall Quality Score (Lenient score 0.10 for attendance mode)
     final double currentMinQuality = forRegistration ? minFaceQualityScore : 0.10;
     final quality = calculateFaceQuality(face);
     if (quality < currentMinQuality) {
@@ -189,22 +154,21 @@ class FaceRecognitionTFLiteService {
     return true;
   }
 
-  // ... (extractFaceFeatures remains mostly same, just calls enhanced methods) ...
-
   Future<Map<String, dynamic>> extractFaceFeatures(
     String imagePath, {
     bool allowSidePose = false,
-    bool forRegistration = false, // ← use permissive detector during enrollment
+    bool forRegistration = false,
   }) async {
-    // Use permissive detector for registration so photos captured during enrollment
-    // aren't rejected because the face is slightly small in the high-res photo.
     final faces = await detectFaces(imagePath);
-
     if (faces.isEmpty) throw Exception('No face detected');
     if (faces.length > 1) throw Exception('Multiple faces detected');
 
     final face = faces.first;
-    if (!isValidFaceForRecognition(face, allowSidePose: allowSidePose, forRegistration: forRegistration)) {
+    if (!isValidFaceForRecognition(
+      face,
+      allowSidePose: allowSidePose,
+      forRegistration: forRegistration,
+    )) {
       throw Exception(
         'Face quality insufficient. Open eyes and look straight.',
       );
@@ -221,7 +185,6 @@ class FaceRecognitionTFLiteService {
     Face face, {
     bool allowSidePose = false,
     String? debugPath,
-    bool checkSpoof = false,
   }) async {
     if (!_isInitialized) await initialize();
 
@@ -266,7 +229,6 @@ class FaceRecognitionTFLiteService {
       faceData: faceData,
       allowSidePose: allowSidePose,
       debugPath: debugPath,
-      checkSpoof: checkSpoof,
     );
 
     if (response.error != null) throw Exception(response.error);
@@ -293,7 +255,6 @@ class FaceRecognitionTFLiteService {
     if (!_isInitialized) await initialize();
 
     final landmarks = <String, dynamic>{};
-    // ... [Same landmark extraction logic can be simplified or delegated] ...
     void addLandmark(FaceLandmarkType type, String key) {
       final l = face.landmarks[type];
       if (l != null) {
@@ -338,8 +299,6 @@ class FaceRecognitionTFLiteService {
     return _buildTemplate(face, normalizedEmbedding, landmarks, imagePath);
   }
 
-  // ... [Keep helper methods: _calculateIPD, _calculateBiometricMetrics, _detectOcclusion, _detectPassiveLiveness, _calculateImageQualityMetrics] ...
-
   double _calculateIPD(Map<String, dynamic> landmarks) {
     if (landmarks['leftEye'] != null && landmarks['rightEye'] != null) {
       final leftEye = landmarks['leftEye'] as Map<String, dynamic>;
@@ -351,9 +310,6 @@ class FaceRecognitionTFLiteService {
     return 0.0;
   }
 
-  /* 3D Depth Score Logic Removed for speed parity with wajah project */
-
-  // Helpers for completeness (retained from original file to ensure no breaking changes)
   Map<String, dynamic> _calculateBiometricMetrics(
     Rect boundingBox,
     Map<String, dynamic> landmarks,
@@ -390,18 +346,6 @@ class FaceRecognitionTFLiteService {
       'method': 'passive',
     };
   }
-
-  Map<String, dynamic> _calculateImageQualityMetrics(
-    Face face,
-    Rect boundingBox,
-  ) {
-    final faceArea = boundingBox.width * boundingBox.height;
-    final sharpness = (faceArea / 50000.0).clamp(0.0, 1.0);
-    return {'overallQuality': sharpness, 'sharpness': sharpness};
-  }
-
-  // Helper for liveness (retained)
-  /* Liveness Validation Delegate Removed for speed parity with wajah project */
 
   Map<String, dynamic> _buildTemplate(
     Face face,
@@ -448,71 +392,31 @@ class FaceRecognitionTFLiteService {
     };
   }
 
-  // ✅ CRITICAL REFACTOR: RAW COSINE SIMILARITY [-1.0, 1.0]
-  // ⛔ NO MORE SCALING to [0,1]
-  // ⛔ NO MORE LANDMARK comparisons in Identity
   double compareFaces(
-    dynamic template1,
-    dynamic template2,
+    Map<String, dynamic> template1,
+    Map<String, dynamic> template2,
   ) {
-    final List<double> embedding1;
-    final List<double> embedding2;
-
-    if (template1 is List<double>) {
-      embedding1 = template1;
-    } else if (template1 is Float32List) {
-      embedding1 = template1;
-    } else if (template1 is Map && template1['embedding'] is List<double>) {
-      embedding1 = template1['embedding'] as List<double>;
-    } else if (template1 is Map && template1['embedding'] is Float32List) {
-      embedding1 = template1['embedding'] as Float32List;
-    } else if (template1 is Map) {
-      embedding1 = List<double>.from(template1['embedding'] ?? []);
-    } else if (template1 is List) {
-      embedding1 = List<double>.from(template1);
-    } else {
-      return -1.0;
-    }
-
-    if (template2 is List<double>) {
-      embedding2 = template2;
-    } else if (template2 is Float32List) {
-      embedding2 = template2;
-    } else if (template2 is Map && template2['embedding'] is List<double>) {
-      embedding2 = template2['embedding'] as List<double>;
-    } else if (template2 is Map && template2['embedding'] is Float32List) {
-      embedding2 = template2['embedding'] as Float32List;
-    } else if (template2 is Map) {
-      embedding2 = List<double>.from(template2['embedding'] ?? []);
-    } else if (template2 is List) {
-      embedding2 = List<double>.from(template2);
-    } else {
-      return -1.0;
-    }
+    final embedding1 = List<double>.from(template1['embedding'] ?? []);
+    final embedding2 = List<double>.from(template2['embedding'] ?? []);
 
     if (embedding1.isEmpty || embedding2.isEmpty) return -1.0;
 
-    // Dot Product & Norms
     double dotProduct = 0.0;
     double norm1 = 0.0;
     double norm2 = 0.0;
 
     for (int i = 0; i < embedding1.length; i++) {
-      final double val1 = embedding1[i];
-      final double val2 = embedding2[i];
-      dotProduct += val1 * val2;
-      norm1 += val1 * val1;
-      norm2 += val2 * val2;
+      dotProduct += embedding1[i] * embedding2[i];
+      norm1 += embedding1[i] * embedding1[i];
+      norm2 += embedding2[i] * embedding2[i];
     }
 
     final mag = sqrt(norm1) * sqrt(norm2);
-    if (mag == 0) return -1.0; // Error / Orthogonal default
+    if (mag == 0) return -1.0;
 
-    // ✅ return RAW Cosine (-1.0 to 1.0)
     return (dotProduct / mag).clamp(-1.0, 1.0);
   }
 
-  // Legacy helper if needed, but redirects to proper logic
   double calculateSimilarity(List<double> e1, List<double> e2) {
     if (e1.isEmpty || e2.isEmpty) return -1.0;
 
@@ -528,7 +432,6 @@ class FaceRecognitionTFLiteService {
     return (dot / mag).clamp(-1.0, 1.0);
   }
 
-  // ... (validatePhotoQuality same as above, keep logic) ...
   Future<bool> validatePhotoQuality(String imagePath) async {
     final faces = await detectFaces(imagePath);
     if (faces.isEmpty) throw Exception('No face detected');

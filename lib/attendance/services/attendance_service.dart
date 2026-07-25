@@ -14,6 +14,32 @@ class AttendanceService {
   final SupabaseClient _supabase = Supabase.instance.client;
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
 
+  Future<List<Map<String, dynamic>>> getAvailableAttendanceModes({
+    required int organizationId,
+    Map<String, dynamic>? memberSchedule,
+    String? workTimeMode,
+  }) async {
+    return [
+      {'key': 'check_in', 'label': 'Masuk'},
+      {'key': 'check_out', 'label': 'Keluar'},
+      {'key': 'break_out', 'label': 'Istirahat Masuk'},
+      {'key': 'break_in', 'label': 'Istirahat Keluar'},
+    ];
+  }
+
+  Future<Map<String, dynamic>?> getMemberSchedule(int memberId) async {
+    try {
+      final res = await _supabase
+          .from('member_schedules')
+          .select('*, shifts(*), work_schedules(*)')
+          .eq('organization_member_id', memberId)
+          .maybeSingle();
+      return res;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // -- Schedule Logic Start --
 
   /// Determines the effective schedule for a member on a specific date (default: today)

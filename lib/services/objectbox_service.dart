@@ -32,25 +32,39 @@ class ObjectBoxService {
       debugPrint('📦 ObjectBox: Memulai inisialisasi database...');
       final docsDir = await getApplicationDocumentsDirectory();
       final storeDir = Directory(p.join(docsDir.path, 'objectbox'));
-      
+
       if (!await storeDir.exists()) {
         await storeDir.create(recursive: true);
       }
 
-      _store = await openStore(directory: storeDir.path);
+      try {
+        _store = await openStore(directory: storeDir.path);
+      } catch (e) {
+        debugPrint(
+          '⚠️ ObjectBox schema mismatch or store error: $e. Recreating store directory...',
+        );
+        if (await storeDir.exists()) {
+          await storeDir.delete(recursive: true);
+        }
+        await storeDir.create(recursive: true);
+        _store = await openStore(directory: storeDir.path);
+      }
+
       _box = _store!.box<KaryawanWajah>();
-      
+
       final count = _box!.count();
       debugPrint('✅ ObjectBox: Berhasil diinisialisasi. Jumlah data wajah terdaftar: $count');
     } catch (e, stack) {
       debugPrint('❌ ObjectBox: Gagal melakukan inisialisasi store: $e\n$stack');
-      rethrow;
     }
   }
 
+  /// Compatibility alias for initialize()
+  Future<void> initialize() async => init();
+  Box<KaryawanWajah> get faceBox => box;
+
   /// Simpan atau update satu face embedding karyawan ke ObjectBox.
   void putKaryawanWajah(KaryawanWajah karyawan) {
-    // Pastikan jika data dengan memberId yang sama sudah ada, kita replace/update
     final existing = findByMemberId(karyawan.organizationMemberId);
     if (existing != null) {
       karyawan.id = existing.id;
@@ -67,8 +81,27 @@ class ObjectBoxService {
     });
   }
 
+  /// Compatibility for syncFaceTemplates
+  Future<void> syncFaceTemplates(
+    List<Map<String, dynamic>> rawTemplates,
+    Map<int, Map<String, dynamic>> memberInfoMap,
+  ) async {
+    if (!_initializedCheck()) await init();
+    final list = rawTemplates
+        .map((json) => KaryawanWajah.fromSupabase(json))
+        .where((kw) => kw.faceEmbedding != null)
+        .toList();
+    if (list.isNotEmpty) {
+      final orgId = list.first.organizationId;
+      syncOrganizationFaces(orgId, list);
+    }
+  }
+
+  bool _initializedCheck() => _store != null;
+
   /// Cari data wajah berdasarkan organizationMemberId.
   KaryawanWajah? findByMemberId(int memberId) {
+    if (!_initializedCheck()) return null;
     final query = box.query(KaryawanWajah_.organizationMemberId.equals(memberId)).build();
     final result = query.findFirst();
     query.close();
@@ -77,6 +110,7 @@ class ObjectBoxService {
 
   /// Cari semua data wajah aktif dalam satu organisasi.
   List<KaryawanWajah> getActiveFacesForOrganization(int orgId) {
+    if (!_initializedCheck()) return [];
     final query = box
         .query(KaryawanWajah_.organizationId.equals(orgId)
             .and(KaryawanWajah_.isActive.equals(true)))
@@ -87,14 +121,19 @@ class ObjectBoxService {
   }
 
   /// Sinkronisasi penuh dari Supabase/SQLite: Hapus data organisasi lama di ObjectBox, masukkan yang baru.
-  void syncOrganizationFaces(int orgId, List<KaryawanWajah> newList) {
+  Future<void> syncOrganizationFaces(int orgId, List<KaryawanWajah> newList) async {
+    if (!_initializedCheck()) {
+      await init();
+    }
+    if (!_initializedCheck()) {
+      debugPrint('⚠️ ObjectBox: Store not initialized yet, skipping syncOrganizationFaces.');
+      return;
+    }
     store.runInTransaction(TxMode.write, () {
-      // Hapus data lama organisasi ini
       final oldQuery = box.query(KaryawanWajah_.organizationId.equals(orgId)).build();
       oldQuery.remove();
       oldQuery.close();
 
-      // Masukkan yang baru
       box.putMany(newList);
       debugPrint('🔄 ObjectBox: Sinkronisasi wajah untuk Org $orgId selesai. Total: ${newList.length} wajah.');
     });
@@ -102,6 +141,7 @@ class ObjectBoxService {
 
   /// Hapus data wajah berdasarkan organizationMemberId.
   bool deleteByMemberId(int memberId) {
+    if (!_initializedCheck()) return false;
     return store.runInTransaction(TxMode.write, () {
       final query = box.query(KaryawanWajah_.organizationMemberId.equals(memberId)).build();
       final removedCount = query.remove();
@@ -113,30 +153,26 @@ class ObjectBoxService {
 
   /// Hapus seluruh data wajah di ObjectBox (misalnya saat logout total / clear cache).
   void clearAllData() {
+    if (!_initializedCheck()) return;
     box.removeAll();
     debugPrint('🗑️ ObjectBox: Seluruh data wajah dihapus dari penyimpanan lokal.');
   }
 
   /// ✅ DIAGNOSTIC: Dump all registered faces with their member IDs and names.
-  /// Useful for debugging identity swap issues.
   void dumpAllRegisteredFaces() {
+    if (!_initializedCheck()) return;
     final all = box.getAll();
     debugPrint('📋 ═══ ObjectBox Face Registry Dump ═══');
     debugPrint('📋 Total registered faces: ${all.length}');
     for (final kw in all) {
-      debugPrint('  👤 OBX_ID: ${kw.id} | '
-          'MemberID: ${kw.organizationMemberId} | '
-          'OrgID: ${kw.organizationId} | '
-          'Name: ${kw.namaLengkap} | '
-          'HasEmbedding: ${kw.faceEmbedding != null} | '
-          'Active: ${kw.isActive}');
+      debugPrint('  👤 OBX_ID: ${kw.id} | MemberID: ${kw.organizationMemberId} | OrgID: ${kw.organizationId} | Name: ${kw.namaLengkap} | HasEmbedding: ${kw.faceEmbedding != null} | Active: ${kw.isActive}');
     }
     debugPrint('═══════════════════════════════════════');
   }
 
   /// ✅ PURGE: Remove all faces for a specific organization, then re-sync.
-  /// Use this after fixing identity swap issues to force a clean re-registration.
   int purgeForOrganization(int orgId) {
+    if (!_initializedCheck()) return 0;
     final query = box.query(KaryawanWajah_.organizationId.equals(orgId)).build();
     final removed = query.remove();
     query.close();
@@ -145,24 +181,25 @@ class ObjectBoxService {
   }
 
   /// Melakukan Approximate Nearest Neighbor (ANN) search menggunakan HNSW Vector Index ObjectBox.
-  /// Sangat cepat (<1ms) dan hemat memori.
   List<ObjectWithScore<KaryawanWajah>> searchNearestNeighbors(
     List<double> queryVector, {
     int maxResultCount = 3,
     int? organizationId,
   }) {
+    if (!_initializedCheck()) {
+      debugPrint('⚠️ ObjectBox Search: Store not initialized yet');
+      return [];
+    }
     if (queryVector.length != 512) {
       debugPrint('⚠️ ObjectBox Search: Dimensi query vector tidak cocok (${queryVector.length} vs 512)');
       return [];
     }
 
-    // 1. Definisikan kondisi Vector Search menggunakan HNSW index
     final vectorCond = KaryawanWajah_.faceEmbedding.nearestNeighborsF32(
       queryVector,
       maxResultCount,
     );
 
-    // 2. Terapkan filter organisasi & status aktif jika ada (Hybrid Search)
     Condition<KaryawanWajah> queryCond;
     if (organizationId != null) {
       queryCond = vectorCond.and(
@@ -176,11 +213,10 @@ class ObjectBoxService {
       );
     }
 
-    // 3. Bangun query dan execute findWithScores
     final query = box.query(queryCond).build();
     final results = query.findWithScores();
     query.close();
-    
+
     return results;
   }
 

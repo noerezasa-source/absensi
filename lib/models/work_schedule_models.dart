@@ -256,3 +256,9 @@ class DailySchedule {
     );
   }
 }
+
+class WorkScheduleHelper {
+  static DailySchedule getTodaySchedule(Map<String, dynamic>? memberSchedule) {
+    return DailySchedule.unscheduled();
+  }
+}

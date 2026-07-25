@@ -5,7 +5,6 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
-import 'face_anti_spoofing_service.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 /// Request object to send to Isolate
@@ -18,7 +17,6 @@ class InferenceRequest {
   final int? rotation; // NEW: Rotation in degrees
   final Map<String, dynamic> faceData;
   final bool allowSidePose;
-  final bool checkSpoof;
 
   InferenceRequest({
     required this.requestId,
@@ -30,7 +28,6 @@ class InferenceRequest {
     required this.faceData,
     this.allowSidePose = false,
     this.debugPath, // NEW: Path to save debug image
-    this.checkSpoof = false,
   });
 
   final String? debugPath;
@@ -83,17 +80,9 @@ class IsolateInferenceService {
       final receivePort = ReceivePort();
       final rootIsolateToken = RootIsolateToken.instance;
 
-      // Load optimized W600K MBF model bytes in main isolate
-      final modelData = await rootBundle.load('assets/models/facenet.tflite');
+      // Load optimized InsightFace/MobileFaceNet model bytes in main isolate
+      final modelData = await rootBundle.load('assets/models/mobilefacenet.tflite');
       final modelBytes = modelData.buffer.asUint8List();
-
-      /*
-      // Load 1K3D68 High-Precision Landmark model (Buffalo_S)
-      final landmarkData = await rootBundle.load(
-        'assets/models/1k3d68_optimized.tflite',
-      );
-      final landmarkBytes = landmarkData.buffer.asUint8List();
-      */
 
       _isolate = await Isolate.spawn(
         _isolateEntryPoint,
@@ -161,7 +150,6 @@ class IsolateInferenceService {
     required Map<String, dynamic> faceData,
     bool allowSidePose = false,
     String? debugPath, // NEW
-    bool checkSpoof = false,
   }) async {
     if (!_isInitialized) {
       await initialize();
@@ -181,7 +169,6 @@ class IsolateInferenceService {
         faceData: faceData,
         allowSidePose: allowSidePose,
         debugPath: debugPath,
-        checkSpoof: checkSpoof,
       ),
     );
 
@@ -222,90 +209,58 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
   int recognitionInputSize = 160;
   int embeddingSize = 512;
 
-  // Load Landmark Model (Removed)
-  // Interpreter? landmarkInterpreter;
-  // int landmarkInputSize = 192;
   int landmarkInputSize = 0;
 
   try {
-    bool loaded = false;
-    if (Platform.isAndroid) {
-      // ✅ TIER 1: GPU Delegate V2 (Fastest sub-10ms)
-      try {
-        final options = InterpreterOptions()..threads = 4;
-        options.addDelegate(GpuDelegateV2());
-        recognitionInterpreter = Interpreter.fromBuffer(
-          initData.recognitionModelBytes,
-          options: options,
-        );
-        loaded = true;
-        debugPrint('ISOLATE: Successfully initialized TFLite with GPU Delegate V2');
-      } catch (e) {
-        debugPrint('ISOLATE: GPU Delegate V2 failed ($e), attempting NNAPI fallback...');
-      }
+    // 1. Define Options with Threads
+    InterpreterOptions recognitionOptions = InterpreterOptions()..threads = 4;
+    InterpreterOptions landmarkOptions = InterpreterOptions()..threads = 2;
 
-      // ✅ TIER 2: NNAPI Acceleration Fallback
-      if (!loaded) {
-        try {
-          final options = InterpreterOptions()..threads = 4;
-          options.useNnApiForAndroid = true;
-          recognitionInterpreter = Interpreter.fromBuffer(
-            initData.recognitionModelBytes,
-            options: options,
-          );
-          loaded = true;
-          debugPrint('ISOLATE: Successfully initialized TFLite with NNAPI Acceleration');
-        } catch (e) {
-          debugPrint('ISOLATE: NNAPI failed ($e), falling back to CPU...');
-        }
-      }
+    if (Platform.isAndroid) {
+      // ❌ NNAPI DIMATIKAN
+      debugPrint('ISOLATE: Using XNNPack CPU Acceleration (Extremely fast & stable)');
     } else if (Platform.isIOS) {
-      // ✅ IOS: Metal / CoreML GPU Acceleration
+      // ✅ IOS: Use Metal/CoreML if available (GpuDelegate for iOS)
       try {
-        final options = InterpreterOptions()..threads = 4;
-        options.addDelegate(GpuDelegate());
-        recognitionInterpreter = Interpreter.fromBuffer(
-          initData.recognitionModelBytes,
-          options: options,
-        );
-        loaded = true;
-        debugPrint('ISOLATE: Successfully initialized TFLite with iOS GPU Acceleration');
+        final gpuDelegate = GpuDelegate();
+        recognitionOptions.addDelegate(gpuDelegate);
+        landmarkOptions.addDelegate(gpuDelegate);
+        debugPrint('ISOLATE: Using iOS GPU Acceleration');
       } catch (e) {
-        debugPrint('ISOLATE: iOS GPU initialization failed ($e), falling back to CPU...');
+        debugPrint('ISOLATE: iOS GPU initialization failed: $e');
       }
     }
 
-    // ✅ TIER 3: Standard 4-Thread CPU Fallback
-    if (!loaded) {
-      final options = InterpreterOptions()..threads = 4;
+    try {
       recognitionInterpreter = Interpreter.fromBuffer(
         initData.recognitionModelBytes,
-        options: options,
+        options: recognitionOptions,
       );
-      debugPrint('ISOLATE: Initialized TFLite with 4-Thread CPU Fallback');
+    } catch (e) {
+      debugPrint(
+        'ISOLATE: Accelerated initialization failed, falling back to CPU: $e',
+      );
+      // ✅ ATTEMPT 2: Standard CPU (Final Fallback)
+      recognitionOptions = InterpreterOptions()..threads = 4;
+      landmarkOptions = InterpreterOptions()..threads = 2;
+
+      recognitionInterpreter = Interpreter.fromBuffer(
+        initData.recognitionModelBytes,
+        options: recognitionOptions,
+      );
     }
 
-    if (recognitionInterpreter != null) {
-      final recInTensor = recognitionInterpreter.getInputTensor(0);
-      final recOutTensor = recognitionInterpreter.getOutputTensor(0);
-      if (recInTensor.shape.length >= 3) {
-        recognitionInputSize = recInTensor.shape[1];
-      }
-      if (recOutTensor.shape.length >= 2) {
-        embeddingSize = recOutTensor.shape[1];
-      }
+    // Configure Recognition Model
+    final recInTensor = recognitionInterpreter.getInputTensor(0);
+    final recOutTensor = recognitionInterpreter.getOutputTensor(0);
+    if (recInTensor.shape.length >= 3) {
+      recognitionInputSize = recInTensor.shape[1];
     }
-
-    // Landmark model removed for speed parity with wajah project
-    /*
-    final lanInTensor = landmarkInterpreter.getInputTensor(0);
-    if (lanInTensor.shape.length >= 3) {
-      landmarkInputSize = lanInTensor.shape[1];
+    if (recOutTensor.shape.length >= 2) {
+      embeddingSize = recOutTensor.shape[1];
     }
-    */
   } catch (e) {
     debugPrint('ISOLATE CRITICAL ERROR: Failed to load models: $e');
-    // Send a message back to main isolate if possible or just let requests fail
   }
 
   receivePort.listen((message) async {
@@ -319,34 +274,44 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           }
           final imageBytes = await imageFile.readAsBytes();
           final fullImage = img.decodeImage(imageBytes);
-          if (fullImage != null) {
-            // ✅ CRITICAL FIX: Crop face region from full photo
-            // Previously the entire photo was fed to the model, producing
-            // embeddings inconsistent with the attendance path (which crops
-            // tightly). This mismatch caused identity cross-matching.
-            faceImage = _cropFaceFromDecodedImage(
-              fullImage,
-              message.faceData,
-              max(recognitionInputSize, landmarkInputSize),
-            );
+          if (fullImage == null) {
+            throw Exception('Failed to decode image');
+          }
+
+          // ✅ CRITICAL FIX: Crop face region from full image (same as stream path)
+          final box = message.faceData['boundingBox'] as Map<String, dynamic>;
+          final fLeft = (box['left'] as num).toDouble();
+          final fTop = (box['top'] as num).toDouble();
+          final fWidth = (box['width'] as num).toDouble();
+          final fHeight = (box['height'] as num).toDouble();
+
+          // Add margin around face (same 25% as stream path)
+          const margin = 0.25;
+          final marginW = fWidth * margin;
+          final marginH = fHeight * margin;
+
+          int cropX = max(0, (fLeft - marginW).toInt());
+          int cropY = max(0, (fTop - marginH).toInt());
+          int cropW = min(fullImage.width - cropX, (fWidth + marginW * 2).toInt());
+          int cropH = min(fullImage.height - cropY, (fHeight + marginH * 2).toInt());
+
+          if (cropW <= 0 || cropH <= 0) {
+            // Fallback: use full image if crop fails
+            faceImage = img.copyResize(fullImage, width: recognitionInputSize, height: recognitionInputSize);
+          } else {
+            final cropped = img.copyCrop(fullImage, x: cropX, y: cropY, width: cropW, height: cropH);
+            faceImage = img.copyResize(cropped, width: recognitionInputSize, height: recognitionInputSize);
           }
         } else if (message.imageBytes != null &&
             message.imageWidth != null &&
             message.imageHeight != null) {
-          // ✅ TURBO: Single-Pass Conversion
-          // Instead of converting twice (once for 112 and once for 192),
-          // we convert once to the highest needed resolution (LandmarkSize).
-          final int maxNeededSize = max(
-            recognitionInputSize,
-            landmarkInputSize,
-          );
-
+          // ✅ TURBO: Single-Pass Conversion for stream
           faceImage = _convertYUVRegionToImage(
             message.imageBytes!,
             message.imageWidth!,
             message.imageHeight!,
             message.faceData,
-            maxNeededSize,
+            recognitionInputSize,
             message.rotation ?? 0,
           );
         }
@@ -361,27 +326,7 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           );
         }
 
-        // ✅ LIVENESS STAGE 1.5: Lighting Normalization (Wajib untuk ruangan gelap)
-        // Dulu dimatikan untuk stream karena dianggap membebani CPU, tapi sekarang sudah di-optimize
-        // sehingga sangat cepat (~15ms) dan krusial agar model W600K bisa membaca wajah di kondisi low-light.
-        final bool isFromStream = message.imageBytes != null;
-        faceImage = _enhanceImage(faceImage);
-
-        // ✅ LIVENESS STAGE 2 (Anti-Spoofing Fast Blur Check)
-        // Berjalan sangat cepat (O(N) 64x64) di background isolate
-        // Hanya dijalankan pada face stream, abaikan jika upload foto manual (registration)
-        final bool checkSpoof = message.checkSpoof;
-        double laplacianScore = 1.0;
-        if (isFromStream && checkSpoof) {
-          laplacianScore = FaceAntiSpoofingService.calculateLaplacian(faceImage);
-          double dynamicThreshold = 15.0 + ((faceImage.width - 100).clamp(0, 300) / 300.0) * 35.0;
-          if (laplacianScore < dynamicThreshold) { 
-            throw Exception('Spoofing detected (Score: ${laplacianScore.toStringAsFixed(1)} < Thr: ${dynamicThreshold.toStringAsFixed(1)})');
-          }
-        }
-
         // 1. Run Recognition Model (W600K)
-        // Resize if base image is larger than needed
         final img.Image recImage = (faceImage.width == recognitionInputSize)
             ? faceImage
             : img.copyResize(
@@ -397,22 +342,6 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
           embeddingSize,
         );
 
-        /*
-        // 2. Run Landmark Model (1K3D68) - REMOVED
-        final img.Image lanImage = (faceImage.width == landmarkInputSize)
-            ? faceImage
-            : img.copyResize(
-                faceImage,
-                width: landmarkInputSize,
-                height: landmarkInputSize,
-              );
-
-        final landmarks3d = _runLandmarkInference(
-          landmarkInterpreter,
-          lanImage,
-          landmarkInputSize,
-        );
-        */
         final landmarks3d = null;
 
         initData.sendPort.send(
@@ -420,7 +349,7 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
             requestId: message.requestId,
             embedding: embedding,
             landmarks3d: landmarks3d,
-            qualityScore: laplacianScore,
+            qualityScore: 1.0,
           ),
         );
       } catch (e) {
@@ -450,12 +379,9 @@ img.Image _convertYUVRegionToImage(
   double sHeight = (box['height'] as num).toDouble();
 
   // 1. UN-ROTATE coordinates from "Screen/MLKit" space to "Raw Buffer" space
-  // ML Kit gives coordinates relative to the rotated InputImage.
-  // We need to map them back to the raw yuvBytes buffer (usually landscape).
   double bLeft, bTop, bWidth, bHeight;
 
   if (rotation == 90) {
-    // Portrait: Screen(720x1280) -> Buffer(1280x720)
     bLeft = sTop;
     bTop = frameHeight - sLeft - sWidth;
     bWidth = sHeight;
@@ -471,7 +397,6 @@ img.Image _convertYUVRegionToImage(
     bWidth = sWidth;
     bHeight = sHeight;
   } else {
-    // 0 or default
     bLeft = sLeft;
     bTop = sTop;
     bWidth = sWidth;
@@ -492,25 +417,19 @@ img.Image _convertYUVRegionToImage(
   int cropH = endY - startY;
 
   if (cropW <= 0 || cropH <= 0) {
-    // Fallback to minimal sensible area if mapping fails
     startX = 0;
     startY = 0;
     cropW = min(frameWidth, 200);
     cropH = min(frameHeight, 200);
   }
 
-  // ✅ SPEED: Direct buffer write instead of per-pixel setPixelRgb (~3-8ms saved)
+  // 3. One-Pass Turbo Loop: Crop + Scale + Convert YUV + Rotate
   final image = img.Image(width: targetSize, height: targetSize);
   final int frameSize = frameWidth * frameHeight;
-  final imgBuffer = image.buffer.asUint8List();
-  
-  final int numChannels = image.numChannels;
-  final int rowStride = targetSize * numChannels;
 
   final double scaleX = cropW / targetSize;
   final double scaleY = cropH / targetSize;
 
-  // Optimized constants for YUV -> RGB
   const int c1 = 1403; // 1.370705 * 1024
   const int c2 = 346; // 0.337633 * 1024
   const int c3 = 715; // 0.698001 * 1024
@@ -545,17 +464,14 @@ img.Image _convertYUVRegionToImage(
       final int r8 = vVal - 128;
       final int u8 = uVal - 128;
 
-      // Fixed point conversion
       int r = yVal + ((c1 * r8) >> 10);
       int g = yVal - ((c2 * u8 + c3 * r8) >> 10);
       int b = yVal + ((c4 * u8) >> 10);
 
-      // Fast Clamp
       r = r < 0 ? 0 : (r > 255 ? 255 : r);
       g = g < 0 ? 0 : (g > 255 ? 255 : g);
       b = b < 0 ? 0 : (b > 255 ? 255 : b);
 
-      // Handle Rotation during Pixel Set (Avoid cost of img.copyRotate later)
       int dx, dy;
       if (rotation == 90) {
         dx = targetSize - 1 - y;
@@ -571,127 +487,21 @@ img.Image _convertYUVRegionToImage(
         dy = y;
       }
 
-      // ✅ SPEED: Direct buffer write
-      final int bufIdx = dy * rowStride + dx * numChannels;
-      imgBuffer[bufIdx] = r;
-      imgBuffer[bufIdx + 1] = g;
-      imgBuffer[bufIdx + 2] = b;
-      if (numChannels > 3) {
-        imgBuffer[bufIdx + 3] = 255; // Alpha
-      }
+      image.setPixelRgb(dx, dy, r, g, b);
     }
   }
 
   return image;
 }
 
-// ✅ NEW: Robust Lighting Normalization (CLAHE-lite)
-img.Image _normalizeLighting(img.Image image) {
-  // 1. Calculate average luminance using fast spatial sampling
-  double totalLuminance = 0;
-  int sampleCount = 0;
-  final int step = 4; // Sample every 4th pixel (saves 93% of iterations)
-
-  for (int y = 0; y < image.height; y += step) {
-    for (int x = 0; x < image.width; x += step) {
-      final pixel = image.getPixel(x, y);
-      // Standard luminance formula: 0.299R + 0.587G + 0.114B
-      totalLuminance += (0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b);
-      sampleCount++;
-    }
-  }
-
-  final avgLuminance = totalLuminance / (sampleCount > 0 ? sampleCount : 1);
-  final targetLuminance = 128.0; // Aim for middle gray
-
-  // 2. Adjust brightness (Gamma-like shift)
-  // If image is too dark, boost it. If too bright, dim it.
-  double adjustmentFactor = targetLuminance / (avgLuminance + 1.0);
-
-  // Clamp adjustment to prevent extreme artifacts
-  adjustmentFactor = adjustmentFactor.clamp(0.5, 2.0);
-
-  if ((adjustmentFactor - 1.0).abs() < 0.05) {
-    return image; // No significant adjustment needed
-  }
-
-  return img.adjustColor(
-    image,
-    brightness: adjustmentFactor,
-    contrast: 1.1, // Slight contrast boost for features
-  );
-}
-
-// ✅ CRITICAL FIX: Crop face region from a decoded JPEG/PNG image.
-// This ensures the registration path produces the same tightly-cropped face
-// input as the attendance path (_convertYUVRegionToImage), fixing the
-// embedding inconsistency that caused identity cross-matching/swapping.
-img.Image _cropFaceFromDecodedImage(
-  img.Image fullImage,
-  Map<String, dynamic> faceData,
-  int targetSize,
-) {
-  final box = faceData['boundingBox'] as Map<String, dynamic>?;
-  if (box == null) {
-    // No bounding box provided — resize whole image as fallback
-    return img.copyResize(fullImage, width: targetSize, height: targetSize);
-  }
-
-  final double fLeft = (box['left'] as num).toDouble();
-  final double fTop = (box['top'] as num).toDouble();
-  final double fWidth = (box['width'] as num).toDouble();
-  final double fHeight = (box['height'] as num).toDouble();
-
-  // Add margin around face (same 25% margin as _convertYUVRegionToImage)
-  const margin = 0.25;
-  final marginW = fWidth * margin;
-  final marginH = fHeight * margin;
-
-  int startX = max(0, (fLeft - marginW).toInt());
-  int startY = max(0, (fTop - marginH).toInt());
-  int endX = min(fullImage.width, (fLeft + fWidth + marginW).toInt());
-  int endY = min(fullImage.height, (fTop + fHeight + marginH).toInt());
-
-  int cropW = endX - startX;
-  int cropH = endY - startY;
-
-  if (cropW <= 10 || cropH <= 10) {
-    // Fallback: bounding box too small or invalid, use whole image
-    return img.copyResize(fullImage, width: targetSize, height: targetSize);
-  }
-
-  // Crop the face region
-  final cropped = img.copyCrop(
-    fullImage,
-    x: startX,
-    y: startY,
-    width: cropW,
-    height: cropH,
-  );
-
-  // Resize to target (square) for model input
-  return img.copyResize(cropped, width: targetSize, height: targetSize);
-}
-
-img.Image _enhanceImage(img.Image image) {
-  // ✅ OPTIMIZED: Skip sharpening convolution filter.
-  // Sharpening is highly CPU-intensive and unnecessary for MobileFaceNet embeddings.
-  // We only run lighting normalization to save ~25ms of processing time per frame.
-  return _normalizeLighting(image);
-}
-
-/// Helper to dequantize TFLite output tensors correctly
 List<double> _dequantize(Tensor tensor, dynamic output) {
-  // If the model is already float32, just cast and return
   if (tensor.type == TensorType.float32) {
     if (output is List<List<double>>) return List<double>.from(output[0]);
     if (output is List<double>) return List<double>.from(output);
-    // Dynamic cast if needed
     final list = (output is List) ? output[0] as List : output as List;
     return list.map((e) => (e as num).toDouble()).toList();
   }
 
-  // Dequantization: real_value = (quantized_value - zero_point) * scale
   double scale = 1.0;
   int zeroPoint = 0;
 
@@ -699,9 +509,7 @@ List<double> _dequantize(Tensor tensor, dynamic output) {
     final params = tensor.params;
     scale = params.scale;
     zeroPoint = params.zeroPoint;
-  } catch (e) {
-    // debugPrint('ISOLATE: Warning - could not read quantization params: $e');
-  }
+  } catch (_) {}
 
   final List<dynamic> rawList =
       (output is List && output.isNotEmpty && output[0] is List)
@@ -733,7 +541,6 @@ List<double> _runInference(
   final outputTensor = interpreter.getOutputTensor(0);
   final dynamic output;
 
-  // Allocate output buffer based on model type
   if (outputTensor.type == TensorType.uint8 ||
       outputTensor.type == TensorType.int8) {
     output = List.generate(1, (_) => List<int>.filled(embeddingSize, 0));
@@ -747,41 +554,26 @@ List<double> _runInference(
   return _normalizeEmbedding(embedding);
 }
 
-/* Landmark Inference Code Removed for speed parity with wajah project */
+List<List<List<List<double>>>> _preprocessImageFloat(img.Image image, int inputSize) {
+  final input = <List<List<List<double>>>>[];
+  final batch = <List<List<double>>>[];
 
-// Standard Float32 Preprocessing (-1 to 1)
-List<dynamic> _preprocessImageFloat(img.Image image, int inputSize) {
-  // ✅ SYNC: Replicating Wajah project's specific (jumbled) preprocessing logic
-  // This logic iterates by channels then pixels, which is non-standard but required for parity.
-  final channels = 3;
-  final height = inputSize;
-  final width = inputSize;
-
-  // 1. Flatten into [R0, G0, B0, R1, G1, B1, ...]
-  final float32Array = Float32List(width * height * 3);
-  int i = 0;
-  for (final pixel in image) {
-    float32Array[i++] = pixel.r.toDouble();
-    float32Array[i++] = pixel.g.toDouble();
-    float32Array[i++] = pixel.b.toDouble();
-  }
-
-  // 2. Reshape into [1, 160, 160, 3] but using (C, H, W) iteration order for data filling
-  final reshapedArray = Float32List(1 * height * width * channels);
-  for (int c = 0; c < channels; c++) {
-    for (int h = 0; h < height; h++) {
-      for (int w = 0; w < width; w++) {
-        int index = c * height * width + h * width + w;
-        // Using the exact same indexing as Wajah project
-        reshapedArray[index] = (float32Array[index] - 127.5) / 127.5;
-      }
+  for (int y = 0; y < inputSize; y++) {
+    final row = <List<double>>[];
+    for (int x = 0; x < inputSize; x++) {
+      final pixel = image.getPixel(x, y);
+      row.add([
+        (pixel.r.toDouble() - 127.5) / 127.5,
+        (pixel.g.toDouble() - 127.5) / 127.5,
+        (pixel.b.toDouble() - 127.5) / 127.5,
+      ]);
     }
+    batch.add(row);
   }
-
-  return reshapedArray.reshape([1, width, height, channels]);
+  input.add(batch);
+  return input;
 }
 
-// Uint8 Preprocessing (0 to 255)
 List<List<List<List<int>>>> _preprocessImageUint8(
   img.Image image,
   int inputSize,
@@ -801,7 +593,6 @@ List<List<List<List<int>>>> _preprocessImageUint8(
   return input;
 }
 
-// Int8 Preprocessing (-128 to 127)
 List<List<List<List<int>>>> _preprocessImageInt8(
   img.Image image,
   int inputSize,
@@ -813,7 +604,6 @@ List<List<List<List<int>>>> _preprocessImageInt8(
     final row = <List<int>>[];
     for (int x = 0; x < inputSize; x++) {
       final pixel = image.getPixel(x, y);
-      // Shift 0..255 to -128..127
       row.add([
         pixel.r.toInt() - 128,
         pixel.g.toInt() - 128,

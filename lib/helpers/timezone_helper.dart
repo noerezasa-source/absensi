@@ -234,6 +234,14 @@ class TimezoneHelper {
     return '${DateFormat('yyyy-MM-dd HH:mm:ss').format(utc)}+00';
   }
 
+  static String formatDateOnly(DateTime dt) {
+    return DateFormat('yyyy-MM-dd').format(dt);
+  }
+
+  static String formatTimeOnly(DateTime dt) {
+    return DateFormat('HH:mm:ss').format(dt);
+  }
+
   /// Get current date in organization timezone (YYYY-MM-DD)
   static String getCurrentDateInOrgTimezone(String organizationTimezone) {
     return getCurrentDateInTimezone(organizationTimezone);
@@ -295,7 +303,7 @@ class TimezoneHelper {
 
   /// Format date with full month name
   static String formatDateLong(DateTime date, {String? locale}) {
-    final formatter = DateFormat('EEEE, dd MMMM yyyy', locale ?? Intl.defaultLocale ?? 'id_ID');
+    final formatter = DateFormat('EEEE, dd MMMM yyyy', locale ?? 'id_ID');
     return formatter.format(date);
   }
 
