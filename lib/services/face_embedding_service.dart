@@ -306,13 +306,29 @@ class FaceEmbeddingService {
       );
       debugPrint('[Isolate] ✅ blazeface.tflite dimuat.');
 
-      debugPrint('[Isolate] 🔄 Memuat mobilefacenet.tflite...');
-      final mobileFaceNetData = await rootBundle.load(payload.mobileFaceNetAssetPath);
-      mobileFaceNet = Interpreter.fromBuffer(
-        mobileFaceNetData.buffer.asUint8List(),
-        options: InterpreterOptions()..threads = 2,
-      );
-      debugPrint('[Isolate] ✅ mobilefacenet.tflite dimuat. Siap inference.');
+      debugPrint('[Isolate] 🔄 Memuat mobilefacenet / facenet.tflite...');
+      ByteData? mobileFaceNetData;
+      for (final path in [
+        payload.mobileFaceNetAssetPath,
+        'assets/models/facenet.tflite',
+        'assets/models/w600k_mbf.tflite',
+      ]) {
+        try {
+          mobileFaceNetData = await rootBundle.load(path);
+          debugPrint('[Isolate] ✅ Model face recognition dimuat dari: $path');
+          break;
+        } catch (_) {}
+      }
+
+      if (mobileFaceNetData != null) {
+        mobileFaceNet = Interpreter.fromBuffer(
+          mobileFaceNetData.buffer.asUint8List(),
+          options: InterpreterOptions()..threads = 2,
+        );
+        debugPrint('[Isolate] ✅ Model face recognition dimuat. Siap inference.');
+      } else {
+        throw Exception('Tidak dapat menemukan asset model face recognition di assets/models/');
+      }
     } catch (e) {
       debugPrint('[Isolate] ❌ Gagal memuat model: $e');
       // Isolate tetap jalan — setiap request akan return error

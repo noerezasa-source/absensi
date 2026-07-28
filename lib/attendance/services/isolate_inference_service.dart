@@ -80,8 +80,27 @@ class IsolateInferenceService {
       final receivePort = ReceivePort();
       final rootIsolateToken = RootIsolateToken.instance;
 
-      // Load optimized InsightFace/MobileFaceNet model bytes in main isolate
-      final modelData = await rootBundle.load('assets/models/mobilefacenet.tflite');
+      // Load optimized InsightFace/MobileFaceNet/FaceNet model bytes in main isolate
+      ByteData? modelData;
+      const modelCandidates = [
+        'assets/models/facenet.tflite',
+        'assets/models/mobilefacenet.tflite',
+        'assets/models/w600k_mbf.tflite',
+        'assets/models/mobile_face_net.tflite',
+      ];
+      for (final candidate in modelCandidates) {
+        try {
+          modelData = await rootBundle.load(candidate);
+          debugPrint('✅ Loaded face recognition model asset: $candidate');
+          break;
+        } catch (_) {}
+      }
+
+      if (modelData == null) {
+        throw Exception(
+          'Unable to load face recognition model from assets. Checked: ${modelCandidates.join(", ")}',
+        );
+      }
       final modelBytes = modelData.buffer.asUint8List();
 
       _isolate = await Isolate.spawn(

@@ -28,19 +28,74 @@ class FaceRecognitionService {
     return faces;
   }
 
+  double _calculateIOU(math.Rectangle<double> boxA, math.Rectangle<double> boxB) {
+    final double iLeft = math.max(boxA.left, boxB.left);
+    final double iTop = math.max(boxA.top, boxB.top);
+    final double iRight = math.min(boxA.right, boxB.right);
+    final double iBottom = math.min(boxA.bottom, boxB.bottom);
+    final double iW = math.max(0.0, iRight - iLeft);
+    final double iH = math.max(0.0, iBottom - iTop);
+    final double iArea = iW * iH;
+    if (iArea <= 0) return 0.0;
+    final double unionArea =
+        boxA.width * boxA.height + boxB.width * boxB.height - iArea;
+    if (unionArea <= 0) return 0.0;
+    return iArea / unionArea;
+  }
+
+  Face _selectPrimaryFace(List<Face> faces) {
+    if (faces.isEmpty) throw Exception('No face detected');
+    if (faces.length == 1) return faces.first;
+
+    final sorted = List<Face>.from(faces)
+      ..sort((a, b) {
+        final areaA = a.boundingBox.width * a.boundingBox.height;
+        final areaB = b.boundingBox.width * b.boundingBox.height;
+        return areaB.compareTo(areaA);
+      });
+
+    final primaryFace = sorted.first;
+    final primaryArea =
+        primaryFace.boundingBox.width * primaryFace.boundingBox.height;
+
+    final distinctFaces = <Face>[primaryFace];
+    for (int i = 1; i < sorted.length; i++) {
+      final face = sorted[i];
+      final area = face.boundingBox.width * face.boundingBox.height;
+
+      if (area < primaryArea * 0.20) continue;
+
+      final boxA = math.Rectangle<double>(
+        primaryFace.boundingBox.left,
+        primaryFace.boundingBox.top,
+        primaryFace.boundingBox.width,
+        primaryFace.boundingBox.height,
+      );
+      final boxB = math.Rectangle<double>(
+        face.boundingBox.left,
+        face.boundingBox.top,
+        face.boundingBox.width,
+        face.boundingBox.height,
+      );
+
+      if (_calculateIOU(boxA, boxB) <= 0.35) {
+        distinctFaces.add(face);
+      }
+    }
+
+    if (distinctFaces.length > 1) {
+      throw Exception('Multiple faces detected');
+    }
+
+    return primaryFace;
+  }
+
   // Extract face features untuk template
   Future<Map<String, dynamic>> extractFaceFeatures(String imagePath) async {
     final faces = await detectFaces(imagePath);
-    
-    if (faces.isEmpty) {
-      throw Exception('No face detected in the image');
-    }
+    final face = _selectPrimaryFace(faces);
 
-    if (faces.length > 1) {
-      throw Exception('Multiple faces detected. Please use a single face photo');
-    }
-
-    return buildTemplateFromFace(faces.first);
+    return buildTemplateFromFace(face);
   }
 
   Map<String, dynamic> buildTemplateFromFace(Face face) {
@@ -122,16 +177,7 @@ class FaceRecognitionService {
   Future<bool> validatePhotoQuality(String imagePath) async {
     try {
       final faces = await detectFaces(imagePath);
-      
-      if (faces.isEmpty) {
-        throw Exception('No face detected');
-      }
-
-      if (faces.length > 1) {
-        throw Exception('Multiple faces detected');
-      }
-
-      final face = faces.first;
+      final face = _selectPrimaryFace(faces);
 
       // Cek apakah mata terbuka
       final leftEyeOpen = face.leftEyeOpenProbability ?? 0.0;

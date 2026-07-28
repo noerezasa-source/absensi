@@ -154,16 +154,71 @@ class FaceRecognitionTFLiteService {
     return true;
   }
 
+  double _calculateIOU(Rect boxA, Rect boxB) {
+    final double iLeft = max(boxA.left, boxB.left);
+    final double iTop = max(boxA.top, boxB.top);
+    final double iRight = min(boxA.right, boxB.right);
+    final double iBottom = min(boxA.bottom, boxB.bottom);
+    final double iW = max(0.0, iRight - iLeft);
+    final double iH = max(0.0, iBottom - iTop);
+    final double iArea = iW * iH;
+    if (iArea <= 0) return 0.0;
+    final double unionArea =
+        boxA.width * boxA.height + boxB.width * boxB.height - iArea;
+    if (unionArea <= 0) return 0.0;
+    return iArea / unionArea;
+  }
+
+  Face _selectPrimaryFace(List<Face> faces) {
+    if (faces.isEmpty) throw Exception('No face detected');
+    if (faces.length == 1) return faces.first;
+
+    final sorted = List<Face>.from(faces)
+      ..sort((a, b) {
+        final areaA = a.boundingBox.width * a.boundingBox.height;
+        final areaB = b.boundingBox.width * b.boundingBox.height;
+        return areaB.compareTo(areaA);
+      });
+
+    final primaryFace = sorted.first;
+    final primaryArea =
+        primaryFace.boundingBox.width * primaryFace.boundingBox.height;
+
+    final distinctFaces = <Face>[primaryFace];
+    for (int i = 1; i < sorted.length; i++) {
+      final face = sorted[i];
+      final area = face.boundingBox.width * face.boundingBox.height;
+
+      if (area < primaryArea * 0.20) continue;
+
+      bool isOverlap = false;
+      for (final selected in distinctFaces) {
+        if (_calculateIOU(face.boundingBox, selected.boundingBox) > 0.35) {
+          isOverlap = true;
+          break;
+        }
+      }
+
+      if (!isOverlap) {
+        distinctFaces.add(face);
+      }
+    }
+
+    if (distinctFaces.length > 1) {
+      throw Exception('Multiple faces detected');
+    }
+
+    return primaryFace;
+  }
+
   Future<Map<String, dynamic>> extractFaceFeatures(
     String imagePath, {
     bool allowSidePose = false,
     bool forRegistration = false,
   }) async {
     final faces = await detectFaces(imagePath);
-    if (faces.isEmpty) throw Exception('No face detected');
-    if (faces.length > 1) throw Exception('Multiple faces detected');
+    final face = _selectPrimaryFace(faces);
 
-    final face = faces.first;
     if (!isValidFaceForRecognition(
       face,
       allowSidePose: allowSidePose,
@@ -434,10 +489,8 @@ class FaceRecognitionTFLiteService {
 
   Future<bool> validatePhotoQuality(String imagePath) async {
     final faces = await detectFaces(imagePath);
-    if (faces.isEmpty) throw Exception('No face detected');
-    if (faces.length > 1) throw Exception('Multiple faces detected');
+    final face = _selectPrimaryFace(faces);
 
-    final face = faces.first;
     if (!isValidFaceForRecognition(face, allowSidePose: false)) {
       throw Exception('Face quality insufficient');
     }

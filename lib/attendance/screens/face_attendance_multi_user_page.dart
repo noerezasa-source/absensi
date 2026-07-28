@@ -49,7 +49,7 @@ enum MessageType { idle, processing, loading, success, error, warning, info }
 class _FaceAttendanceMultiUserPageState
     extends State<FaceAttendanceMultiUserPage> {
   CameraController? _cameraController;
-  late FaceRecognitionTFLiteService _faceService;
+  FaceRecognitionTFLiteService? _faceService;
   final BiometricService _biometricService = BiometricService();
   final AttendanceService _attendanceService = AttendanceService();
   final OfflineDatabaseService _offlineDb = OfflineDatabaseService();
@@ -454,7 +454,8 @@ class _FaceAttendanceMultiUserPageState
         }
       }
 
-      final faces = await _faceService.detectFacesFromInputImage(inputImage);
+      if (_faceService == null) return;
+      final faces = await _faceService!.detectFacesFromInputImage(inputImage);
 
       if (faces.isEmpty) {
         _consecutiveNoFaceFrames++;
@@ -810,7 +811,8 @@ class _FaceAttendanceMultiUserPageState
     int rotation,
   ) async {
     try {
-      if (!_faceService.isValidFaceForRecognition(face)) {
+      if (_faceService == null) return;
+      if (!_faceService!.isValidFaceForRecognition(face)) {
         debugPrint('⚠️ Face $id failed quality gate — skipping inference');
         _persistentFaceTracker[id] = {
           'name': 'Unknown',
@@ -822,7 +824,7 @@ class _FaceAttendanceMultiUserPageState
         return;
       }
 
-      final template = await _faceService.buildTemplateFromBytes(
+      final template = await _faceService!.buildTemplateFromBytes(
         frameBytes,
         width,
         height,

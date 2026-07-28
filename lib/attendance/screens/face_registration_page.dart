@@ -190,13 +190,45 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     }
   }
 
+  String _formatErrorMessage(String message) {
+    String cleanMsg = message;
+    if (cleanMsg.contains('Exception:')) {
+      cleanMsg = cleanMsg.replaceAll('Exception:', '').trim();
+    }
+    final prefixes = [
+      'Gagal memproses:',
+      'Gagal registrasi:',
+      'Gagal menyimpan:',
+      'Gagal memproses foto:',
+    ];
+    for (final p in prefixes) {
+      if (cleanMsg.startsWith(p)) {
+        cleanMsg = cleanMsg.substring(p.length).trim();
+      }
+    }
+
+    if (cleanMsg.contains('Multiple faces detected') ||
+        cleanMsg.contains('Multiple faces')) {
+      return AppLanguage.tr('attendance.face_registration.multiple_faces');
+    } else if (cleanMsg.contains('No face detected') ||
+        cleanMsg.contains('No face')) {
+      return AppLanguage.tr('attendance.face_registration.face_not_found');
+    } else if (cleanMsg.contains('Face quality insufficient')) {
+      return AppLanguage.tr('attendance.face_registration.quality_low_ui');
+    } else if (cleanMsg.contains('Face too small')) {
+      return AppLanguage.tr('attendance.face_registration.too_far');
+    }
+
+    return cleanMsg;
+  }
+
   // Helper for auto-clearing errors
   void _showError(String message) {
     if (!mounted) return;
-    // Print full error so it's visible in device logs
-    debugPrint('❌ FACE REGISTRATION ERROR: $message');
+    final formattedMessage = _formatErrorMessage(message);
+    debugPrint('❌ FACE REGISTRATION ERROR: $formattedMessage (raw: $message)');
     setState(() {
-      _errorMessage = message;
+      _errorMessage = formattedMessage;
     });
 
     _errorTimer?.cancel();
@@ -360,7 +392,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         });
         _speakGuidanceKey('face_not_found');
       } else {
-        final face = faces.first;
+        final sortedFaces = List<Face>.from(faces)
+          ..sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+        final face = sortedFaces.first;
         final validation = _validateFace(
           face,
           Size(image.width.toDouble(), image.height.toDouble()),
