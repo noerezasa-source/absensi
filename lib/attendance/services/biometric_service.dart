@@ -655,7 +655,6 @@ class BiometricService {
       if (_memoryTemplateCache == null || _cachedOrganizationId != organizationId) {
         _memoryTemplateCache = await getAllActiveFaceTemplatesWithUserInfo(organizationId);
         _cachedOrganizationId = organizationId;
-        ObjectBoxService().dumpAllRegisteredFaces();
       }
 
       List<double>? queryVector;
@@ -679,20 +678,18 @@ class BiometricService {
 
       final capturedVersion = (capturedTemplate['version'] as num?)?.toInt() ?? 3;
       final capturedQuality = (capturedTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-      double effectiveThreshold = threshold;
-
+      double minBaseThreshold = 0.78; // Standard MobileFaceNet threshold (78% similarity)
       if (strict && capturedQuality < 0.35) {
         return null;
       }
 
       final nearest = ObjectBoxService().searchNearestNeighbors(
         queryVector,
-        maxResultCount: 2,
+        maxResultCount: 10,
         organizationId: organizationId,
       );
 
       if (nearest.isEmpty) {
-        debugPrint('❌ ObjectBox: No matches found.');
         return null;
       }
 
@@ -700,54 +697,51 @@ class BiometricService {
       final double distance = bestCandidate.score;
       final double similarity = 1.0 - distance;
 
-      double secondHighestSimilarity = -1.0;
-      String? secondCandidateName;
-      int? secondCandidateMemberId;
-      if (nearest.length > 1) {
-        secondHighestSimilarity = 1.0 - nearest[1].score;
-        secondCandidateName = nearest[1].object.namaLengkap;
-        secondCandidateMemberId = nearest[1].object.organizationMemberId;
-      }
+      double secondPersonSimilarity = -1.0;
+      String? secondPersonName;
 
-      final String secondInfo = secondCandidateName != null
-          ? ' | #2: $secondCandidateName ${(secondHighestSimilarity * 100).toStringAsFixed(0)}%'
-          : '';
-      debugPrint('🔍 MATCH: ${bestCandidate.object.namaLengkap} ${(similarity * 100).toStringAsFixed(1)}% (thr:${(effectiveThreshold * 100).toInt()}%)$secondInfo');
+      final bestNameClean = bestCandidate.object.namaLengkap.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+      final bestNameTokens = bestCandidate.object.namaLengkap.toLowerCase().split(RegExp(r'\s+')).where((w) => w.length >= 3).toSet();
 
-      if (similarity < effectiveThreshold) {
-        return null;
-      }
+      for (int i = 1; i < nearest.length; i++) {
+        final cand = nearest[i];
+        final candMemberId = cand.object.organizationMemberId;
+        final candName = cand.object.namaLengkap;
 
-      if (secondHighestSimilarity > 0 && secondHighestSimilarity >= effectiveThreshold) {
-        final double margin = similarity - secondHighestSimilarity;
-        final name1 = bestCandidate.object.namaLengkap.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-        final name2 = (secondCandidateName ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-        
-        final isSamePerson = name1 == name2 || 
-            (name1.length >= 3 && name2.length >= 3 && (name1.contains(name2) || name2.contains(name1)));
+        final isSameMember = candMemberId == bestCandidate.object.organizationMemberId;
+        final candNameClean = candName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        final candTokens = candName.toLowerCase().split(RegExp(r'\s+')).where((w) => w.length >= 3).toSet();
 
-        if (margin < 0.08 && 
-            secondCandidateMemberId != bestCandidate.object.organizationMemberId &&
-            !isSamePerson) {
-          debugPrint('⚠️ AMBIGUOUS: margin ${(margin * 100).toStringAsFixed(1)}% < 8% between DIFFERENT people (${bestCandidate.object.namaLengkap} vs $secondCandidateName)');
-          return null;
+        final isSameName = isSameMember ||
+            bestNameClean == candNameClean ||
+            (bestNameClean.length >= 4 && candNameClean.length >= 4 && (bestNameClean.contains(candNameClean) || candNameClean.contains(bestNameClean))) ||
+            bestNameTokens.intersection(candTokens).isNotEmpty;
+
+        if (!isSameName) {
+          secondPersonSimilarity = 1.0 - cand.score;
+          secondPersonName = candName;
+          break;
         }
       }
 
+      final String secondInfo = secondPersonName != null
+          ? ' | RunnerUp: $secondPersonName ${(secondPersonSimilarity * 100).toStringAsFixed(1)}%'
+          : '';
+      debugPrint('🔍 MATCH: ${bestCandidate.object.namaLengkap} ${(similarity * 100).toStringAsFixed(1)}% (thr:${(minBaseThreshold * 100).toInt()}%)$secondInfo');
+
+      final double margin = secondPersonSimilarity > 0 ? (similarity - secondPersonSimilarity) : 1.0;
+
+      // 1. High-Confidence Instant Match (Large margin >= 12% over runner-up of different person)
+      bool isHighMarginMatch = (similarity >= 0.72 && margin >= 0.12);
+
+      // 2. Standard MobileFaceNet threshold (76%)
+      bool isStandardMatch = (similarity >= 0.76 && margin >= 0.05);
+
+      if (!isHighMarginMatch && !isStandardMatch) {
+        return null;
+      }
+
       final matchedMemberId = bestCandidate.object.organizationMemberId;
-      final memberData = await _offlineDb.findMemberByOrgIdInCache(matchedMemberId);
-
-      final orgMember = memberData != null ? memberData['organization_members'] : null;
-      final userProfile = orgMember != null ? orgMember['user_profiles'] : null;
-      final dept = orgMember != null
-          ? (orgMember['departments'] is List
-              ? (orgMember['departments'].isNotEmpty
-                  ? orgMember['departments'].first
-                  : null)
-              : orgMember['departments'])
-          : null;
-      String? combinedDept = dept?['name'];
-
       int? biometricId;
       if (_memoryTemplateCache != null) {
         final t = _memoryTemplateCache!.firstWhere(
@@ -757,20 +751,6 @@ class BiometricService {
         if (t.isNotEmpty) biometricId = t['id'] as int?;
       }
 
-      if (biometricId == null) {
-        final db = await _offlineDb.database;
-        final dbResult = await db.query(
-          'biometric_data',
-          columns: ['id'],
-          where: 'organization_member_id = ? AND biometric_type = ? AND is_active = 1',
-          whereArgs: [matchedMemberId, 'face_recognition'],
-          limit: 1,
-        );
-        if (dbResult.isNotEmpty) {
-          biometricId = dbResult.first['id'] as int?;
-        }
-      }
-
       final fallbackName = bestCandidate.object.namaLengkap;
       final fallbackProfilePhoto = bestCandidate.object.profilePhotoUrl;
 
@@ -778,24 +758,18 @@ class BiometricService {
         'organization_member_id': matchedMemberId,
         'biometric_id': biometricId ?? 0,
         'similarity': similarity,
-        'organization_id': orgMember != null ? orgMember['organization_id'] : (bestCandidate.object.organizationId == 0 ? organizationId : bestCandidate.object.organizationId),
-        'user_id': orgMember != null ? orgMember['user_id'] : null,
-        'employee_id': orgMember != null ? orgMember['employee_id'] : null,
-        'user_name': fallbackName.isNotEmpty
-            ? fallbackName
-            : (userProfile != null
-                ? ((userProfile['display_name'] ?? '').toString().isEmpty
-                    ? '${userProfile['first_name'] ?? ''} ${userProfile['last_name'] ?? ''}'.trim()
-                    : userProfile['display_name'])
-                : 'Karyawan #$matchedMemberId'),
-        'first_name': userProfile != null ? userProfile['first_name'] : null,
-        'last_name': userProfile != null ? userProfile['last_name'] : null,
-        'profile_photo_url': fallbackProfilePhoto ?? (userProfile != null ? userProfile['profile_photo_url'] : null),
-        'department_name': combinedDept,
+        'organization_id': bestCandidate.object.organizationId == 0 ? organizationId : bestCandidate.object.organizationId,
+        'user_id': null,
+        'employee_id': null,
+        'user_name': fallbackName.isNotEmpty ? fallbackName : 'Karyawan #$matchedMemberId',
+        'first_name': fallbackName,
+        'last_name': null,
+        'profile_photo_url': fallbackProfilePhoto,
+        'department_name': null,
         'template_version': capturedVersion,
-        'threshold': effectiveThreshold,
+        'threshold': minBaseThreshold,
         'matched_angle': 'Single',
-        'second_similarity': secondHighestSimilarity,
+        'second_similarity': secondPersonSimilarity,
       };
     } catch (e, stack) {
       debugPrint('!!! ERROR in identifyBestMatchWithUserInfo: $e\n$stack');

@@ -17,10 +17,10 @@ class FaceRecognitionTFLiteService {
   int inputSize = 160;
   int embeddingSize = 512;
 
-  // ✅ OPTIMIZED: Adjusted Quality Thresholds for Better Accuracy
-  static const double minFaceQualityScore = 0.50; // Reverted to 0.50 for strict quality
-  static const double minEyeOpenProbability = 0.50; // Reverted to 0.50
-  static const double maxHeadRotation = 20.0; // Reverted to 20.0 for accuracy
+  // ✅ OPTIMIZED: Adjusted Quality & Distance Thresholds for Long Range (~5m) & Fast Scanning
+  static const double minFaceQualityScore = 0.50;
+  static const double minEyeOpenProbability = 0.50;
+  static const double maxHeadRotation = 45.0; // Allow side gaze up to 45 degrees
 
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -30,7 +30,7 @@ class FaceRecognitionTFLiteService {
         enableClassification: true,
         enableTracking: true,
         performanceMode: FaceDetectorMode.fast,
-        minFaceSize: 0.05,
+        minFaceSize: 0.01, // Detect tiny faces from ~5m distance
       ),
     );
   }
@@ -115,29 +115,31 @@ class FaceRecognitionTFLiteService {
       }
     }
 
-    // 2. Check head rotation (Only strictly enforce for registration)
-    if (forRegistration) {
-      final headY = (face.headEulerAngleY ?? 0.0).abs();
-      final headZ = (face.headEulerAngleZ ?? 0.0).abs();
+    // 2. Check head rotation
+    final headY = (face.headEulerAngleY ?? 0.0).abs();
+    final headZ = (face.headEulerAngleZ ?? 0.0).abs();
 
-      if (!allowSidePose) {
-        if (headY > maxHeadRotation || headZ > maxHeadRotation) {
-          debugPrint(
-            '❌ Face rejected: Bad Rotation (Y:${headY.toStringAsFixed(1)}, Z:${headZ.toStringAsFixed(1)}) > $maxHeadRotation',
-          );
-          return false;
-        }
-      } else {
-        if (headZ > maxHeadRotation * 1.5 || headY > 50.0) {
-          return false;
-        }
+    if (forRegistration && !allowSidePose) {
+      if (headY > 20.0 || headZ > 20.0) {
+        debugPrint(
+          '❌ Face rejected: Bad Rotation (Y:${headY.toStringAsFixed(1)}, Z:${headZ.toStringAsFixed(1)}) > 20.0 for registration',
+        );
+        return false;
+      }
+    } else {
+      // Lenient threshold for real-time scanning (up to 45 degrees)
+      if (headY > 45.0 || headZ > 45.0) {
+        debugPrint(
+          '❌ Face rejected: Excessive Rotation (Y:${headY.toStringAsFixed(1)}, Z:${headZ.toStringAsFixed(1)}) > 45.0',
+        );
+        return false;
       }
     }
 
-    // 3. Check face size (Dynamic Area)
+    // 3. Check face size (Lower limit 250 ~16x16px for long-range & fast recognition)
     final faceArea = face.boundingBox.width * face.boundingBox.height;
-    if (!forRegistration && faceArea < 400) {
-      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 400)');
+    if (!forRegistration && faceArea < 250) {
+      debugPrint('❌ Face REJECTED: Too far/small (Area: ${faceArea.toInt()} < 250)');
       return false;
     }
 

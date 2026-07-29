@@ -15,6 +15,7 @@ import '../../auth/screens/login.dart';
 import '../../attendance/screens/export_report_screen.dart';
 import 'petugas_members_page.dart';
 import '../../helpers/language_helper.dart';
+import '../../helpers/image_crop_helper.dart';
 
 class PetugasProfilePage extends StatefulWidget {
   final int organizationMemberId;
@@ -39,7 +40,6 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
   final RoleService _roleService = RoleService();
   final AttendanceService _attendanceService = AttendanceService();
   final _supabase = Supabase.instance.client;
-  final ImagePicker _picker = ImagePicker();
 
   bool _hasRegisteredFace = false;
   bool _isCheckingFace = true;
@@ -342,14 +342,13 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
 
   Future<void> _pickAndUploadPhoto() async {
     try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 85,
+      final File? croppedFile = await ImageCropHelper.pickAndCropProfileImage(
+        context: context,
+        title: AppLanguage.tr('User.profile.crop_title') ?? 'Potong Foto Profil',
+        primaryColor: primaryColor,
       );
 
-      if (image == null) return;
+      if (croppedFile == null) return;
 
       setState(() {
         _isUploadingPhoto = true;
@@ -362,8 +361,7 @@ class _PetugasProfilePageState extends State<PetugasProfilePage> {
       final fileName = '$userId-$timestamp.jpg';
       final filePath = 'mass-profile/$fileName';
 
-      final file = File(image.path);
-      await _supabase.storage.from('profile-photos').upload(filePath, file);
+      await _supabase.storage.from('profile-photos').upload(filePath, croppedFile);
 
       await _supabase
           .from('user_profiles')

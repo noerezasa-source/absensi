@@ -183,7 +183,7 @@ class ObjectBoxService {
   /// Melakukan Approximate Nearest Neighbor (ANN) search menggunakan HNSW Vector Index ObjectBox.
   List<ObjectWithScore<KaryawanWajah>> searchNearestNeighbors(
     List<double> queryVector, {
-    int maxResultCount = 3,
+    int maxResultCount = 10,
     int? organizationId,
   }) {
     if (!_initializedCheck()) {

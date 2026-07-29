@@ -56,6 +56,12 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyBkiFxy164dWbOI5uof1b_hA9h1vy0KSck" />
 
+        <!-- Image Cropper Activity -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
+
         <!-- PENTING: Ini yang hilang! Flutter Embedding V2 -->
         <meta-data
             android:name="flutterEmbedding"

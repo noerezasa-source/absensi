@@ -3937,7 +3937,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         final storageService = SupabaseStorageService();
 
         final processedFile = File(image.path);
-        await storageService.uploadFaceTemplate(
+        final uploadedUrl = await storageService.uploadFaceTemplate(
           processedFile,
           organizationMemberId,
         );
@@ -3946,6 +3946,25 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           organizationMemberId: organizationMemberId,
           faceTemplate: faceTemplate,
         );
+
+        // Auto-set profile photo to the registered face photo
+        try {
+          final memberData = await _supabase
+              .from('organization_members')
+              .select('user_id')
+              .eq('id', organizationMemberId)
+              .maybeSingle();
+
+          final userId = memberData?['user_id'];
+          if (userId != null) {
+            await _supabase
+                .from('user_profiles')
+                .update({'profile_photo_url': uploadedUrl})
+                .eq('id', userId);
+          }
+        } catch (e) {
+          debugPrint('⚠️ Failed to update profile photo in petugas page: $e');
+        }
 
         if (mounted) {
           Navigator.of(context).pop();

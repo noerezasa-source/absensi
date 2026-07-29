@@ -109,8 +109,8 @@ class FaceEmbeddingService {
   static const String _mobileFaceNetAsset = 'assets/models/mobilefacenet.tflite';
 
   // Threshold cosine distance untuk menganggap dua wajah "sama".
-  // Nilai lebih kecil = lebih ketat. Range yang baik: 0.35 - 0.50
-  static const double defaultMatchThreshold = 0.40;
+  // Nilai lebih kecil = lebih ketat. Range yang baik: 0.30 - 0.35 (similarity 65% - 70%)
+  static const double defaultMatchThreshold = 0.32;
 
   Isolate? _isolate;
   SendPort? _isolateSendPort;

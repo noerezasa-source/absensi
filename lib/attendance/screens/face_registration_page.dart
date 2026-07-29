@@ -16,6 +16,7 @@ import '../../services/tts_service.dart';
 import '../../helpers/language_helper.dart';
 import '../../services/offline_database_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 
 class FaceRegistrationPage extends StatefulWidget {
   final int organizationMemberId;
@@ -100,12 +101,29 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   @override
   void initState() {
     super.initState();
+    _setMaxBrightness();
     TtsService().initialize();
     _memberName = widget.memberName;
     if (_memberName == null) {
       _fetchMemberName();
     }
     _initializeModel();
+  }
+
+  Future<void> _setMaxBrightness() async {
+    try {
+      await ScreenBrightness().setApplicationScreenBrightness(1.0);
+    } catch (e) {
+      debugPrint('⚠️ Error setting max brightness: $e');
+    }
+  }
+
+  Future<void> _resetBrightness() async {
+    try {
+      await ScreenBrightness().resetApplicationScreenBrightness();
+    } catch (e) {
+      debugPrint('⚠️ Error resetting brightness: $e');
+    }
   }
 
   /// Fetch member name from DB if not passed as parameter
@@ -163,6 +181,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
   @override
   void dispose() {
+    _resetBrightness();
     TtsService().stop();
     _stopStream();
     _errorTimer?.cancel();
@@ -806,53 +825,40 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         }
       }
 
-      // 2.5 Update user profile photo with the FRONT photo if profile photo is empty or is a previous face-template photo
+      // 2.5 Auto-set user profile photo to the FRONT registered face photo
       if (frontPhotoUrl != null) {
         try {
-          // Cari user_id dan profile_photo_url yang terhubung dengan organization_member_id ini
           final memberData = await Supabase.instance.client
               .from('organization_members')
-              .select('user_id, user_profiles(profile_photo_url)')
+              .select('user_id')
               .eq('id', widget.organizationMemberId)
               .maybeSingle();
           
           final userId = memberData?['user_id'];
           if (userId != null) {
-            final userProfile = memberData?['user_profiles'] as Map<String, dynamic>?;
-            final existingPhoto = userProfile?['profile_photo_url'] as String?;
+            // 1. Update ke Server Supabase user_profiles
+            await Supabase.instance.client
+                .from('user_profiles')
+                .update({'profile_photo_url': frontPhotoUrl})
+                .eq('id', userId);
+            
+            // 2. Update ke Cache Lokal SQLite
+            await _offlineDb.database.then((db) async {
+              await db.update(
+                'cached_members',
+                {'profile_photo_url': frontPhotoUrl},
+                where: 'organization_member_id = ?',
+                whereArgs: [widget.organizationMemberId],
+              );
+            });
 
-            // Hanya update jika belum ada foto profil, ATAU foto profil saat ini adalah foto otomatis dari registrasi wajah sebelumnya
-            final shouldUpdate = existingPhoto == null ||
-                existingPhoto.trim().isEmpty ||
-                existingPhoto.contains('face-templates');
-
-            if (shouldUpdate) {
-              // 1. Update ke Server Supabase
-              await Supabase.instance.client
-                  .from('user_profiles')
-                  .update({'profile_photo_url': frontPhotoUrl})
-                  .eq('id', userId);
-              
-              // 2. Update ke Cache Lokal SQLite agar UI langsung berubah
-              await _offlineDb.database.then((db) async {
-                await db.update(
-                  'cached_members',
-                  {'profile_photo_url': frontPhotoUrl},
-                  where: 'organization_member_id = ?',
-                  whereArgs: [widget.organizationMemberId],
-                );
-              });
-
-              // 3. Hapus cache SharedPreferences anggota agar daftar anggota langsung ter-refresh
-              await _clearMemberCaches();
-              
-              debugPrint('✅ Profile photo updated automatically in Server, SQLite, & SharedPreferences');
-            } else {
-              debugPrint('ℹ️ Preserved existing custom profile photo for user $userId');
-            }
+            // 3. Hapus cache SharedPreferences anggota agar daftar anggota ter-refresh
+            await _clearMemberCaches();
+            
+            debugPrint('✅ Profile photo automatically set to FRONT registered face photo ($frontPhotoUrl)');
           }
         } catch (e) {
-          debugPrint('⚠️ Failed to auto-update profile photo: $e');
+          debugPrint('⚠️ Failed to auto-set profile photo: $e');
         }
       }
 
@@ -1077,45 +1083,36 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         widget.organizationMemberId,
       );
 
-      // Auto-update profile photo for single template as well if profile photo is empty or from face-templates
+      // Auto-set profile photo for single template registration
       try {
         final memberData = await Supabase.instance.client
             .from('organization_members')
-            .select('user_id, user_profiles(profile_photo_url)')
+            .select('user_id')
             .eq('id', widget.organizationMemberId)
             .maybeSingle();
         
         final userId = memberData?['user_id'];
         if (userId != null) {
-          final userProfile = memberData?['user_profiles'] as Map<String, dynamic>?;
-          final existingPhoto = userProfile?['profile_photo_url'] as String?;
+          await Supabase.instance.client
+              .from('user_profiles')
+              .update({'profile_photo_url': uploadedUrl})
+              .eq('id', userId);
 
-          final shouldUpdate = existingPhoto == null ||
-              existingPhoto.trim().isEmpty ||
-              existingPhoto.contains('face-templates');
+          await _offlineDb.database.then((db) async {
+            await db.update(
+              'cached_members',
+              {'profile_photo_url': uploadedUrl},
+              where: 'organization_member_id = ?',
+              whereArgs: [widget.organizationMemberId],
+            );
+          });
 
-          if (shouldUpdate) {
-            await Supabase.instance.client
-                .from('user_profiles')
-                .update({'profile_photo_url': uploadedUrl})
-                .eq('id', userId);
+          await _clearMemberCaches();
 
-            await _offlineDb.database.then((db) async {
-              await db.update(
-                'cached_members',
-                {'profile_photo_url': uploadedUrl},
-                where: 'organization_member_id = ?',
-                whereArgs: [widget.organizationMemberId],
-              );
-            });
-
-            await _clearMemberCaches();
-
-            debugPrint('✅ Profile photo updated automatically (single capture)');
-          }
+          debugPrint('✅ Profile photo automatically set (single capture)');
         }
       } catch (e) {
-        debugPrint('⚠️ Failed to auto-update profile photo: $e');
+        debugPrint('⚠️ Failed to auto-set profile photo in single capture: $e');
       }
 
       // Clean up image files
@@ -1228,17 +1225,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         return imageFile;
       }
 
-      var enhanced = img.adjustColor(image, brightness: 1.1, contrast: 1.15);
-
-      final flipped = img.flipHorizontal(enhanced);
+      // Bake EXIF orientation to ensure image is upright
+      final pureImage = img.bakeOrientation(image);
 
       final resized = img.copyResize(
-        flipped,
+        pureImage,
         width: 800,
         interpolation: img.Interpolation.average,
       );
 
-      final compressedBytes = img.encodeJpg(resized, quality: 90);
+      final compressedBytes = img.encodeJpg(resized, quality: 95);
 
       final tempDir = await Directory.systemTemp.createTemp();
       final processedFile = File('${tempDir.path}/processed_face.jpg');

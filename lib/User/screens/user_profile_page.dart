@@ -10,6 +10,7 @@ import '../../auth/screens/login.dart';
 import '../../helpers/language_helper.dart';
 import '../../attendance/screens/timezone_settings_screen.dart';
 import '../../services/timezone_service.dart'; // Tambahkan import ini
+import '../../helpers/image_crop_helper.dart';
 
 class UserProfilePage extends StatefulWidget {
   final int organizationMemberId;
@@ -33,7 +34,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
   final BiometricService _biometricService = BiometricService();
   final RoleService _roleService = RoleService();
   final _supabase = Supabase.instance.client;
-  final ImagePicker _picker = ImagePicker();
 
   bool _hasRegisteredFace = false;
   bool _isCheckingFace = true;
@@ -599,14 +599,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   Future<void> _pickAndUploadPhoto() async {
     try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 85,
+      final File? croppedFile = await ImageCropHelper.pickAndCropProfileImage(
+        context: context,
+        title: AppLanguage.tr('User.profile.crop_title') ?? 'Potong Foto Profil',
+        primaryColor: primaryColor,
       );
 
-      if (image == null) return;
+      if (croppedFile == null) return;
 
       setState(() {
         _isUploadingPhoto = true;
@@ -619,8 +618,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
       final fileName = '$userId-$timestamp.jpg';
       final filePath = 'mass-profile/$fileName';
 
-      final file = File(image.path);
-      await _supabase.storage.from('profile-photos').upload(filePath, file);
+      await _supabase.storage.from('profile-photos').upload(filePath, croppedFile);
 
       await _supabase
           .from('user_profiles')

@@ -292,12 +292,13 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
             throw Exception('Image file not found: ${message.imagePath}');
           }
           final imageBytes = await imageFile.readAsBytes();
-          final fullImage = img.decodeImage(imageBytes);
-          if (fullImage == null) {
+          final rawDecoded = img.decodeImage(imageBytes);
+          if (rawDecoded == null) {
             throw Exception('Failed to decode image');
           }
+          final fullImage = img.bakeOrientation(rawDecoded);
 
-          // ✅ CRITICAL FIX: Crop face region from full image (same as stream path)
+          // ✅ CRITICAL FIX: Crop face region from full upright image
           final box = message.faceData['boundingBox'] as Map<String, dynamic>;
           final fLeft = (box['left'] as num).toDouble();
           final fTop = (box['top'] as num).toDouble();
@@ -382,9 +383,9 @@ Future<void> _isolateEntryPoint(_IsolateInitData initData) async {
 
 // --- Helper Functions in Isolate ---
 
-// ✅ OPTIMIZED: Region-Based YUV420 to RGB conversion (Rotation Aware)
+// ✅ OPTIMIZED: Region-Based YUV420 / BGRA to RGB conversion (Rotation Aware)
 img.Image _convertYUVRegionToImage(
-  Uint8List yuvBytes,
+  Uint8List frameBytes,
   int frameWidth,
   int frameHeight,
   Map<String, dynamic> faceData,
@@ -442,9 +443,9 @@ img.Image _convertYUVRegionToImage(
     cropH = min(frameHeight, 200);
   }
 
-  // 3. One-Pass Turbo Loop: Crop + Scale + Convert YUV + Rotate
   final image = img.Image(width: targetSize, height: targetSize);
   final int frameSize = frameWidth * frameHeight;
+  final bool isBgra = frameBytes.length >= frameSize * 4;
 
   final double scaleX = cropW / targetSize;
   final double scaleY = cropH / targetSize;
@@ -466,30 +467,41 @@ img.Image _convertYUVRegionToImage(
       final int sourceX = startX + (x * scaleX).toInt();
       if (sourceX < 0 || sourceX >= frameWidth) continue;
 
-      final int yIndex = yOffset + sourceX;
-      if (yIndex >= frameSize) continue;
+      int r = 0, g = 0, b = 0;
 
-      final int yVal = yuvBytes[yIndex];
-      final int uvX = sourceX & ~1;
-      final int uvIndex = uvRowStart + uvX;
+      if (isBgra) {
+        final int pxIndex = (yOffset + sourceX) * 4;
+        if (pxIndex + 2 < frameBytes.length) {
+          b = frameBytes[pxIndex];
+          g = frameBytes[pxIndex + 1];
+          r = frameBytes[pxIndex + 2];
+        }
+      } else {
+        final int yIndex = yOffset + sourceX;
+        if (yIndex >= frameSize) continue;
 
-      int uVal = 128;
-      int vVal = 128;
-      if (uvIndex + 1 < yuvBytes.length) {
-        vVal = yuvBytes[uvIndex];
-        uVal = yuvBytes[uvIndex + 1];
+        final int yVal = frameBytes[yIndex];
+        final int uvX = sourceX & ~1;
+        final int uvIndex = uvRowStart + uvX;
+
+        int uVal = 128;
+        int vVal = 128;
+        if (uvIndex + 1 < frameBytes.length) {
+          vVal = frameBytes[uvIndex];
+          uVal = frameBytes[uvIndex + 1];
+        }
+
+        final int r8 = vVal - 128;
+        final int u8 = uVal - 128;
+
+        r = yVal + ((c1 * r8) >> 10);
+        g = yVal - ((c2 * u8 + c3 * r8) >> 10);
+        b = yVal + ((c4 * u8) >> 10);
+
+        r = r < 0 ? 0 : (r > 255 ? 255 : r);
+        g = g < 0 ? 0 : (g > 255 ? 255 : g);
+        b = b < 0 ? 0 : (b > 255 ? 255 : b);
       }
-
-      final int r8 = vVal - 128;
-      final int u8 = uVal - 128;
-
-      int r = yVal + ((c1 * r8) >> 10);
-      int g = yVal - ((c2 * u8 + c3 * r8) >> 10);
-      int b = yVal + ((c4 * u8) >> 10);
-
-      r = r < 0 ? 0 : (r > 255 ? 255 : r);
-      g = g < 0 ? 0 : (g > 255 ? 255 : g);
-      b = b < 0 ? 0 : (b > 255 ? 255 : b);
 
       int dx, dy;
       if (rotation == 90) {

@@ -14,6 +14,7 @@ import 'package:camera/camera.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 import '../../helpers/language_helper.dart';
 import '../services/biometric_service.dart';
 import '../services/face_recognition_tflite_service.dart';
@@ -100,16 +101,17 @@ class _FaceAttendanceMultiUserPageState
 
   final Set<int> _recognitionInFlight = {};
   final Map<int, Map<String, dynamic>> _persistentFaceTracker = {};
+  final Map<int, Map<String, dynamic>> _pendingMatches = {};
+  final Map<int, Map<String, dynamic>> _todayProcessedMembers = {};
 
   final Map<int, DateTime> _memberCooldowns = {};
-  static const Duration _memberRecognitionCooldown = Duration(seconds: 5);
 
   bool _isStreaming = false;
   bool _isIdleMode = true;
   int _consecutiveNoFaceFrames = 0;
   DateTime _lastCameraProcess = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _cameraThrottle = Duration(milliseconds: 50);
-  static const Duration _idleCameraThrottle = Duration(milliseconds: 100);
+  static const Duration _cameraThrottle = Duration.zero;
+  static const Duration _idleCameraThrottle = Duration(milliseconds: 10);
 
   bool _isOnline = true;
 
@@ -153,7 +155,26 @@ class _FaceAttendanceMultiUserPageState
   @override
   void initState() {
     super.initState();
+    _setMaxBrightness();
     _initializeSystem();
+  }
+
+  Future<void> _setMaxBrightness() async {
+    try {
+      await ScreenBrightness().setApplicationScreenBrightness(1.0);
+      debugPrint('☀️ Screen brightness automatically set to 100% MAX');
+    } catch (e) {
+      debugPrint('⚠️ Error setting max screen brightness: $e');
+    }
+  }
+
+  Future<void> _resetBrightness() async {
+    try {
+      await ScreenBrightness().resetApplicationScreenBrightness();
+      debugPrint('🌙 Screen brightness reset to default');
+    } catch (e) {
+      debugPrint('⚠️ Error resetting screen brightness: $e');
+    }
   }
 
   Future<void> _initializeSystem() async {
@@ -199,8 +220,10 @@ class _FaceAttendanceMultiUserPageState
       if (mounted) {
         setState(() => _isSystemReady = true);
         await _loadAvailableModes();
+        await _preloadTodayProcessedMembers();
         _autoSelectCurrentShift();
         _attendanceSyncService.startAutoSync();
+        _startFaceAutoSync();
         debugPrint('🚀 System ready in ${stopwatch.elapsedMilliseconds}ms');
       }
     } catch (e) {
@@ -210,6 +233,17 @@ class _FaceAttendanceMultiUserPageState
         MessageType.error,
       );
     }
+  }
+
+  Timer? _faceAutoSyncTimer;
+
+  void _startFaceAutoSync() {
+    _faceAutoSyncTimer?.cancel();
+    _faceAutoSyncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      try {
+        await _biometricService.getAllActiveFaceTemplatesWithUserInfo(widget.organizationId);
+      } catch (_) {}
+    });
   }
 
   Future<void> _toggleTorchMode(bool enable) async {
@@ -223,8 +257,10 @@ class _FaceAttendanceMultiUserPageState
 
   @override
   void dispose() {
+    _resetBrightness();
     _messageTimer?.cancel();
     _scheduleCheckTimer?.cancel();
+    _faceAutoSyncTimer?.cancel();
     _isProcessingFrame = false;
     _detectedFacesNotifier.dispose();
     _recentAttendanceList.clear();
@@ -358,7 +394,7 @@ class _FaceAttendanceMultiUserPageState
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup.yuv420
@@ -813,14 +849,8 @@ class _FaceAttendanceMultiUserPageState
     try {
       if (_faceService == null) return;
       if (!_faceService!.isValidFaceForRecognition(face)) {
-        debugPrint('⚠️ Face $id failed quality gate — skipping inference');
-        _persistentFaceTracker[id] = {
-          'name': 'Unknown',
-          'member_id': null,
-          'similarity': 0.0,
-          'timestamp': DateTime.now(),
-        };
-        _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 600));
+        _cooldowns.remove(id);
+        _faceStates[id] = FaceTrackingState.idle;
         return;
       }
 
@@ -830,7 +860,7 @@ class _FaceAttendanceMultiUserPageState
         height,
         rotation,
         face,
-        allowSidePose: true,
+        allowSidePose: true, // Allow side gaze faces for fast attendance
       );
 
       if (template.isEmpty ||
@@ -851,7 +881,7 @@ class _FaceAttendanceMultiUserPageState
           capturedTemplate: template,
           organizationId: widget.organizationId,
           strict: false,
-          threshold: 0.58,
+          threshold: 0.78, // 78% standard MobileFaceNet threshold
         );
       }
 
@@ -862,88 +892,101 @@ class _FaceAttendanceMultiUserPageState
         final matchedBiometricId = (result['biometric_id'] as num?)?.toInt();
 
         if (organizationMemberId != null) {
-          final memberLastTime = _memberCooldowns[organizationMemberId];
-          if (memberLastTime != null &&
-              DateTime.now().difference(memberLastTime) < _memberRecognitionCooldown) {
+          final now = DateTime.now();
+
+          // 1. Check RAM Session Cache first (Instant 0ms lookup!)
+          final existingSessionRecord = _todayProcessedMembers[organizationMemberId];
+          if (existingSessionRecord != null &&
+              existingSessionRecord['attendance_type'] == _attendanceMode) {
             _persistentFaceTracker[id] = {
               'name': '$matchedName (Sudah Absen)',
               'member_id': organizationMemberId,
               'similarity': matchedSim * 100,
-              'timestamp': DateTime.now(),
+              'timestamp': now,
             };
-            _cooldowns[id] = DateTime.now().add(const Duration(seconds: 5));
+            _cooldowns[id] = now.add(const Duration(seconds: 5));
+            _faceStates[id] = FaceTrackingState.cooldown;
             return;
           }
 
-          final existingRecord = await _getExistingAttendanceToday(
-            memberId: organizationMemberId,
-            attendanceType: _attendanceMode,
-          );
-
-          if (existingRecord != null) {
-            _cooldowns[id] = DateTime.now().add(const Duration(seconds: 10));
-            _memberCooldowns[organizationMemberId] = DateTime.now();
-            _persistentFaceTracker[id] = {
-              'name': '$matchedName (Sudah Absen)',
-              'member_id': organizationMemberId,
-              'id': matchedBiometricId,
-              'similarity': matchedSim * 100,
-              'timestamp': DateTime.now(),
-            };
-            _handleDuplicateAttendanceUI(
-              matchedName,
-              result['department_name'] as String?,
-              organizationMemberId,
-              _attendanceMode,
-              existingRecord,
-            );
-            return;
-          }
-        }
-
-        if (mounted) SoundHelper.playSuccessSound();
-
-        final now = DateTime.now();
-        if (organizationMemberId != null) {
+          // 2. Lock member cooldown & register in RAM cache synchronously
           _memberCooldowns[organizationMemberId] = now;
-        }
+          _todayProcessedMembers[organizationMemberId] = {
+            'attendance_type': _attendanceMode,
+            'attendance_time': TimezoneHelper.formatTimeOnly(now),
+          };
 
-        _persistentFaceTracker[id] = {
-          'name': matchedName,
-          'member_id': organizationMemberId,
-          'id': matchedBiometricId,
-          'similarity': matchedSim * 100,
-          'timestamp': now,
-        };
-        _cooldowns[id] = now.add(const Duration(seconds: 10));
+          // 3. Play success sound & update UI INSTANTLY (0ms response)
+          if (mounted) SoundHelper.playSuccessSound();
 
-        if (organizationMemberId != null) {
-          unawaited(
-            _recordAttendanceAsync(
-              organizationMemberId: organizationMemberId,
-              memberName: matchedName,
-              departmentName: result['department_name'] as String?,
-              similarity: matchedSim,
-            ),
-          );
+          _persistentFaceTracker[id] = {
+            'name': matchedName,
+            'member_id': organizationMemberId,
+            'id': matchedBiometricId,
+            'similarity': matchedSim * 100,
+            'timestamp': now,
+          };
+          _cooldowns[id] = now.add(const Duration(seconds: 10));
+          _faceStates[id] = FaceTrackingState.cooldown;
+
+          // 4. Background DB / Network Record Check & Save (non-blocking)
+          unawaited(_processAttendanceRecordInBackground(
+            organizationMemberId: organizationMemberId,
+            matchedName: matchedName,
+            matchedBiometricId: matchedBiometricId,
+            matchedSim: matchedSim,
+            result: result,
+            id: id,
+          ));
         }
       } else {
-        if (mounted) SoundHelper.playErrorSound();
-        _persistentFaceTracker[id] = {
-          'name': 'Unknown',
-          'member_id': null,
-          'similarity': 0.0,
-          'timestamp': DateTime.now(),
-        };
-        _cooldowns[id] = DateTime.now().add(const Duration(seconds: 3));
+        // Instant retry on next frame (no 600ms delay!)
+        _pendingMatches.remove(id);
+        _cooldowns.remove(id);
+        _faceStates[id] = FaceTrackingState.idle;
       }
     } catch (e) {
       debugPrint('❌ Async recognition error for face $id: $e');
-      _persistentFaceTracker[id] = {'name': 'Error', 'member_id': null, 'similarity': 0.0, 'timestamp': DateTime.now()};
-      _cooldowns[id] = DateTime.now().add(const Duration(seconds: 2));
+      _cooldowns.remove(id);
+      _faceStates[id] = FaceTrackingState.idle;
     } finally {
       _recognitionInFlight.remove(id);
-      _faceStates[id] = FaceTrackingState.cooldown;
+    }
+  }
+
+  Future<void> _processAttendanceRecordInBackground({
+    required int organizationMemberId,
+    required String matchedName,
+    int? matchedBiometricId,
+    required double matchedSim,
+    required Map<String, dynamic> result,
+    required int id,
+  }) async {
+    try {
+      final existingRecord = await _getExistingAttendanceToday(
+        memberId: organizationMemberId,
+        attendanceType: _attendanceMode,
+      );
+
+      if (existingRecord != null) {
+        _handleDuplicateAttendanceUI(
+          matchedName,
+          result['department_name'] as String?,
+          organizationMemberId,
+          _attendanceMode,
+          existingRecord,
+        );
+        return;
+      }
+
+      await _recordAttendanceAsync(
+        organizationMemberId: organizationMemberId,
+        memberName: matchedName,
+        departmentName: result['department_name'] as String?,
+        similarity: matchedSim,
+      );
+    } catch (e) {
+      debugPrint('⚠️ Error processing background attendance record: $e');
     }
   }
 
@@ -998,6 +1041,11 @@ class _FaceAttendanceMultiUserPageState
       final String nowUtcIso = TimezoneHelper.formatUtcForSupabase(now);
       final String todayDateStr = TimezoneHelper.formatDateOnly(now);
       final String timeStr = TimezoneHelper.formatTimeOnly(now);
+
+      _todayProcessedMembers[organizationMemberId] = {
+        'attendance_type': _attendanceMode,
+        'attendance_time': timeStr,
+      };
 
       final modeLabel = _availableModes.firstWhere(
         (m) => m['key'] == _attendanceMode,
@@ -1111,38 +1159,127 @@ class _FaceAttendanceMultiUserPageState
     required int memberId,
     required String attendanceType,
   }) async {
+    // 1. Check RAM session cache (Instant 0ms lookup!)
+    final sessionRecord = _todayProcessedMembers[memberId];
+    if (sessionRecord != null && sessionRecord['attendance_type'] == attendanceType) {
+      return sessionRecord;
+    }
+
     final now = DateTime.now();
     final todayStr = TimezoneHelper.formatDateOnly(now);
 
+    // 2. Query Supabase attendance_records using correct schema columns
     try {
       final records = await _supabase
           .from('attendance_records')
-          .select('id, attendance_time, attendance_type')
+          .select('id, actual_check_in, actual_check_out, actual_break_start, actual_break_end')
           .eq('organization_member_id', memberId)
           .eq('attendance_date', todayStr)
-          .eq('attendance_type', attendanceType)
-          .limit(1);
+          .maybeSingle();
 
-      if (records.isNotEmpty) {
-        return records.first as Map<String, dynamic>;
+      if (records != null) {
+        final checkInTime = records['actual_check_in'];
+        final checkOutTime = records['actual_check_out'];
+        final breakStartTime = records['actual_break_start'];
+        final breakEndTime = records['actual_break_end'];
+
+        bool isDuplicate = false;
+        String? recordTime;
+
+        if (attendanceType == 'check_in' && checkInTime != null) {
+          isDuplicate = true;
+          recordTime = checkInTime.toString();
+        } else if (attendanceType == 'check_out' && checkOutTime != null) {
+          isDuplicate = true;
+          recordTime = checkOutTime.toString();
+        } else if (attendanceType == 'break_start' && breakStartTime != null) {
+          isDuplicate = true;
+          recordTime = breakStartTime.toString();
+        } else if (attendanceType == 'break_end' && breakEndTime != null) {
+          isDuplicate = true;
+          recordTime = breakEndTime.toString();
+        }
+
+        if (isDuplicate) {
+          final foundRecord = {
+            'id': records['id'],
+            'attendance_time': recordTime ?? todayStr,
+            'attendance_type': attendanceType,
+          };
+          _todayProcessedMembers[memberId] = foundRecord;
+          return foundRecord;
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('⚠️ Error checking online duplicate attendance: $e');
+    }
 
+    // 3. Query local offline SQLite database
     try {
       final offlineRecords = await _offlineDb.getUnsyncedAttendances();
       for (final record in offlineRecords) {
         if (record.organizationMemberId == memberId &&
             record.eventType == attendanceType) {
-          return {
+          final foundRecord = {
             'id': record.id,
             'attendance_time': record.timestamp,
             'attendance_type': record.eventType,
           };
+          _todayProcessedMembers[memberId] = foundRecord;
+          return foundRecord;
         }
       }
     } catch (_) {}
 
     return null;
+  }
+
+  Future<void> _preloadTodayProcessedMembers() async {
+    final now = DateTime.now();
+    final todayStr = TimezoneHelper.formatDateOnly(now);
+    try {
+      final records = await _supabase
+          .from('attendance_records')
+          .select('organization_member_id, actual_check_in, actual_check_out')
+          .eq('attendance_date', todayStr);
+
+      for (final rec in records as List<dynamic>) {
+        final memberId = (rec['organization_member_id'] as num?)?.toInt();
+        if (memberId == null) continue;
+
+          final checkInTime = rec['actual_check_in'];
+          final checkOutTime = rec['actual_check_out'];
+
+          if (checkInTime != null) {
+            _todayProcessedMembers[memberId] = {
+              'attendance_type': 'check_in',
+              'attendance_time': checkInTime.toString(),
+            };
+          }
+          if (checkOutTime != null) {
+            _todayProcessedMembers[memberId] = {
+              'attendance_type': 'check_out',
+              'attendance_time': checkOutTime.toString(),
+            };
+          }
+        }
+      } catch (e) {
+      debugPrint('⚠️ Preload online attendance records failed: $e');
+    }
+
+    try {
+      final offlineRecords = await _offlineDb.getUnsyncedAttendances();
+      for (final rec in offlineRecords) {
+        if (rec.organizationMemberId != null) {
+          _todayProcessedMembers[rec.organizationMemberId!] = {
+            'attendance_type': rec.eventType,
+            'attendance_time': rec.timestamp,
+          };
+        }
+      }
+    } catch (_) {}
+
+    debugPrint('📋 Preloaded ${_todayProcessedMembers.length} attendance records for strict 1-session locking.');
   }
 
   void _showMessage(String text, MessageType type, {int seconds = 3}) {
