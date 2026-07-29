@@ -15,6 +15,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:screen_brightness/screen_brightness.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../helpers/language_helper.dart';
 import '../services/biometric_service.dart';
 import '../services/face_recognition_tflite_service.dart';
@@ -182,39 +183,64 @@ class _FaceAttendanceMultiUserPageState
     debugPrint('🏁 Starting face-attendance system initialization...');
 
     try {
-      setState(() { _initProgress = 0.05; _initStatus = 'Warming up UI...'; });
+      setState(() {
+        _initProgress = 0.05;
+        _initStatus = 'Warming up UI...';
+      });
       await _enableKioskMode();
       await Future.delayed(const Duration(milliseconds: 100));
 
-      setState(() { _initProgress = 0.15; _initStatus = 'Loading organization settings...'; });
+      setState(() {
+        _initProgress = 0.15;
+        _initStatus = 'Loading organization settings...';
+      });
       await _loadOrganizationData();
       _startScheduleCheck();
 
-      setState(() { _initProgress = 0.40; _initStatus = 'Loading AI Models (Multi-Threaded)...'; });
+      setState(() {
+        _initProgress = 0.40;
+        _initStatus = 'Loading AI Models (Multi-Threaded)...';
+      });
       await _initializeFaceService();
 
-      setState(() { _initProgress = 0.70; _initStatus = 'Preparing high-speed camera...'; });
+      setState(() {
+        _initProgress = 0.70;
+        _initStatus = 'Preparing high-speed camera...';
+      });
       await _initializeCamera();
 
-      setState(() { _initProgress = 0.90; _initStatus = 'Warming up biometric cache...'; });
+      setState(() {
+        _initProgress = 0.90;
+        _initStatus = 'Warming up biometric cache...';
+      });
       await Future.wait([
         _getCurrentLocation().timeout(
           const Duration(seconds: 5),
-          onTimeout: () { debugPrint('⚠️ Location timeout'); },
+          onTimeout: () {
+            debugPrint('⚠️ Location timeout');
+          },
         ),
         _checkConnectivity().timeout(
           const Duration(seconds: 3),
-          onTimeout: () { debugPrint('⚠️ Connectivity check timeout'); },
+          onTimeout: () {
+            debugPrint('⚠️ Connectivity check timeout');
+          },
         ),
         _biometricService
             .getAllActiveFaceTemplatesWithUserInfo(widget.organizationId)
             .timeout(
               const Duration(seconds: 10),
-              onTimeout: () { debugPrint('⚠️ Face templates timeout'); return []; },
+              onTimeout: () {
+                debugPrint('⚠️ Face templates timeout');
+                return [];
+              },
             ),
       ]);
 
-      setState(() { _initProgress = 1.0; _initStatus = 'Ready!'; });
+      setState(() {
+        _initProgress = 1.0;
+        _initStatus = 'Ready!';
+      });
       await Future.delayed(const Duration(milliseconds: 300));
 
       if (mounted) {
@@ -241,15 +267,20 @@ class _FaceAttendanceMultiUserPageState
     _faceAutoSyncTimer?.cancel();
     _faceAutoSyncTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       try {
-        await _biometricService.getAllActiveFaceTemplatesWithUserInfo(widget.organizationId);
+        await _biometricService.getAllActiveFaceTemplatesWithUserInfo(
+          widget.organizationId,
+        );
       } catch (_) {}
     });
   }
 
   Future<void> _toggleTorchMode(bool enable) async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized)
+      return;
     try {
-      await _cameraController!.setFlashMode(enable ? FlashMode.torch : FlashMode.off);
+      await _cameraController!.setFlashMode(
+        enable ? FlashMode.torch : FlashMode.off,
+      );
     } catch (e) {
       debugPrint('Hardware torch not supported: $e');
     }
@@ -278,13 +309,15 @@ class _FaceAttendanceMultiUserPageState
     final result = await Connectivity().checkConnectivity();
     if (mounted) {
       setState(() {
-        _isOnline = result.isNotEmpty && !result.contains(ConnectivityResult.none);
+        _isOnline =
+            result.isNotEmpty && !result.contains(ConnectivityResult.none);
       });
     }
     Connectivity().onConnectivityChanged.listen((results) {
       if (mounted) {
         setState(() {
-          _isOnline = results.isNotEmpty && !results.contains(ConnectivityResult.none);
+          _isOnline =
+              results.isNotEmpty && !results.contains(ConnectivityResult.none);
         });
       }
     });
@@ -314,7 +347,8 @@ class _FaceAttendanceMultiUserPageState
       final cachedOrg = await _offlineDb.getOrganizationData(orgId);
       if (cachedOrg != null && mounted) {
         setState(() {
-          _organizationTimezone = cachedOrg['timezone'] as String? ?? 'Asia/Jakarta';
+          _organizationTimezone =
+              cachedOrg['timezone'] as String? ?? 'Asia/Jakarta';
           _organizationName = cachedOrg['name'] as String? ?? '';
         });
       }
@@ -358,7 +392,9 @@ class _FaceAttendanceMultiUserPageState
   Future<void> _enableKioskMode() async {
     try {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]);
     } catch (e) {
       debugPrint('Error kiosk mode: $e');
     }
@@ -366,20 +402,29 @@ class _FaceAttendanceMultiUserPageState
 
   Future<void> _initializeFaceService() async {
     try {
-      _showMessage(AppLanguage.tr('attendance.face.preparing'), MessageType.loading);
+      _showMessage(
+        AppLanguage.tr('attendance.face.preparing'),
+        MessageType.loading,
+      );
       _faceService = await _biometricService.getFaceService();
-      debugPrint('✅ Face service initialized');
+      await _biometricService.refreshCache(widget.organizationId);
+      debugPrint('✅ Face service initialized & biometric cache refreshed');
       _clearMessage();
     } catch (e) {
       debugPrint('❌ Failed to init TFLite: $e');
       if (mounted) {
-        _showMessage('Face service init failed: $e', MessageType.error, seconds: 10);
+        _showMessage(
+          'Face service init failed: $e',
+          MessageType.error,
+          seconds: 10,
+        );
       }
     }
   }
 
   Future<void> _initializeCamera() async {
-    if (_cameraController != null && _cameraController!.value.isInitialized) return;
+    if (_cameraController != null && _cameraController!.value.isInitialized)
+      return;
     try {
       debugPrint('📷 Initializing camera...');
       final cameras = await availableCameras();
@@ -409,10 +454,14 @@ class _FaceAttendanceMultiUserPageState
       try {
         final maxExp = await _cameraController!.getMaxExposureOffset();
         if (maxExp > 0) {
-          await _cameraController!.setExposureOffset((maxExp * 0.3).clamp(0.5, 1.5));
+          await _cameraController!.setExposureOffset(
+            (maxExp * 0.3).clamp(0.5, 1.5),
+          );
         }
       } catch (_) {}
-      try { await _cameraController!.setFocusMode(FocusMode.auto); } catch (_) {}
+      try {
+        await _cameraController!.setFocusMode(FocusMode.auto);
+      } catch (_) {}
 
       if (mounted) {
         setState(() => _isCameraInitialized = true);
@@ -482,10 +531,14 @@ class _FaceAttendanceMultiUserPageState
         frameBytes = Uint8List.fromList(inputImage.bytes!);
         if (inputImage.metadata?.rotation != null) {
           switch (inputImage.metadata!.rotation) {
-            case InputImageRotation.rotation0deg:   rotation = 0;
-            case InputImageRotation.rotation90deg:  rotation = 90;
-            case InputImageRotation.rotation180deg: rotation = 180;
-            case InputImageRotation.rotation270deg: rotation = 270;
+            case InputImageRotation.rotation0deg:
+              rotation = 0;
+            case InputImageRotation.rotation90deg:
+              rotation = 90;
+            case InputImageRotation.rotation180deg:
+              rotation = 180;
+            case InputImageRotation.rotation270deg:
+              rotation = 270;
           }
         }
       }
@@ -608,7 +661,12 @@ class _FaceAttendanceMultiUserPageState
       nv21.setRange(0, ySize, yPlane);
     } else {
       for (int row = 0; row < height; row++) {
-        nv21.setRange(row * width, row * width + width, yPlane, row * yRowStride);
+        nv21.setRange(
+          row * width,
+          row * width + width,
+          yPlane,
+          row * yRowStride,
+        );
       }
     }
 
@@ -625,7 +683,9 @@ class _FaceAttendanceMultiUserPageState
       for (int row = 0; row < height ~/ 2; row++) {
         for (int col = 0; col < width ~/ 2; col++) {
           final int uvIndex = row * uvRowStride + col * uvPixelStride;
-          if (pos + 1 < nv21.length && uvIndex < vPlane.length && uvIndex < uPlane.length) {
+          if (pos + 1 < nv21.length &&
+              uvIndex < vPlane.length &&
+              uvIndex < uPlane.length) {
             nv21[pos++] = vPlane[uvIndex];
             nv21[pos++] = uPlane[uvIndex];
           }
@@ -731,11 +791,11 @@ class _FaceAttendanceMultiUserPageState
         .map((e) => e.key)
         .toList()
         .forEach((id) {
-      _cooldowns.remove(id);
-      if (_activeTrackers.containsKey(id)) {
-        _faceStates[id] = FaceTrackingState.idle;
-      }
-    });
+          _cooldowns.remove(id);
+          if (_activeTrackers.containsKey(id)) {
+            _faceStates[id] = FaceTrackingState.idle;
+          }
+        });
 
     if (currentTrackedFaces.isEmpty) {
       _detectedFacesNotifier.value = [];
@@ -756,22 +816,38 @@ class _FaceAttendanceMultiUserPageState
           if (!_recognitionInFlight.contains(id) && frameBytes != null) {
             _faceStates[id] = FaceTrackingState.locked;
             _recognitionInFlight.add(id);
-            _triggerRecognition(face, id, imageSize, frameBytes, width, height, rotation);
+            _triggerRecognition(
+              face,
+              id,
+              imageSize,
+              frameBytes,
+              width,
+              height,
+              rotation,
+            );
           }
-          displayFaces.add(_buildFaceDisplayData(face, id, FaceTrackingState.locked));
+          displayFaces.add(
+            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
+          );
           break;
 
         case FaceTrackingState.locked:
-          displayFaces.add(_buildFaceDisplayData(face, id, FaceTrackingState.locked));
+          displayFaces.add(
+            _buildFaceDisplayData(face, id, FaceTrackingState.locked),
+          );
           break;
 
         case FaceTrackingState.cooldown:
           if (_cooldowns.containsKey(id) && now.isAfter(_cooldowns[id]!)) {
             _cooldowns.remove(id);
             _faceStates[id] = FaceTrackingState.idle;
-            displayFaces.add(_buildFaceDisplayData(face, id, FaceTrackingState.idle));
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.idle),
+            );
           } else {
-            displayFaces.add(_buildFaceDisplayData(face, id, FaceTrackingState.cooldown));
+            displayFaces.add(
+              _buildFaceDisplayData(face, id, FaceTrackingState.cooldown),
+            );
           }
           break;
 
@@ -865,10 +941,15 @@ class _FaceAttendanceMultiUserPageState
 
       if (template.isEmpty ||
           (template['embedding'] == null &&
-           (template['templates'] == null ||
-            (template['templates'] as List?)?.isEmpty == true))) {
+              (template['templates'] == null ||
+                  (template['templates'] as List?)?.isEmpty == true))) {
         debugPrint('⚠️ Face $id: empty template from inference');
-        _persistentFaceTracker[id] = {'name': 'Unknown', 'member_id': null, 'similarity': 0.0, 'timestamp': DateTime.now()};
+        _persistentFaceTracker[id] = {
+          'name': 'Unknown',
+          'member_id': null,
+          'similarity': 0.0,
+          'timestamp': DateTime.now(),
+        };
         _cooldowns[id] = DateTime.now().add(const Duration(milliseconds: 600));
         return;
       }
@@ -881,12 +962,13 @@ class _FaceAttendanceMultiUserPageState
           capturedTemplate: template,
           organizationId: widget.organizationId,
           strict: false,
-          threshold: 0.78, // 78% standard MobileFaceNet threshold
+          threshold: 0.70, // 70% standard MobileFaceNet threshold
         );
       }
 
       if (result != null) {
-        final organizationMemberId = (result['organization_member_id'] as num?)?.toInt();
+        final organizationMemberId = (result['organization_member_id'] as num?)
+            ?.toInt();
         final matchedName = result['user_name'] as String? ?? 'Unknown';
         final matchedSim = (result['similarity'] as num?)?.toDouble() ?? 0.0;
         final matchedBiometricId = (result['biometric_id'] as num?)?.toInt();
@@ -895,7 +977,8 @@ class _FaceAttendanceMultiUserPageState
           final now = DateTime.now();
 
           // 1. Check RAM Session Cache first (Instant 0ms lookup!)
-          final existingSessionRecord = _todayProcessedMembers[organizationMemberId];
+          final existingSessionRecord =
+              _todayProcessedMembers[organizationMemberId];
           if (existingSessionRecord != null &&
               existingSessionRecord['attendance_type'] == _attendanceMode) {
             _persistentFaceTracker[id] = {
@@ -906,6 +989,28 @@ class _FaceAttendanceMultiUserPageState
             };
             _cooldowns[id] = now.add(const Duration(seconds: 5));
             _faceStates[id] = FaceTrackingState.cooldown;
+            final recordTime = _formatTimeDisplay(
+              existingSessionRecord['attendance_time'] as String?,
+            );
+            _addRecentAttendance(
+              memberName: matchedName,
+              departmentName: result['department_name'] as String?,
+              attendanceType: _attendanceMode,
+              formattedTime: recordTime,
+              isDuplicate: false,
+            );
+
+            // Also log event to attendance_logs so Dashboard Realtime updates immediately
+            unawaited(
+              _processAttendanceRecordInBackground(
+                organizationMemberId: organizationMemberId,
+                matchedName: matchedName,
+                matchedBiometricId: matchedBiometricId,
+                matchedSim: matchedSim,
+                result: result,
+                id: id,
+              ),
+            );
             return;
           }
 
@@ -930,14 +1035,16 @@ class _FaceAttendanceMultiUserPageState
           _faceStates[id] = FaceTrackingState.cooldown;
 
           // 4. Background DB / Network Record Check & Save (non-blocking)
-          unawaited(_processAttendanceRecordInBackground(
-            organizationMemberId: organizationMemberId,
-            matchedName: matchedName,
-            matchedBiometricId: matchedBiometricId,
-            matchedSim: matchedSim,
-            result: result,
-            id: id,
-          ));
+          unawaited(
+            _processAttendanceRecordInBackground(
+              organizationMemberId: organizationMemberId,
+              matchedName: matchedName,
+              matchedBiometricId: matchedBiometricId,
+              matchedSim: matchedSim,
+              result: result,
+              id: id,
+            ),
+          );
         }
       } else {
         // Instant retry on next frame (no 600ms delay!)
@@ -976,7 +1083,7 @@ class _FaceAttendanceMultiUserPageState
           _attendanceMode,
           existingRecord,
         );
-        return;
+        // Don't return — still send to Supabase in case of mode change (e.g. check-out)
       }
 
       await _recordAttendanceAsync(
@@ -999,26 +1106,8 @@ class _FaceAttendanceMultiUserPageState
   ) {
     if (!mounted) return;
 
-    final attendanceTimeStr = existingRecord['attendance_time'] as String?;
-    String formattedTime = 'hari ini';
-    if (attendanceTimeStr != null) {
-      try {
-        final timeParts = attendanceTimeStr.split(':');
-        if (timeParts.length >= 2) {
-          formattedTime = '${timeParts[0]}:${timeParts[1]}';
-        }
-      } catch (_) {}
-    }
-
-    final modeLabel = _availableModes.firstWhere(
-      (m) => m['key'] == attendanceType,
-      orElse: () => {'label': attendanceType},
-    )['label'];
-
-    _showMessage(
-      '$memberName ${AppLanguage.tr('attendance.face.already_recorded')} ($modeLabel pukul $formattedTime)',
-      MessageType.warning,
-      seconds: 4,
+    final formattedTime = _formatTimeDisplay(
+      existingRecord['attendance_time'] as String?,
     );
 
     _addRecentAttendance(
@@ -1026,8 +1115,16 @@ class _FaceAttendanceMultiUserPageState
       departmentName: departmentName,
       attendanceType: attendanceType,
       formattedTime: formattedTime,
-      isDuplicate: true,
+      isDuplicate: false,
     );
+  }
+
+  Future<void> _clearActivitiesCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('org_recent_activities_${widget.organizationId}');
+      await prefs.remove('org_perf_summary_${widget.organizationId}');
+    } catch (_) {}
   }
 
   Future<void> _recordAttendanceAsync({
@@ -1066,19 +1163,6 @@ class _FaceAttendanceMultiUserPageState
         isDuplicate: false,
       );
 
-      final attendanceRecordData = {
-        'organization_id': widget.organizationId,
-        'organization_member_id': organizationMemberId,
-        'attendance_date': todayDateStr,
-        'attendance_time': timeStr,
-        'created_at': nowUtcIso,
-        'attendance_type': _attendanceMode,
-        'status': 'present',
-        'verification_method': 'face_recognition',
-        'latitude': _currentPosition?.latitude,
-        'longitude': _currentPosition?.longitude,
-      };
-
       if (_isOnline) {
         try {
           if (_attendanceMode == 'check_out') {
@@ -1086,17 +1170,32 @@ class _FaceAttendanceMultiUserPageState
               organizationMemberId: organizationMemberId,
               photoUrl: '',
               method: 'face_recognition',
-              location: _currentPosition != null ? {'latitude': _currentPosition!.latitude, 'longitude': _currentPosition!.longitude} : null,
+              location: _currentPosition != null
+                  ? {
+                      'latitude': _currentPosition!.latitude,
+                      'longitude': _currentPosition!.longitude,
+                    }
+                  : null,
             );
           } else {
             await _attendanceService.checkIn(
               organizationMemberId: organizationMemberId,
               photoUrl: '',
               method: 'face_recognition',
-              location: _currentPosition != null ? {'latitude': _currentPosition!.latitude, 'longitude': _currentPosition!.longitude} : null,
+              location: _currentPosition != null
+                  ? {
+                      'latitude': _currentPosition!.latitude,
+                      'longitude': _currentPosition!.longitude,
+                    }
+                  : null,
             );
           }
-          debugPrint('✅ Online attendance recorded for member $organizationMemberId');
+          debugPrint(
+            '✅ Online attendance recorded for member $organizationMemberId',
+          );
+          // AttendanceService.checkIn/checkOut already writes to attendance_logs
+          // which triggers the dashboard Realtime stream automatically.
+          await _clearActivitiesCache();
           return;
         } catch (e) {
           debugPrint('⚠️ Online record failed, saving offline fallback: $e');
@@ -1111,11 +1210,15 @@ class _FaceAttendanceMultiUserPageState
         organizationMemberId: organizationMemberId,
         latitude: _currentPosition?.latitude,
         longitude: _currentPosition?.longitude,
-        notes: 'Offline Face Attendance (Sim: ${(similarity * 100).toStringAsFixed(1)}%)',
+        notes:
+            'Offline Face Attendance (Sim: ${(similarity * 100).toStringAsFixed(1)}%)',
       );
 
       await _offlineDb.insertAttendance(offlineAttendance);
-      debugPrint('💾 Saved offline attendance for member $organizationMemberId');
+      await _clearActivitiesCache();
+      debugPrint(
+        '💾 Saved offline attendance for member $organizationMemberId and invalidated cache',
+      );
     } catch (e) {
       debugPrint('❌ Error in async attendance recording: $e');
     }
@@ -1135,6 +1238,24 @@ class _FaceAttendanceMultiUserPageState
         orElse: () => {'label': attendanceType},
       )['label'];
 
+      if (_recentAttendanceList.isNotEmpty &&
+          _recentAttendanceList.first['name'] == memberName &&
+          _recentAttendanceList.first['type_key'] == attendanceType) {
+        return;
+      }
+
+      final existingIndex = _recentAttendanceList.indexWhere(
+        (item) =>
+            item['name'] == memberName && item['type_key'] == attendanceType,
+      );
+
+      if (existingIndex != -1) {
+        final existingItem = _recentAttendanceList.removeAt(existingIndex);
+        existingItem['time'] = formattedTime;
+        _recentAttendanceList.insert(0, existingItem);
+        return;
+      }
+
       _recentAttendanceList.insert(0, {
         'name': memberName,
         'department': departmentName ?? '',
@@ -1149,9 +1270,7 @@ class _FaceAttendanceMultiUserPageState
         _recentAttendanceList.removeLast();
       }
 
-      if (!isDuplicate) {
-        _totalProcessedToday++;
-      }
+      _totalProcessedToday = _recentAttendanceList.length;
     });
   }
 
@@ -1161,7 +1280,8 @@ class _FaceAttendanceMultiUserPageState
   }) async {
     // 1. Check RAM session cache (Instant 0ms lookup!)
     final sessionRecord = _todayProcessedMembers[memberId];
-    if (sessionRecord != null && sessionRecord['attendance_type'] == attendanceType) {
+    if (sessionRecord != null &&
+        sessionRecord['attendance_type'] == attendanceType) {
       return sessionRecord;
     }
 
@@ -1172,7 +1292,9 @@ class _FaceAttendanceMultiUserPageState
     try {
       final records = await _supabase
           .from('attendance_records')
-          .select('id, actual_check_in, actual_check_out, actual_break_start, actual_break_end')
+          .select(
+            'id, actual_check_in, actual_check_out, actual_break_start, actual_break_end',
+          )
           .eq('organization_member_id', memberId)
           .eq('attendance_date', todayStr)
           .maybeSingle();
@@ -1234,6 +1356,27 @@ class _FaceAttendanceMultiUserPageState
     return null;
   }
 
+  String _formatTimeDisplay(String? timeStr) {
+    if (timeStr == null || timeStr.trim().isEmpty) {
+      return TimezoneHelper.formatTimeOnly(DateTime.now());
+    }
+    try {
+      final dt = DateTime.tryParse(timeStr);
+      if (dt != null) {
+        return TimezoneHelper.formatTimeOnly(dt.toLocal());
+      }
+      final parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        final h = parts[0].replaceAll(RegExp(r'[^\d]'), '');
+        final m = parts[1].replaceAll(RegExp(r'[^\d]'), '');
+        if (h.isNotEmpty && m.isNotEmpty) {
+          return '${h.padLeft(2, '0')}:${m.padLeft(2, '0')}';
+        }
+      }
+    } catch (_) {}
+    return TimezoneHelper.formatTimeOnly(DateTime.now());
+  }
+
   Future<void> _preloadTodayProcessedMembers() async {
     final now = DateTime.now();
     final todayStr = TimezoneHelper.formatDateOnly(now);
@@ -1247,23 +1390,24 @@ class _FaceAttendanceMultiUserPageState
         final memberId = (rec['organization_member_id'] as num?)?.toInt();
         if (memberId == null) continue;
 
-          final checkInTime = rec['actual_check_in'];
-          final checkOutTime = rec['actual_check_out'];
+        final checkInTime = rec['actual_check_in'];
+        final checkOutTime = rec['actual_check_out'];
 
-          if (checkInTime != null) {
-            _todayProcessedMembers[memberId] = {
-              'attendance_type': 'check_in',
-              'attendance_time': checkInTime.toString(),
-            };
-          }
-          if (checkOutTime != null) {
-            _todayProcessedMembers[memberId] = {
-              'attendance_type': 'check_out',
-              'attendance_time': checkOutTime.toString(),
-            };
-          }
+        if (checkInTime != null) {
+          _todayProcessedMembers[memberId] = {
+            'attendance_type': 'check_in',
+            'attendance_time': _formatTimeDisplay(checkInTime.toString()),
+          };
         }
-      } catch (e) {
+
+        if (checkOutTime != null) {
+          _todayProcessedMembers[memberId] = {
+            'attendance_type': 'check_out',
+            'attendance_time': _formatTimeDisplay(checkOutTime.toString()),
+          };
+        }
+      }
+    } catch (e) {
       debugPrint('⚠️ Preload online attendance records failed: $e');
     }
 
@@ -1271,15 +1415,18 @@ class _FaceAttendanceMultiUserPageState
       final offlineRecords = await _offlineDb.getUnsyncedAttendances();
       for (final rec in offlineRecords) {
         if (rec.organizationMemberId != null) {
+          final timeStr = _formatTimeDisplay(rec.timestamp);
           _todayProcessedMembers[rec.organizationMemberId!] = {
             'attendance_type': rec.eventType,
-            'attendance_time': rec.timestamp,
+            'attendance_time': timeStr,
           };
         }
       }
     } catch (_) {}
 
-    debugPrint('📋 Preloaded ${_todayProcessedMembers.length} attendance records for strict 1-session locking.');
+    debugPrint(
+      '📋 Preloaded ${_todayProcessedMembers.length} attendance records for strict 1-session locking.',
+    );
   }
 
   void _showMessage(String text, MessageType type, {int seconds = 3}) {
@@ -1366,8 +1513,20 @@ class _FaceAttendanceMultiUserPageState
         final startParts = startTimeStr.split(':').map(int.parse).toList();
         final endParts = endTimeStr.split(':').map(int.parse).toList();
 
-        final start = DateTime(now.year, now.month, now.day, startParts[0], startParts[1]);
-        final end = DateTime(now.year, now.month, now.day, endParts[0], endParts[1]);
+        final start = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          startParts[0],
+          startParts[1],
+        );
+        final end = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          endParts[0],
+          endParts[1],
+        );
 
         if (now.isAfter(start.subtract(const Duration(minutes: 30))) &&
             now.isBefore(end.add(const Duration(minutes: 30)))) {
@@ -1486,7 +1645,10 @@ class _FaceAttendanceMultiUserPageState
             right: 0,
             child: SafeArea(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -1498,14 +1660,21 @@ class _FaceAttendanceMultiUserPageState
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.black54,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.people_outline, color: Colors.white70, size: 18),
+                          const Icon(
+                            Icons.people_outline,
+                            color: Colors.white70,
+                            size: 18,
+                          ),
                           const SizedBox(width: 8),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1537,14 +1706,20 @@ class _FaceAttendanceMultiUserPageState
                         CircleAvatar(
                           backgroundColor: Colors.black45,
                           child: IconButton(
-                            icon: const Icon(Icons.assignment_ind_outlined, color: Colors.white),
+                            icon: const Icon(
+                              Icons.assignment_ind_outlined,
+                              color: Colors.white,
+                            ),
                             onPressed: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) => ManualCheckPage(
-                                    organizationMemberId: _organizationMemberId ?? 0,
-                                    memberData: {'organization_id': widget.organizationId},
+                                    organizationMemberId:
+                                        _organizationMemberId ?? 0,
+                                    memberData: {
+                                      'organization_id': widget.organizationId,
+                                    },
                                   ),
                                 ),
                               );
@@ -1555,11 +1730,18 @@ class _FaceAttendanceMultiUserPageState
                         CircleAvatar(
                           backgroundColor: Colors.black45,
                           child: IconButton(
-                            icon: const Icon(Icons.refresh, color: Colors.white),
+                            icon: const Icon(
+                              Icons.refresh,
+                              color: Colors.white,
+                            ),
                             onPressed: () async {
-                              await _biometricService.refreshCache(widget.organizationId);
+                              await _biometricService.refreshCache(
+                                widget.organizationId,
+                              );
                               _showMessage(
-                                AppLanguage.tr('attendance.face.refresh_success'),
+                                AppLanguage.tr(
+                                  'attendance.face.refresh_success',
+                                ),
                                 MessageType.success,
                               );
                             },
@@ -1581,12 +1763,7 @@ class _FaceAttendanceMultiUserPageState
               child: _buildNotificationBanner(),
             ),
 
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildBottomPanel(),
-          ),
+          Positioned(left: 0, right: 0, bottom: 0, child: _buildBottomPanel()),
         ],
       ),
     );
@@ -1621,7 +1798,11 @@ class _FaceAttendanceMultiUserPageState
         color: bg.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(16),
         boxShadow: const [
-          BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
@@ -1724,12 +1905,17 @@ class _FaceAttendanceMultiUserPageState
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
                           color: isDup ? Colors.orange.shade50 : Colors.white,
                           borderRadius: BorderRadius.circular(40),
                           border: Border.all(
-                            color: isDup ? Colors.orange.shade200 : const Color(0xFFE8DAEF),
+                            color: isDup
+                                ? Colors.orange.shade200
+                                : const Color(0xFFE8DAEF),
                             width: 1.2,
                           ),
                         ),
@@ -1738,7 +1924,11 @@ class _FaceAttendanceMultiUserPageState
                             CircleAvatar(
                               radius: 18,
                               backgroundColor: Colors.grey.shade100,
-                              child: const Icon(Icons.person, color: Colors.grey, size: 18),
+                              child: const Icon(
+                                Icons.person,
+                                color: Colors.grey,
+                                size: 18,
+                              ),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -1770,8 +1960,12 @@ class _FaceAttendanceMultiUserPageState
                               ),
                             ),
                             Icon(
-                              isDup ? Icons.warning_rounded : Icons.check_circle,
-                              color: isDup ? Colors.orange : const Color(0xFF27AE60),
+                              isDup
+                                  ? Icons.warning_rounded
+                                  : Icons.check_circle,
+                              color: isDup
+                                  ? Colors.orange
+                                  : const Color(0xFF27AE60),
                               size: 24,
                             ),
                           ],

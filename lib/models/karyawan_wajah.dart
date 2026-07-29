@@ -139,12 +139,26 @@ class KaryawanWajah {
     final profile = member?['user_profiles'] as Map<String, dynamic>?;
 
     // Susun nama lengkap dengan fallback
-    final displayName = profile?['display_name'] as String?;
-    final firstName = profile?['first_name'] as String? ?? '';
-    final lastName = profile?['last_name'] as String? ?? '';
+    final displayName = profile?['display_name'] as String? ??
+        json['display_name'] as String?;
+    final firstName = profile?['first_name'] as String? ??
+        json['first_name'] as String? ??
+        '';
+    final lastName = profile?['last_name'] as String? ??
+        json['last_name'] as String? ??
+        '';
+    final fallbackName = (firstName.isNotEmpty || lastName.isNotEmpty)
+        ? '$firstName $lastName'.trim()
+        : (json['nama_lengkap'] as String? ??
+            json['member_name'] as String? ??
+            'Karyawan #${json['organization_member_id']}');
+
     final namaLengkap = displayName?.isNotEmpty == true
         ? displayName!
-        : '$firstName $lastName'.trim();
+        : fallbackName;
+
+    final photoUrl = profile?['profile_photo_url'] as String? ??
+        json['profile_photo_url'] as String?;
 
     return KaryawanWajah(
       organizationMemberId: json['organization_member_id'] as int,
@@ -152,7 +166,7 @@ class KaryawanWajah {
           (member?['organization_id'] as int?) ??
           (json['organization_id'] as int? ?? 0),
       namaLengkap: namaLengkap.isNotEmpty ? namaLengkap : 'Unknown',
-      profilePhotoUrl: profile?['profile_photo_url'] as String?,
+      profilePhotoUrl: photoUrl,
       faceEmbedding: embedding,
       lastSyncedAt: DateTime.now(),
       isActive: json['is_active'] as bool? ?? true,

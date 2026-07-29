@@ -1012,16 +1012,6 @@ class AttendanceService {
           )
         ''')
           .eq('organization_members.organization_id', organizationId)
-          .inFilter('method', [
-            'face_recognition',
-            'FACERECOGNITION', // Backward compatibility for old data
-            'face_recognition_kiosk',
-            'rfid_card',
-            'rfid_card_mobile',
-            'manual',
-            'selfie',
-            'fingerprint',
-          ])
           .order('event_time', ascending: false)
           .limit(limit);
 

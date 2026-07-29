@@ -64,6 +64,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   // Real-time updates
   Timer? _clockTimer;
   Timer? _refreshDebounce;
+  Timer? _activityRefreshTimer;
   StreamSubscription? _activitySubscription;
   final ValueNotifier<DateTime> _clockNotifier = ValueNotifier(DateTime.now().toUtc());
 
@@ -99,6 +100,13 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
     _loadWeeklyOverview();
     _initRealTimeClock();
     _initActivityStream();
+    // Periodic refresh every 30s as fallback in case Realtime stream misses an event
+    _activityRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        _loadRecentActivities();
+        _loadTodayStats();
+      }
+    });
   }
 
   void _initRealTimeClock() {
@@ -148,6 +156,7 @@ class _PetugasDashboardPageState extends State<PetugasDashboardPage> {
   void dispose() {
     _clockTimer?.cancel();
     _refreshDebounce?.cancel();
+    _activityRefreshTimer?.cancel();
     _activitySubscription?.cancel();
     _clockNotifier.dispose();
     super.dispose();

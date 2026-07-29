@@ -131,7 +131,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     try {
       final response = await Supabase.instance.client
           .from('organization_members')
-          .select('user_profiles (first_name, middle_name, last_name, display_name)')
+          .select(
+            'user_profiles (first_name, middle_name, last_name, display_name)',
+          )
           .eq('id', widget.organizationMemberId)
           .maybeSingle();
 
@@ -170,9 +172,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   Future<void> _toggleTorchMode(bool enable) async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized)
+      return;
     try {
-      await _cameraController!.setFlashMode(enable ? FlashMode.torch : FlashMode.off);
+      await _cameraController!.setFlashMode(
+        enable ? FlashMode.torch : FlashMode.off,
+      );
       debugPrint('📷 Hardware torch set to: ${enable ? "ON" : "OFF"}');
     } catch (e) {
       debugPrint('Hardware torch not supported or failed: $e');
@@ -412,8 +417,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _speakGuidanceKey('face_not_found');
       } else {
         final sortedFaces = List<Face>.from(faces)
-          ..sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
-              .compareTo(a.boundingBox.width * a.boundingBox.height));
+          ..sort(
+            (a, b) => (b.boundingBox.width * b.boundingBox.height).compareTo(
+              a.boundingBox.width * a.boundingBox.height,
+            ),
+          );
         final face = sortedFaces.first;
         final validation = _validateFace(
           face,
@@ -521,10 +529,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     switch (_currentAngle) {
       case CaptureAngle.front:
         if (headY.abs() > 15.0) {
-          return {
-            'isValid': false,
-            'message': 'Lihat Lurus ke Depan',
-          };
+          return {'isValid': false, 'message': 'Lihat Lurus ke Depan'};
         }
         if (headX.abs() > 15.0) {
           return {'isValid': false, 'message': 'Wajah sejajar kamera'};
@@ -727,14 +732,18 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             .maybeSingle();
         final orgId = memberRow?['organization_id'] as int?;
         if (orgId != null) {
-          final duplicateWarning = await _biometricService.verifyFaceAgainstExisting(
-            faceTemplate: combinedList.first, // Check the front-facing template
-            intendedMemberId: widget.organizationMemberId,
-            organizationId: orgId,
-          );
+          final duplicateWarning = await _biometricService
+              .verifyFaceAgainstExisting(
+                faceTemplate:
+                    combinedList.first, // Check the front-facing template
+                intendedMemberId: widget.organizationMemberId,
+                organizationId: orgId,
+              );
           if (duplicateWarning != null && mounted) {
-            final matchedName = duplicateWarning['matched_name'] as String? ?? 'Unknown';
-            final similarity = ((duplicateWarning['similarity'] as double?) ?? 0) * 100;
+            final matchedName =
+                duplicateWarning['matched_name'] as String? ?? 'Unknown';
+            final similarity =
+                ((duplicateWarning['similarity'] as double?) ?? 0) * 100;
             setState(() {
               _isLoading = false;
             });
@@ -744,7 +753,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               builder: (ctx) => AlertDialog(
                 title: const Row(
                   children: [
-                    Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.orange,
+                      size: 28,
+                    ),
                     SizedBox(width: 8),
                     Text('Peringatan Duplikat'),
                   ],
@@ -758,7 +771,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text('Batal', style: TextStyle(color: Colors.red)),
+                    child: const Text(
+                      'Batal',
+                      style: TextStyle(color: Colors.red),
+                    ),
                   ),
                   ElevatedButton(
                     onPressed: () => Navigator.pop(ctx, true),
@@ -786,11 +802,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       }
 
       // 2. Upload Photos (Front, Left, Right)
-      final pathsToUpload = [
-        _frontImagePath,
-        _leftImagePath,
-        _rightImagePath,
-      ];
+      final pathsToUpload = [_frontImagePath, _leftImagePath, _rightImagePath];
 
       String? frontPhotoUrl;
 
@@ -800,10 +812,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           final imageFile = File(path);
           if (await imageFile.exists()) {
             final processedFile = await _processImage(imageFile);
-            
+
             // Pass the angle suffix (front, left, right) so we can distinguish them in storage
             final suffix = i == 0 ? 'front' : (i == 1 ? 'left' : 'right');
-            
+
             final uploadedUrl = await _storageService.uploadFaceTemplate(
               processedFile,
               widget.organizationMemberId,
@@ -833,7 +845,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
               .select('user_id')
               .eq('id', widget.organizationMemberId)
               .maybeSingle();
-          
+
           final userId = memberData?['user_id'];
           if (userId != null) {
             // 1. Update ke Server Supabase user_profiles
@@ -841,7 +853,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                 .from('user_profiles')
                 .update({'profile_photo_url': frontPhotoUrl})
                 .eq('id', userId);
-            
+
             // 2. Update ke Cache Lokal SQLite
             await _offlineDb.database.then((db) async {
               await db.update(
@@ -854,8 +866,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
             // 3. Hapus cache SharedPreferences anggota agar daftar anggota ter-refresh
             await _clearMemberCaches();
-            
-            debugPrint('✅ Profile photo automatically set to FRONT registered face photo ($frontPhotoUrl)');
+
+            debugPrint(
+              '✅ Profile photo automatically set to FRONT registered face photo ($frontPhotoUrl)',
+            );
           }
         } catch (e) {
           debugPrint('⚠️ Failed to auto-set profile photo: $e');
@@ -1090,7 +1104,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             .select('user_id')
             .eq('id', widget.organizationMemberId)
             .maybeSingle();
-        
+
         final userId = memberData?['user_id'];
         if (userId != null) {
           await Supabase.instance.client
@@ -1274,7 +1288,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     if (Platform.isAndroid) {
       try {
         final nv21Bytes = _yuv420ToNv21(image);
-        debugPrint('📷 [REG] InputImage: size=${image.width}x${image.height}, format=${InputImageFormat.nv21.name} (${InputImageFormat.nv21.rawValue}), bytes=${nv21Bytes.length}');
+        debugPrint(
+          '📷 [REG] InputImage: size=${image.width}x${image.height}, format=${InputImageFormat.nv21.name} (${InputImageFormat.nv21.rawValue}), bytes=${nv21Bytes.length}',
+        );
 
         // Throttled low-light check (once every 30 frames)
         _lightCheckFrameCount++;
@@ -1370,10 +1386,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         }
       }
     }
-    
+
     return nv21;
   }
-
 
   void _enhanceNv21Brightness(Uint8List nv21, int ySize) {
     if (ySize == 0 || nv21.isEmpty) return;
@@ -1545,9 +1560,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           // Screen Flash Overlay
           if (_isScreenFlashEnabled)
             const Positioned.fill(
-              child: IgnorePointer(
-                child: ScreenFlashOverlay(),
-              ),
+              child: IgnorePointer(child: ScreenFlashOverlay()),
             ),
 
           // Background logo with transparency
@@ -1621,7 +1634,8 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                             ),
                             textAlign: TextAlign.center,
                           ),
-                          if (_memberName != null && _memberName!.isNotEmpty) ...[
+                          if (_memberName != null &&
+                              _memberName!.isNotEmpty) ...[
                             const SizedBox(height: 2),
                             Text(
                               _memberName!,
@@ -1680,7 +1694,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.wb_incandescent_outlined, color: Colors.white),
+                    const Icon(
+                      Icons.wb_incandescent_outlined,
+                      color: Colors.white,
+                    ),
                     const SizedBox(width: 12),
                     const Expanded(
                       child: Text(
@@ -1697,7 +1714,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.amber.shade900,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
@@ -1897,11 +1917,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   Future<void> _clearMemberCaches() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final keys = prefs.getKeys().where((k) => k.startsWith('org_members')).toList();
+      final keys = prefs
+          .getKeys()
+          .where((k) => k.startsWith('org_members'))
+          .toList();
       for (final key in keys) {
         await prefs.remove(key);
       }
-      debugPrint('🧹 Cleared ${keys.length} member list cache keys in SharedPreferences');
+      debugPrint(
+        '🧹 Cleared ${keys.length} member list cache keys in SharedPreferences',
+      );
     } catch (e) {
       debugPrint('⚠️ Error clearing member cache: $e');
     }
@@ -2059,9 +2084,7 @@ class ScreenFlashOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: ScreenFlashOverlayPainter(),
-    );
+    return CustomPaint(painter: ScreenFlashOverlayPainter());
   }
 }
 
@@ -2074,24 +2097,29 @@ class ScreenFlashOverlayPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     final double centerX = size.width / 2;
-    final double centerY = size.height / 2.3; // slightly above center to align with typical face positioning
+    final double centerY =
+        size.height /
+        2.3; // slightly above center to align with typical face positioning
     final double radiusX = size.width * 0.32;
     final double radiusY = radiusX * 1.35;
 
     final path = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
-      ..addOval(Rect.fromCenter(
-        center: Offset(centerX, centerY),
-        width: radiusX * 2,
-        height: radiusY * 2,
-      ))
+      ..addOval(
+        Rect.fromCenter(
+          center: Offset(centerX, centerY),
+          width: radiusX * 2,
+          height: radiusY * 2,
+        ),
+      )
       ..fillType = PathFillType.evenOdd;
 
     canvas.drawPath(path, paint);
 
     // 2. Draw a subtle border around the oval cutout
     final borderPaint = Paint()
-      ..color = const Color(0xFF6366F1) // Indigo accent
+      ..color =
+          const Color(0xFF6366F1) // Indigo accent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3;
     canvas.drawOval(

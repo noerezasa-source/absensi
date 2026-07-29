@@ -96,20 +96,32 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
   late TabController _tabController;
   StreamSubscription? _biometricSubscription;
+  StreamSubscription? _attendanceSubscription;
+  Timer? _activityRefreshTimer;
 
   @override
   void initState() {
+    super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _scrollController.addListener(_onScroll);
     _loadDataOptimized();
     _setupBiometricRealtimeListener();
+    // Refresh activities every 30s so scores/activities update for scanned friends
+    _activityRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        _loadRecentActivitiesOptimized();
+        _applyFilters();
+      }
+    });
   }
 
   void _onScroll() {}
 
   @override
   void dispose() {
+    _activityRefreshTimer?.cancel();
     _biometricSubscription?.cancel();
+    _attendanceSubscription?.cancel();
     _tabController.dispose();
     _scrollController.dispose();
     _searchController.dispose();
@@ -128,6 +140,23 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           debugPrint('🔄 Biometric data changed, refreshing member list...');
           _loadOrganizationMembersOptimized(page: _currentPage);
         });
+
+    // Listen to attendance_logs so Recent Activities refreshes immediately
+    // when any member (including friends) is scanned on this device or another.
+    _attendanceSubscription = _supabase
+        .from('attendance_logs')
+        .stream(primaryKey: ['id'])
+        .order('event_time', ascending: false)
+        .limit(1)
+        .listen((_) {
+          if (!mounted) return;
+          debugPrint('📡 attendance_logs changed — refreshing activities & performance...');
+          _loadRecentActivitiesOptimized();
+          _applyFilters();
+        },
+        onError: (e) => debugPrint('❌ attendance_logs stream error: $e'),
+        cancelOnError: false,
+      );
   }
 
   Future<void> _loadDataOptimized() async {
@@ -153,7 +182,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           page: 1,
           limit: _pageSize,
         ),
-        _performanceService.getOrganizationPerformanceSummaryOffline(organizationId),
+        _performanceService.getOrganizationPerformanceSummaryOffline(
+          organizationId,
+        ),
         _performanceService.getFilteredPerformanceOffline(
           organizationId,
           timePeriod: 'this_month',
@@ -173,6 +204,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         setState(() {
           if (offlineMembers != null && offlineMembers.isNotEmpty) {
             _organizationMembers = offlineMembers;
+            _membersController.organizationMembers.assignAll(offlineMembers);
           }
           if (offlineSummary != null) {
             _memberPerformanceStats = offlineSummary;
@@ -218,7 +250,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
   Future<void> _loadCachedOrganizationData(int organizationId) async {
     try {
-      final cachedOrg = await OfflineDatabaseService().getOrganizationData(organizationId);
+      final cachedOrg = await OfflineDatabaseService().getOrganizationData(
+        organizationId,
+      );
       final prefs = await SharedPreferences.getInstance();
       final cachedDeptsStr = prefs.getString('org_depts_$organizationId');
 
@@ -231,7 +265,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             }
           }
           if (cachedDeptsStr != null) {
-            final deptsList = List<Map<String, dynamic>>.from(jsonDecode(cachedDeptsStr));
+            final deptsList = List<Map<String, dynamic>>.from(
+              jsonDecode(cachedDeptsStr),
+            );
             final deptSet = <String>{'all'};
             final Map<String, int> nameToId = {};
             for (final item in deptsList) {
@@ -276,24 +312,27 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final searchQuery = _searchController.text.trim();
       final departmentFilter = _selectedDepartment == 'all'
           ? null
-          : (_departmentNameToId[_selectedDepartment]?.toString() ?? _selectedDepartment);
+          : (_departmentNameToId[_selectedDepartment]?.toString() ??
+                _selectedDepartment);
 
       debugPrint(
         '🔍 REFRESH: Query="$searchQuery", Dept="$departmentFilter", Page=$_currentPage',
       );
 
       // OFFLINE-FIRST: Fetch offline cache first to show instantly
-      final offlineMembers = await _performanceService.getOrganizationMembersOffline(
-        organizationId,
-        page: _currentPage,
-        limit: _pageSize,
-        searchQuery: searchQuery.isNotEmpty ? searchQuery : null,
-        departmentFilter: departmentFilter,
-      );
+      final offlineMembers = await _performanceService
+          .getOrganizationMembersOffline(
+            organizationId,
+            page: _currentPage,
+            limit: _pageSize,
+            searchQuery: searchQuery.isNotEmpty ? searchQuery : null,
+            departmentFilter: departmentFilter,
+          );
 
       if (offlineMembers != null && mounted) {
         setState(() {
           _organizationMembers = offlineMembers;
+          _membersController.organizationMembers.assignAll(offlineMembers);
           if (!isInitial) _isContentLoading = false;
         });
       }
@@ -323,11 +362,10 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final members = results[0] as List<Map<String, dynamic>>;
       debugPrint('📦 RESULTS: Received ${members.length} members');
 
-      // (Redundant controller call removed - controller syncs itself in initState/loadData)
-
       if (mounted) {
         setState(() {
           _organizationMembers = members;
+          _membersController.organizationMembers.assignAll(members);
 
           if (results.length > 1) {
             _totalMembers = results[1] as int;
@@ -425,7 +463,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           .select('id, name')
           .eq('organization_id', organizationId)
           .order('name');
-      
+
       if (deptsResponse != null && deptsResponse is List && mounted) {
         final deptSet = <String>{'all'};
         final Map<String, int> nameToId = {};
@@ -445,7 +483,10 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
         try {
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('org_depts_$organizationId', jsonEncode(deptsResponse));
+          await prefs.setString(
+            'org_depts_$organizationId',
+            jsonEncode(deptsResponse),
+          );
         } catch (_) {}
       }
     } catch (e) {
@@ -549,7 +590,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
 
   String? _getMemberPhotoUrl(Map<String, dynamic> member) {
     final profile = member['user_profiles'] as Map<String, dynamic>?;
-    final photoPath = (profile?['profile_photo_url'] ?? member['profile_photo_url']) as String?;
+    final photoPath =
+        (profile?['profile_photo_url'] ?? member['profile_photo_url'])
+            as String?;
 
     if (photoPath == null || photoPath.trim().isEmpty) return null;
 
@@ -557,9 +600,13 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       return photoPath;
     }
 
+    final normalizedPath = photoPath.startsWith('mass-profile/')
+        ? photoPath
+        : 'mass-profile/$photoPath';
+
     return _supabase.storage
         .from('profile-photos')
-        .getPublicUrl('mass-profile/$photoPath');
+        .getPublicUrl(normalizedPath);
   }
 
   String _formatPercentage(double value) {
@@ -1557,8 +1604,15 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     // Sync search query with controller
     _membersController.setSearchQuery(_searchController.text);
 
-    // Use controller's filtered members as base
-    var filteredMembers = _membersController.filteredMembers;
+    if (_membersController.organizationMembers.isEmpty &&
+        _organizationMembers.isNotEmpty) {
+      _membersController.organizationMembers.assignAll(_organizationMembers);
+    }
+
+    // Use controller's filtered members or fallback to _organizationMembers
+    var filteredMembers = _membersController.organizationMembers.isNotEmpty
+        ? _membersController.filteredMembers
+        : _organizationMembers;
 
     // Apply department filter (page-specific filter)
     if (_selectedDepartment != 'all') {
@@ -1582,8 +1636,12 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
           return Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Shimmer.fromColors(
-              baseColor: widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.grey.shade300,
-              highlightColor: widget.isDarkMode ? const Color(0xFF3B1860) : Colors.grey.shade100,
+              baseColor: widget.isDarkMode
+                  ? const Color(0xFF2D1B4E)
+                  : Colors.grey.shade300,
+              highlightColor: widget.isDarkMode
+                  ? const Color(0xFF3B1860)
+                  : Colors.grey.shade100,
               child: Container(
                 height: 90,
                 decoration: BoxDecoration(
@@ -2846,262 +2904,266 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                 }
               }
             }
+
             loadDepartments();
           }
 
           return AlertDialog(
-          backgroundColor: widget.isDarkMode
-              ? const Color(0xFF2D1B4E)
-              : Colors.white,
-          title: Text(
-            'Edit Data Siswa',
-            style: TextStyle(
-              color: widget.isDarkMode ? Colors.white : Colors.black87,
-              fontWeight: FontWeight.bold,
+            backgroundColor: widget.isDarkMode
+                ? const Color(0xFF2D1B4E)
+                : Colors.white,
+            title: Text(
+              'Edit Data Siswa',
+              style: TextStyle(
+                color: widget.isDarkMode ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _getMemberName(member),
-                style: TextStyle(
-                  color: widget.isDarkMode
-                      ? Colors.white70
-                      : Colors.grey.shade600,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Pilih Kelas:',
-                style: TextStyle(
-                  color: widget.isDarkMode ? Colors.white : Colors.black87,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: selectedClass.isEmpty ? null : selectedClass,
-                decoration: InputDecoration(
-                  hintText: 'Pilih kelas',
-                  hintStyle: TextStyle(
-                    color: widget.isDarkMode ? Colors.white38 : Colors.grey,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _getMemberName(member),
+                  style: TextStyle(
+                    color: widget.isDarkMode
+                        ? Colors.white70
+                        : Colors.grey.shade600,
+                    fontSize: 14,
                   ),
-                  filled: true,
-                  fillColor: widget.isDarkMode
-                      ? Colors.white.withValues(alpha: 0.05)
-                      : Colors.grey.shade100,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: widget.isDarkMode
-                          ? Colors.white.withValues(alpha: 0.1)
-                          : Colors.grey.shade300,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Pilih Kelas:',
+                  style: TextStyle(
+                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: selectedClass.isEmpty ? null : selectedClass,
+                  decoration: InputDecoration(
+                    hintText: 'Pilih kelas',
+                    hintStyle: TextStyle(
+                      color: widget.isDarkMode ? Colors.white38 : Colors.grey,
                     ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: widget.isDarkMode
-                          ? Colors.white.withValues(alpha: 0.1)
-                          : Colors.grey.shade300,
-                    ),
-                  ),
-                ),
-                dropdownColor: widget.isDarkMode
-                    ? const Color(0xFF2D1B4E)
-                    : Colors.white,
-                style: TextStyle(
-                  color: widget.isDarkMode ? Colors.white : Colors.black87,
-                ),
-                items: const [
-                  DropdownMenuItem(value: 'X RPL 1', child: Text('X RPL 1')),
-                  DropdownMenuItem(value: 'XI RPL 1', child: Text('XI RPL 1')),
-                  DropdownMenuItem(
-                    value: 'XII RPL 1',
-                    child: Text('XII RPL 1'),
-                  ),
-                ],
-                onChanged: (value) {
-                  setDialogState(() {
-                    selectedClass = value ?? '';
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Pilih Departemen:',
-                style: TextStyle(
-                  color: widget.isDarkMode ? Colors.white : Colors.black87,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 8),
-              isLoadingDepartments
-                  ? const Center(child: CircularProgressIndicator())
-                  : DropdownButtonFormField<int>(
-                      value: selectedDepartmentId,
-                      decoration: InputDecoration(
-                        hintText: 'Pilih departemen',
-                        hintStyle: TextStyle(
-                          color: widget.isDarkMode
-                              ? Colors.white38
-                              : Colors.grey,
-                        ),
-                        filled: true,
-                        fillColor: widget.isDarkMode
-                            ? Colors.white.withValues(alpha: 0.05)
-                            : Colors.grey.shade100,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(
-                            color: widget.isDarkMode
-                                ? Colors.white.withValues(alpha: 0.1)
-                                : Colors.grey.shade300,
-                          ),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(
-                            color: widget.isDarkMode
-                                ? Colors.white.withValues(alpha: 0.1)
-                                : Colors.grey.shade300,
-                          ),
-                        ),
-                      ),
-                      dropdownColor: widget.isDarkMode
-                          ? const Color(0xFF2D1B4E)
-                          : Colors.white,
-                      style: TextStyle(
+                    filled: true,
+                    fillColor: widget.isDarkMode
+                        ? Colors.white.withValues(alpha: 0.05)
+                        : Colors.grey.shade100,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
                         color: widget.isDarkMode
-                            ? Colors.white
-                            : Colors.black87,
+                            ? Colors.white.withValues(alpha: 0.1)
+                            : Colors.grey.shade300,
                       ),
-                      items: departments.map<DropdownMenuItem<int>>((dept) {
-                        return DropdownMenuItem<int>(
-                          value: dept['id'] as int,
-                          child: Text(
-                            '${dept['name']} (${dept['code'] ?? 'No Code'})',
-                            style: TextStyle(
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: widget.isDarkMode
+                            ? Colors.white.withValues(alpha: 0.1)
+                            : Colors.grey.shade300,
+                      ),
+                    ),
+                  ),
+                  dropdownColor: widget.isDarkMode
+                      ? const Color(0xFF2D1B4E)
+                      : Colors.white,
+                  style: TextStyle(
+                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'X RPL 1', child: Text('X RPL 1')),
+                    DropdownMenuItem(
+                      value: 'XI RPL 1',
+                      child: Text('XI RPL 1'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'XII RPL 1',
+                      child: Text('XII RPL 1'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedClass = value ?? '';
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Pilih Departemen:',
+                  style: TextStyle(
+                    color: widget.isDarkMode ? Colors.white : Colors.black87,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                isLoadingDepartments
+                    ? const Center(child: CircularProgressIndicator())
+                    : DropdownButtonFormField<int>(
+                        value: selectedDepartmentId,
+                        decoration: InputDecoration(
+                          hintText: 'Pilih departemen',
+                          hintStyle: TextStyle(
+                            color: widget.isDarkMode
+                                ? Colors.white38
+                                : Colors.grey,
+                          ),
+                          filled: true,
+                          fillColor: widget.isDarkMode
+                              ? Colors.white.withValues(alpha: 0.05)
+                              : Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(
                               color: widget.isDarkMode
-                                  ? Colors.white
-                                  : Colors.black87,
+                                  ? Colors.white.withValues(alpha: 0.1)
+                                  : Colors.grey.shade300,
                             ),
                           ),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setDialogState(() {
-                          selectedDepartmentId = value;
-                        });
-                      },
-                    ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(
-                'Batal',
-                style: TextStyle(
-                  color: widget.isDarkMode
-                      ? Colors.white70
-                      : Colors.grey.shade600,
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(
+                              color: widget.isDarkMode
+                                  ? Colors.white.withValues(alpha: 0.1)
+                                  : Colors.grey.shade300,
+                            ),
+                          ),
+                        ),
+                        dropdownColor: widget.isDarkMode
+                            ? const Color(0xFF2D1B4E)
+                            : Colors.white,
+                        style: TextStyle(
+                          color: widget.isDarkMode
+                              ? Colors.white
+                              : Colors.black87,
+                        ),
+                        items: departments.map<DropdownMenuItem<int>>((dept) {
+                          return DropdownMenuItem<int>(
+                            value: dept['id'] as int,
+                            child: Text(
+                              '${dept['name']} (${dept['code'] ?? 'No Code'})',
+                              style: TextStyle(
+                                color: widget.isDarkMode
+                                    ? Colors.white
+                                    : Colors.black87,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          setDialogState(() {
+                            selectedDepartmentId = value;
+                          });
+                        },
+                      ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  'Batal',
+                  style: TextStyle(
+                    color: widget.isDarkMode
+                        ? Colors.white70
+                        : Colors.grey.shade600,
+                  ),
                 ),
               ),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (selectedClass.isEmpty) {
-                  Get.snackbar(
-                    'Error',
-                    'Silakan pilih kelas terlebih dahulu',
-                    snackPosition: SnackPosition.BOTTOM,
-                  );
-                  return;
-                }
-
-                try {
-                  final updateData = <String, dynamic>{
-                    'class_name': selectedClass,
-                  };
-
-                  if (selectedDepartmentId != null) {
-                    updateData['department_id'] = selectedDepartmentId;
-                  }
-
-                  final result = await _supabase
-                      .from('organization_members')
-                      .update(updateData)
-                      .eq('id', member['id'])
-                      .select();
-
-                  debugPrint('Update result: $result');
-
-                  if (mounted) {
-                    Navigator.pop(context);
-                    Get.snackbar(
-                      'Berhasil',
-                      'Data siswa berhasil diperbarui',
-                      snackPosition: SnackPosition.BOTTOM,
-                      backgroundColor: const Color(0xFF10B981),
-                      colorText: Colors.white,
-                    );
-
-                    // Update local state directly without re-fetching
-                    setState(() {
-                      final index = _organizationMembers.indexWhere(
-                        (m) => m['id'] == member['id'],
-                      );
-                      if (index != -1) {
-                        _organizationMembers[index]['class_name'] =
-                            selectedClass;
-                        if (selectedDepartmentId != null) {
-                          _organizationMembers[index]['department_id'] =
-                              selectedDepartmentId;
-                        }
-                      }
-                    });
-
-                    // Update controller state directly without re-fetching
-                    final controllerIndex = _membersController
-                        .organizationMembers
-                        .indexWhere((m) => m['id'] == member['id']);
-                    if (controllerIndex != -1) {
-                      _membersController
-                              .organizationMembers[controllerIndex]['class_name'] =
-                          selectedClass;
-                      if (selectedDepartmentId != null) {
-                        _membersController
-                                .organizationMembers[controllerIndex]['department_id'] =
-                            selectedDepartmentId;
-                      }
-                      _membersController.organizationMembers.refresh();
-                    }
-                  }
-                } catch (e) {
-                  debugPrint('Error updating member: $e');
-                  if (mounted) {
+              ElevatedButton(
+                onPressed: () async {
+                  if (selectedClass.isEmpty) {
                     Get.snackbar(
                       'Error',
-                      'Gagal memperbarui data: $e',
+                      'Silakan pilih kelas terlebih dahulu',
                       snackPosition: SnackPosition.BOTTOM,
-                      backgroundColor: const Color(0xFFEF4444),
-                      colorText: Colors.white,
                     );
+                    return;
                   }
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8B5CF6),
-                foregroundColor: Colors.white,
+
+                  try {
+                    final updateData = <String, dynamic>{
+                      'class_name': selectedClass,
+                    };
+
+                    if (selectedDepartmentId != null) {
+                      updateData['department_id'] = selectedDepartmentId;
+                    }
+
+                    final result = await _supabase
+                        .from('organization_members')
+                        .update(updateData)
+                        .eq('id', member['id'])
+                        .select();
+
+                    debugPrint('Update result: $result');
+
+                    if (mounted) {
+                      Navigator.pop(context);
+                      Get.snackbar(
+                        'Berhasil',
+                        'Data siswa berhasil diperbarui',
+                        snackPosition: SnackPosition.BOTTOM,
+                        backgroundColor: const Color(0xFF10B981),
+                        colorText: Colors.white,
+                      );
+
+                      // Update local state directly without re-fetching
+                      setState(() {
+                        final index = _organizationMembers.indexWhere(
+                          (m) => m['id'] == member['id'],
+                        );
+                        if (index != -1) {
+                          _organizationMembers[index]['class_name'] =
+                              selectedClass;
+                          if (selectedDepartmentId != null) {
+                            _organizationMembers[index]['department_id'] =
+                                selectedDepartmentId;
+                          }
+                        }
+                      });
+
+                      // Update controller state directly without re-fetching
+                      final controllerIndex = _membersController
+                          .organizationMembers
+                          .indexWhere((m) => m['id'] == member['id']);
+                      if (controllerIndex != -1) {
+                        _membersController
+                                .organizationMembers[controllerIndex]['class_name'] =
+                            selectedClass;
+                        if (selectedDepartmentId != null) {
+                          _membersController
+                                  .organizationMembers[controllerIndex]['department_id'] =
+                              selectedDepartmentId;
+                        }
+                        _membersController.organizationMembers.refresh();
+                      }
+                    }
+                  } catch (e) {
+                    debugPrint('Error updating member: $e');
+                    if (mounted) {
+                      Get.snackbar(
+                        'Error',
+                        'Gagal memperbarui data: $e',
+                        snackPosition: SnackPosition.BOTTOM,
+                        backgroundColor: const Color(0xFFEF4444),
+                        colorText: Colors.white,
+                      );
+                    }
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Simpan'),
               ),
-              child: const Text('Simpan'),
-            ),
-          ],
-        );
+            ],
+          );
         },
       ),
     );
@@ -3112,7 +3174,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
   // ===================================================================
 
   /// Tampilkan dialog konfirmasi sebelum menghapus anggota.
-  Future<void> _showDeleteMemberConfirmation(Map<String, dynamic> member) async {
+  Future<void> _showDeleteMemberConfirmation(
+    Map<String, dynamic> member,
+  ) async {
     final memberName = _getMemberName(member);
     final memberId = member['id'] as int;
 
@@ -3120,11 +3184,10 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        backgroundColor:
-            widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
+        backgroundColor: widget.isDarkMode
+            ? const Color(0xFF2D1B4E)
+            : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Row(
           children: [
             Container(
@@ -3216,7 +3279,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
             child: Text(
               'Batal',
               style: TextStyle(
-                color: widget.isDarkMode ? Colors.white54 : Colors.grey.shade600,
+                color: widget.isDarkMode
+                    ? Colors.white54
+                    : Colors.grey.shade600,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -3254,8 +3319,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       builder: (ctx) => PopScope(
         canPop: false,
         child: AlertDialog(
-          backgroundColor:
-              widget.isDarkMode ? const Color(0xFF2D1B4E) : Colors.white,
+          backgroundColor: widget.isDarkMode
+              ? const Color(0xFF2D1B4E)
+              : Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
@@ -3266,8 +3332,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                 height: 28,
                 child: CircularProgressIndicator(
                   strokeWidth: 3,
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(Color(0xFFEF4444)),
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFEF4444)),
                 ),
               ),
               const SizedBox(width: 16),
@@ -3276,8 +3341,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                   'Menghapus $memberName...',
                   style: TextStyle(
                     fontSize: 14,
-                    color:
-                        widget.isDarkMode ? Colors.white70 : Colors.black87,
+                    color: widget.isDarkMode ? Colors.white70 : Colors.black87,
                   ),
                 ),
               ),
@@ -3371,7 +3435,7 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     final TextEditingController rfidController = TextEditingController();
     final FocusNode rfidFocusNode = FocusNode();
     bool isProcessing = false;
-    
+
     late void Function() rfidListener;
 
     void processCard(String value) {
@@ -3379,11 +3443,11 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
       final cardId = value.trim();
       if (cardId.isNotEmpty) {
         isProcessing = true;
-        
+
         // Unfocus and remove listener to stop any further text field events
         rfidFocusNode.unfocus();
         rfidController.removeListener(rfidListener);
-        
+
         // Delay the pop to ensure TextField has completed its internal build/event cycle
         Future.delayed(const Duration(milliseconds: 150), () {
           rfidController.clear();
@@ -4352,7 +4416,9 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
     ];
     final rankBadgeBg = rank <= 3
         ? rankColors[rank - 1]
-        : (widget.isDarkMode ? const Color(0xFF3B1860) : const Color(0xFF7C3AED));
+        : (widget.isDarkMode
+              ? const Color(0xFF3B1860)
+              : const Color(0xFF7C3AED));
 
     return InkWell(
       onTap: () {

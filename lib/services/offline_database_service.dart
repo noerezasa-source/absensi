@@ -783,6 +783,32 @@ class OfflineDatabaseService {
             'created_at': template['created_at'] ?? now,
             'updated_at': now,
           }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+          // Step 3: Populate cached_members so member names and user_profiles are fully cached in SQLite
+          final orgMember =
+              template['organization_members'] as Map<String, dynamic>?;
+          if (orgMember != null && orgMemberId != null) {
+            final profile =
+                orgMember['user_profiles'] as Map<String, dynamic>?;
+            if (profile != null) {
+              final displayName = profile['display_name'] as String?;
+              final firstName = profile['first_name'] as String?;
+              final lastName = profile['last_name'] as String?;
+              final profilePhotoUrl = profile['profile_photo_url'] as String?;
+              await txn.insert('cached_members', {
+                'organization_member_id': orgMemberId,
+                'card_number': 'FACE_$orgMemberId',
+                'display_name': displayName,
+                'first_name': firstName,
+                'last_name': lastName,
+                'profile_photo_url': profilePhotoUrl,
+                'organization_id': orgId,
+                'user_id': orgMember['user_id'],
+                'is_active': 1,
+                'cached_at': now,
+              }, conflictAlgorithm: ConflictAlgorithm.replace);
+            }
+          }
         }
       });
 

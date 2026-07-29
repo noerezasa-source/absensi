@@ -77,7 +77,9 @@ class BiometricService {
       final matchedName = best.object.namaLengkap;
 
       if (matchedMemberId != intendedMemberId && similarity >= 0.50) {
-        debugPrint('⚠️ DUPLICATE GUARD: Face matches existing member $matchedName (ID: $matchedMemberId) at ${(similarity * 100).toStringAsFixed(1)}% — intended for member ID $intendedMemberId');
+        debugPrint(
+          '⚠️ DUPLICATE GUARD: Face matches existing member $matchedName (ID: $matchedMemberId) at ${(similarity * 100).toStringAsFixed(1)}% — intended for member ID $intendedMemberId',
+        );
         return {
           'matched_member_id': matchedMemberId,
           'matched_name': matchedName,
@@ -103,7 +105,6 @@ class BiometricService {
       }
 
       final templateJson = jsonEncode(faceTemplate);
-
 
       final existingTemplate = await _supabase
           .from('biometric_data')
@@ -145,10 +146,13 @@ class BiometricService {
       } catch (_) {}
 
       try {
-        final cachedMember = await _offlineDb.findMemberByOrgIdInCache(organizationMemberId);
+        final cachedMember = await _offlineDb.findMemberByOrgIdInCache(
+          organizationMemberId,
+        );
         final Map<String, dynamic> fullMap = Map.from(result);
         if (cachedMember != null) {
-          fullMap['organization_members'] = cachedMember['organization_members'];
+          fullMap['organization_members'] =
+              cachedMember['organization_members'];
         }
         fullMap['organization_id'] = orgId;
 
@@ -164,7 +168,9 @@ class BiometricService {
           parsed = templateData;
         }
 
-        if (parsed != null && parsed['templates'] != null && (parsed['templates'] as List).isNotEmpty) {
+        if (parsed != null &&
+            parsed['templates'] != null &&
+            (parsed['templates'] as List).isNotEmpty) {
           final subTemplates = parsed['templates'] as List;
           int addedCount = 0;
           for (var sub in subTemplates) {
@@ -181,12 +187,16 @@ class BiometricService {
               addedCount++;
             }
           }
-          debugPrint('✅ ObjectBox: Registered $addedCount multi-angle face templates for member ID $organizationMemberId (Org: $orgId)');
+          debugPrint(
+            '✅ ObjectBox: Registered $addedCount multi-angle face templates for member ID $organizationMemberId (Org: $orgId)',
+          );
         } else {
           final kw = KaryawanWajah.fromSupabase(fullMap);
           if (orgId > 0) kw.organizationId = orgId;
           ObjectBoxService().putKaryawanWajah(kw);
-          debugPrint('✅ ObjectBox: Registered 1 face template for member ID $organizationMemberId (Org: $orgId)');
+          debugPrint(
+            '✅ ObjectBox: Registered 1 face template for member ID $organizationMemberId (Org: $orgId)',
+          );
         }
       } catch (e) {
         debugPrint('⚠️ ObjectBox failed to save registered face: $e');
@@ -406,208 +416,14 @@ class BiometricService {
   Future<List<Map<String, dynamic>>> getAllActiveFaceTemplatesWithUserInfo(
     int organizationId,
   ) async {
-    List<Map<String, dynamic>> cachedTemplates = [];
-    try {
-      cachedTemplates = await _offlineDb.getAllBiometricDataWithUserInfo(
-        organizationId: organizationId,
-        biometricType: 'face_recognition',
-      );
-    } catch (e) {
-      debugPrint('⚠️ Failed to read SQLite cache: $e');
-    }
-
-    _syncFacesFromSupabase(organizationId);
-
-    if (cachedTemplates.isNotEmpty) {
-      _memoryTemplateCache = cachedTemplates;
-      _cachedOrganizationId = organizationId;
-
-      _parsedTemplateCache = {};
-      for (var template in cachedTemplates) {
-        try {
-          final Map<String, dynamic> parsed = jsonDecode(
-            template['template_data'],
-          );
-          if (parsed['embedding'] != null) {
-            parsed['embedding'] = (parsed['embedding'] as List)
-                .map((e) => (e as num).toDouble())
-                .toList();
-          }
-          if (parsed['templates'] != null) {
-            final subTemplates = parsed['templates'] as List;
-            for (var sub in subTemplates) {
-              if (sub is Map && sub['embedding'] != null) {
-                sub['embedding'] = (sub['embedding'] as List)
-                    .map((e) => (e as num).toDouble())
-                    .toList();
-              }
-            }
-          }
-          _parsedTemplateCache![template['id']] = parsed;
-        } catch (_) {}
-      }
-      _cacheTimestamp = DateTime.now();
-
-      unawaited(Future(() => _syncObjectBox(cachedTemplates, organizationId)));
-
-      return cachedTemplates;
-    }
-
+    // 1. Primary: Always fetch fresh face templates from Supabase first
     try {
       final results = await _fetchFacesFromSupabase(organizationId);
-
-      _memoryTemplateCache = results;
-      _cachedOrganizationId = organizationId;
-      _parsedTemplateCache = {};
-      for (var template in results) {
-        try {
-          final Map<String, dynamic> parsed = jsonDecode(
-            template['template_data'],
-          );
-          if (parsed['embedding'] != null) {
-            parsed['embedding'] = (parsed['embedding'] as List)
-                .map((e) => (e as num).toDouble())
-                .toList();
-          }
-          if (parsed['templates'] != null) {
-            final subTemplates = parsed['templates'] as List;
-            for (var sub in subTemplates) {
-              if (sub is Map && sub['embedding'] != null) {
-                sub['embedding'] = (sub['embedding'] as List)
-                    .map((e) => (e as num).toDouble())
-                    .toList();
-              }
-            }
-          }
-          _parsedTemplateCache![template['id']] = parsed;
-        } catch (_) {}
-      }
-      _cacheTimestamp = DateTime.now();
-
-      unawaited(Future(() => _syncObjectBox(results, organizationId)));
-
-      unawaited(Future(() async {
-        try {
-          await _offlineDb.syncBiometricData(
-            results,
-            biometricType: 'face_recognition',
-            organizationId: organizationId,
-          );
-          for (var template in results) {
-            unawaited(
-              _offlineDb.cacheMemberData({
-                'organization_member_id': template['organization_member_id'],
-                'card_number': 'FACE_${template['organization_member_id']}',
-                'organization_members': template['organization_members'],
-              }),
-            );
-          }
-        } catch (_) {}
-      }));
-
-      return results;
-    } catch (e) {
-      debugPrint('❌ Supabase fetch also failed: $e');
-      return [];
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchFacesFromSupabase(
-    int organizationId,
-  ) async {
-    try {
-      final results = await _supabase
-          .from('biometric_data')
-          .select('''
-            id,
-            organization_member_id,
-            template_data,
-            enrollment_date,
-            last_used_at,
-            organization_members!inner (
-              id,
-              user_id,
-              organization_id,
-              employee_id,
-              department_id,
-              user_profiles (
-                id,
-                first_name,
-                last_name,
-                display_name,
-                profile_photo_url
-              ),
-              departments!organization_members_department_id_fkey (
-                id,
-                name
-              )
-            )
-          ''')
-          .eq('biometric_type', 'face_recognition')
-          .eq('is_active', true)
-          .eq('organization_members.organization_id', organizationId);
-
-      return List<Map<String, dynamic>>.from(results);
-    } catch (e) {
-      debugPrint('⚠️ Error fetching faces from Supabase with full joins: $e');
-      try {
-        final fallback = await _supabase
-            .from('biometric_data')
-            .select('''
-              id,
-              organization_member_id,
-              template_data,
-              enrollment_date,
-              last_used_at,
-              organization_members!inner (
-                id,
-                user_id,
-                organization_id,
-                employee_id,
-                department_id
-              )
-            ''')
-            .eq('biometric_type', 'face_recognition')
-            .eq('is_active', true)
-            .eq('organization_members.organization_id', organizationId);
-
-        return List<Map<String, dynamic>>.from(fallback);
-      } catch (err) {
-        debugPrint('❌ Fallback face fetch also failed: $err');
-        return [];
-      }
-    }
-  }
-
-  void _syncFacesFromSupabase(int organizationId) {
-    if (_cacheTimestamp != null &&
-        _cachedOrganizationId == organizationId &&
-        DateTime.now().difference(_cacheTimestamp!) < _cacheExpiry) {
-      return;
-    }
-    Future(() async {
-      try {
-        final templates = await _fetchFacesFromSupabase(organizationId);
-        await _offlineDb.syncBiometricData(
-          templates,
-          biometricType: 'face_recognition',
-          organizationId: organizationId,
-        );
-
-        for (var template in templates) {
-          unawaited(
-            _offlineDb.cacheMemberData({
-              'organization_member_id': template['organization_member_id'],
-              'card_number': 'FACE_${template['organization_member_id']}',
-              'organization_members': template['organization_members'],
-            }),
-          );
-        }
-
-        _memoryTemplateCache = templates;
+      if (results.isNotEmpty) {
+        _memoryTemplateCache = results;
         _cachedOrganizationId = organizationId;
-        final newParsedCache = <int, Map<String, dynamic>>{};
-        for (var template in templates) {
+        _parsedTemplateCache = {};
+        for (var template in results) {
           try {
             final Map<String, dynamic> parsed = jsonDecode(
               template['template_data'],
@@ -627,22 +443,146 @@ class BiometricService {
                 }
               }
             }
-            newParsedCache[template['id']] = parsed;
+            _parsedTemplateCache![template['id']] = parsed;
           } catch (_) {}
         }
-        _parsedTemplateCache = newParsedCache;
         _cacheTimestamp = DateTime.now();
 
-        await _syncObjectBox(templates, organizationId);
-      } catch (_) {}
-    });
+        // Sync fresh templates to SQLite and ObjectBox
+        unawaited(
+          Future(() async {
+            try {
+              await _offlineDb.syncBiometricData(
+                results,
+                biometricType: 'face_recognition',
+                organizationId: organizationId,
+              );
+              await _syncObjectBox(results, organizationId);
+            } catch (_) {}
+          }),
+        );
+
+        debugPrint(
+          '✅ Fetched and synced ${results.length} active face templates from Supabase',
+        );
+        return results;
+      }
+    } catch (e) {
+      debugPrint(
+        '⚠️ Supabase face fetch failed, falling back to SQLite cache: $e',
+      );
+    }
+
+    // 2. Fallback: Read from local SQLite cache if offline
+    try {
+      final cachedTemplates = await _offlineDb.getAllBiometricDataWithUserInfo(
+        organizationId: organizationId,
+        biometricType: 'face_recognition',
+      );
+
+      if (cachedTemplates.isNotEmpty) {
+        _memoryTemplateCache = cachedTemplates;
+        _cachedOrganizationId = organizationId;
+        unawaited(
+          Future(() => _syncObjectBox(cachedTemplates, organizationId)),
+        );
+        return cachedTemplates;
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to read SQLite cache: $e');
+    }
+
+    return [];
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchFacesFromSupabase(
+    int organizationId,
+  ) async {
+    try {
+      final membersData = await _supabase
+          .from('organization_members')
+          .select('''
+            id,
+            user_id,
+            organization_id,
+            employee_id,
+            department_id,
+            user_profiles (
+              id,
+              first_name,
+              last_name,
+              display_name,
+              profile_photo_url
+            ),
+            biometric_data!inner (
+              id,
+              organization_member_id,
+              template_data,
+              enrollment_date,
+              last_used_at,
+              is_active,
+              biometric_type
+            )
+          ''')
+          .eq('organization_id', organizationId)
+          .eq('is_active', true)
+          .eq('biometric_data.biometric_type', 'face_recognition')
+          .eq('biometric_data.is_active', true);
+
+      final results = <Map<String, dynamic>>[];
+      for (final m in membersData) {
+        final bios = m['biometric_data'];
+        final bioList = bios is List ? bios : [bios];
+        for (final bio in bioList) {
+          if (bio is Map) {
+            results.add({
+              'id': bio['id'],
+              'organization_member_id': m['id'],
+              'template_data': bio['template_data'],
+              'enrollment_date': bio['enrollment_date'],
+              'last_used_at': bio['last_used_at'],
+              'is_active': bio['is_active'],
+              'biometric_type': bio['biometric_type'],
+              'organization_members': {
+                'id': m['id'],
+                'user_id': m['user_id'],
+                'organization_id': m['organization_id'],
+                'employee_id': m['employee_id'],
+                'department_id': m['department_id'],
+                'user_profiles': m['user_profiles'],
+              },
+            });
+          }
+        }
+      }
+
+      debugPrint(
+        '✅ Fetched ${results.length} active face templates across ${membersData.length} members from Supabase',
+      );
+      return results;
+    } catch (e) {
+      debugPrint('⚠️ Error fetching faces from Supabase: $e');
+      return [];
+    }
   }
 
   Future<void> refreshCache(int organizationId) async {
     _memoryTemplateCache = null;
     _parsedTemplateCache = null;
     _cacheTimestamp = null;
-    await getAllActiveFaceTemplatesWithUserInfo(organizationId);
+    try {
+      final results = await _fetchFacesFromSupabase(organizationId);
+      if (results.isNotEmpty) {
+        _memoryTemplateCache = results;
+        _cachedOrganizationId = organizationId;
+        await _syncObjectBox(results, organizationId);
+        debugPrint(
+          '✅ Force refreshed ${results.length} face templates from Supabase to ObjectBox',
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error force refreshing face cache: $e');
+    }
   }
 
   Future<Map<String, dynamic>?> identifyBestMatchWithUserInfo({
@@ -652,8 +592,11 @@ class BiometricService {
     bool strict = false,
   }) async {
     try {
-      if (_memoryTemplateCache == null || _cachedOrganizationId != organizationId) {
-        _memoryTemplateCache = await getAllActiveFaceTemplatesWithUserInfo(organizationId);
+      if (_memoryTemplateCache == null ||
+          _cachedOrganizationId != organizationId) {
+        _memoryTemplateCache = await getAllActiveFaceTemplatesWithUserInfo(
+          organizationId,
+        );
         _cachedOrganizationId = organizationId;
       }
 
@@ -662,7 +605,8 @@ class BiometricService {
         queryVector = (capturedTemplate['embedding'] as List)
             .map((e) => (e as num).toDouble())
             .toList();
-      } else if (capturedTemplate['templates'] != null && (capturedTemplate['templates'] as List).isNotEmpty) {
+      } else if (capturedTemplate['templates'] != null &&
+          (capturedTemplate['templates'] as List).isNotEmpty) {
         final capTemplates = capturedTemplate['templates'] as List;
         final firstTemp = capTemplates.first;
         if (firstTemp is Map && firstTemp['embedding'] != null) {
@@ -676,16 +620,29 @@ class BiometricService {
         return null;
       }
 
-      final capturedVersion = (capturedTemplate['version'] as num?)?.toInt() ?? 3;
-      final capturedQuality = (capturedTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
-      double minBaseThreshold = 0.78; // Standard MobileFaceNet threshold (78% similarity)
+      // L2 Normalize queryVector for consistent cosine/euclidean distance calculation
+      double qNorm = 0.0;
+      for (var v in queryVector) {
+        qNorm += v * v;
+      }
+      qNorm = math.sqrt(qNorm);
+      if (qNorm > 0) {
+        queryVector = queryVector.map((v) => v / qNorm).toList();
+      }
+
+      final capturedVersion =
+          (capturedTemplate['version'] as num?)?.toInt() ?? 3;
+      final capturedQuality =
+          (capturedTemplate['qualityScore'] as num?)?.toDouble() ?? 0.0;
+      double minBaseThreshold =
+          0.70; // Standard MobileFaceNet threshold (78% similarity)
       if (strict && capturedQuality < 0.35) {
         return null;
       }
 
       final nearest = ObjectBoxService().searchNearestNeighbors(
         queryVector,
-        maxResultCount: 10,
+        maxResultCount: 100,
         organizationId: organizationId,
       );
 
@@ -700,21 +657,39 @@ class BiometricService {
       double secondPersonSimilarity = -1.0;
       String? secondPersonName;
 
-      final bestNameClean = bestCandidate.object.namaLengkap.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-      final bestNameTokens = bestCandidate.object.namaLengkap.toLowerCase().split(RegExp(r'\s+')).where((w) => w.length >= 3).toSet();
+      final bestNameClean = bestCandidate.object.namaLengkap
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9]'), '');
+      final bestNameTokens = bestCandidate.object.namaLengkap
+          .toLowerCase()
+          .split(RegExp(r'\s+'))
+          .where((w) => w.length >= 3)
+          .toSet();
 
       for (int i = 1; i < nearest.length; i++) {
         final cand = nearest[i];
         final candMemberId = cand.object.organizationMemberId;
         final candName = cand.object.namaLengkap;
 
-        final isSameMember = candMemberId == bestCandidate.object.organizationMemberId;
-        final candNameClean = candName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-        final candTokens = candName.toLowerCase().split(RegExp(r'\s+')).where((w) => w.length >= 3).toSet();
+        final isSameMember =
+            candMemberId == bestCandidate.object.organizationMemberId;
+        final candNameClean = candName.toLowerCase().replaceAll(
+          RegExp(r'[^a-z0-9]'),
+          '',
+        );
+        final candTokens = candName
+            .toLowerCase()
+            .split(RegExp(r'\s+'))
+            .where((w) => w.length >= 3)
+            .toSet();
 
-        final isSameName = isSameMember ||
+        final isSameName =
+            isSameMember ||
             bestNameClean == candNameClean ||
-            (bestNameClean.length >= 4 && candNameClean.length >= 4 && (bestNameClean.contains(candNameClean) || candNameClean.contains(bestNameClean))) ||
+            (bestNameClean.length >= 4 &&
+                candNameClean.length >= 4 &&
+                (bestNameClean.contains(candNameClean) ||
+                    candNameClean.contains(bestNameClean))) ||
             bestNameTokens.intersection(candTokens).isNotEmpty;
 
         if (!isSameName) {
@@ -727,15 +702,17 @@ class BiometricService {
       final String secondInfo = secondPersonName != null
           ? ' | RunnerUp: $secondPersonName ${(secondPersonSimilarity * 100).toStringAsFixed(1)}%'
           : '';
-      debugPrint('🔍 MATCH: ${bestCandidate.object.namaLengkap} ${(similarity * 100).toStringAsFixed(1)}% (thr:${(minBaseThreshold * 100).toInt()}%)$secondInfo');
+      debugPrint(
+        '🔍 MATCH: ${bestCandidate.object.namaLengkap} ${(similarity * 100).toStringAsFixed(1)}% (thr:${(minBaseThreshold * 100).toInt()}%)$secondInfo',
+      );
 
-      final double margin = secondPersonSimilarity > 0 ? (similarity - secondPersonSimilarity) : 1.0;
+      final double margin = secondPersonSimilarity > 0
+          ? (similarity - secondPersonSimilarity)
+          : 1.0;
 
-      // 1. High-Confidence Instant Match (Large margin >= 12% over runner-up of different person)
-      bool isHighMarginMatch = (similarity >= 0.72 && margin >= 0.12);
-
-      // 2. Standard MobileFaceNet threshold (76%)
-      bool isStandardMatch = (similarity >= 0.76 && margin >= 0.05);
+      // Enforce strict 78% minimum similarity threshold
+      bool isHighMarginMatch = (similarity >= 0.70 && margin >= 0.08);
+      bool isStandardMatch = (similarity >= 0.70 && margin >= 0.04);
 
       if (!isHighMarginMatch && !isStandardMatch) {
         return null;
@@ -758,10 +735,14 @@ class BiometricService {
         'organization_member_id': matchedMemberId,
         'biometric_id': biometricId ?? 0,
         'similarity': similarity,
-        'organization_id': bestCandidate.object.organizationId == 0 ? organizationId : bestCandidate.object.organizationId,
+        'organization_id': bestCandidate.object.organizationId == 0
+            ? organizationId
+            : bestCandidate.object.organizationId,
         'user_id': null,
         'employee_id': null,
-        'user_name': fallbackName.isNotEmpty ? fallbackName : 'Karyawan #$matchedMemberId',
+        'user_name': fallbackName.isNotEmpty
+            ? fallbackName
+            : 'Karyawan #$matchedMemberId',
         'first_name': fallbackName,
         'last_name': null,
         'profile_photo_url': fallbackProfilePhoto,
@@ -868,10 +849,12 @@ class BiometricService {
                   limit: 1,
                 );
                 if (dbResult.isNotEmpty) {
-                  final memberId = dbResult.first['organization_member_id'] as int;
+                  final memberId =
+                      dbResult.first['organization_member_id'] as int;
                   final orgId = dbResult.first['organization_id'] as int?;
 
-                  final cachedMember = await _offlineDb.findMemberByOrgIdInCache(memberId);
+                  final cachedMember = await _offlineDb
+                      .findMemberByOrgIdInCache(memberId);
 
                   final Map<String, dynamic> fullMap = {
                     'id': biometricId,
@@ -881,12 +864,14 @@ class BiometricService {
                     'is_active': true,
                   };
                   if (cachedMember != null) {
-                    fullMap['organization_members'] = cachedMember['organization_members'];
+                    fullMap['organization_members'] =
+                        cachedMember['organization_members'];
                   }
 
                   ObjectBoxService().deleteByMemberId(memberId);
 
-                  if (updatedTemplate['templates'] != null && (updatedTemplate['templates'] as List).isNotEmpty) {
+                  if (updatedTemplate['templates'] != null &&
+                      (updatedTemplate['templates'] as List).isNotEmpty) {
                     final subTemplates = updatedTemplate['templates'] as List;
                     for (var sub in subTemplates) {
                       if (sub is Map && sub['embedding'] != null) {
@@ -1018,7 +1003,10 @@ class BiometricService {
     }
   }
 
-  Future<void> _syncObjectBox(List<Map<String, dynamic>> templates, int organizationId) async {
+  Future<void> _syncObjectBox(
+    List<Map<String, dynamic>> templates,
+    int organizationId,
+  ) async {
     try {
       if (!ObjectBoxService().isInitialized) {
         await ObjectBoxService().init();
@@ -1036,14 +1024,27 @@ class BiometricService {
             parsed = templateData;
           }
 
-          if (parsed != null && parsed['templates'] != null && (parsed['templates'] as List).isNotEmpty) {
+          if (parsed != null &&
+              parsed['templates'] != null &&
+              (parsed['templates'] as List).isNotEmpty) {
             final subTemplates = parsed['templates'] as List;
             int angleIdx = 0;
             for (var sub in subTemplates) {
               if (sub is Map && sub['embedding'] != null) {
-                final doubleList = (sub['embedding'] as List)
+                var doubleList = (sub['embedding'] as List)
                     .map((e) => (e as num).toDouble())
                     .toList();
+
+                // L2 Normalize stored vector for accurate ObjectBox distance calculation
+                double norm = 0.0;
+                for (var v in doubleList) {
+                  norm += v * v;
+                }
+                norm = math.sqrt(norm);
+                if (norm > 0) {
+                  doubleList = doubleList.map((v) => v / norm).toList();
+                }
+
                 final embedding = Float32List.fromList(doubleList);
 
                 final base = KaryawanWajah.fromSupabase(t);
@@ -1053,7 +1054,9 @@ class BiometricService {
                 angleIdx++;
               }
             }
-            debugPrint('🧬 OBX Sync: Synced $angleIdx templates for Member ID: ${t['organization_member_id']} (Org: $organizationId)');
+            debugPrint(
+              '🧬 OBX Sync: Synced $angleIdx templates for Member ID: ${t['organization_member_id']} (Org: $organizationId)',
+            );
           } else {
             final kw = KaryawanWajah.fromSupabase(t);
             kw.organizationId = organizationId;

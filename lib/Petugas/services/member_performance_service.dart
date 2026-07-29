@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
@@ -141,18 +142,18 @@ class MemberPerformanceService {
             department_id,
             employee_id,
             is_active,
-            user_profiles(
+            user_profiles!left(
               id,
               display_name,
               first_name,
               last_name,
               profile_photo_url
             ),
-            departments(
+            departments!left(
               id,
               name
             ),
-            system_roles(
+            system_roles!left(
               id,
               name,
               code
@@ -162,7 +163,7 @@ class MemberPerformanceService {
               is_active,
               biometric_type
             ),
-            rfid_cards(
+            rfid_cards!left(
               id,
               card_number,
               is_active
@@ -193,10 +194,53 @@ class MemberPerformanceService {
       }
 
       // Execute query with range
-      final response = await query
-          .order('employee_id', ascending: true)
-          .range(fromIndex, toIndex)
-          .timeout(const Duration(seconds: 4));
+      List<dynamic> response;
+      try {
+        response = await query
+            .order('id', ascending: true)
+            .range(fromIndex, toIndex)
+            .timeout(const Duration(seconds: 12));
+      } catch (err) {
+        debugPrint('⚠️ Primary query failed ($err), executing resilient fallback query...');
+        var fallbackQuery = _supabase
+            .from('organization_members')
+            .select('''
+              id,
+              user_id,
+              role_id,
+              department_id,
+              employee_id,
+              is_active,
+              user_profiles!left(
+                id,
+                display_name,
+                first_name,
+                last_name,
+                profile_photo_url
+              ),
+              departments!left(
+                id,
+                name
+              )
+            ''')
+            .eq('organization_id', organizationId);
+
+        if (!includeInactive) {
+          fallbackQuery = fallbackQuery.eq('is_active', true);
+        }
+
+        if (departmentFilter != null && departmentFilter.toLowerCase() != 'all') {
+          final deptId = int.tryParse(departmentFilter);
+          if (deptId != null) {
+            fallbackQuery = fallbackQuery.eq('department_id', deptId);
+          }
+        }
+
+        response = await fallbackQuery
+            .order('id', ascending: true)
+            .range(fromIndex, toIndex)
+            .timeout(const Duration(seconds: 12));
+      }
 
       debugPrint('Members fetched: ${response.length}');
 
@@ -214,6 +258,13 @@ class MemberPerformanceService {
       // Add member names and process roles for easier access
       for (final member in members) {
         member['member_name'] = _getMemberName(member);
+
+        // Auto-resolve profile photo from face-templates storage if profile_photo_url is empty
+        final profile = member['user_profiles'] as Map<String, dynamic>?;
+        final photo = profile?['profile_photo_url'] as String? ?? member['profile_photo_url'] as String?;
+        if (photo == null || photo.trim().isEmpty) {
+          await autoResolveFacePhoto(member);
+        }
 
         // Extract role name for UI
         final role = member['system_roles'] as Map<String, dynamic>?;
@@ -489,19 +540,21 @@ class MemberPerformanceService {
             : 0.0;
 
         // Final score: 50% Attendance, 30% Punctuality, 20% Work Duration
-        // If total work minutes is 0, score should be 0
-        final productivityScore = totalWorkMinutes > 0
-            ? attendanceRate * 0.5 +
-                  punctualityRate * 0.3 +
-                  (totalWorkMinutes / 480).clamp(0.0, 1.0) * 0.2
+        // If total work minutes is 0 (e.g. checked-in but not checked out yet), score active attendance/punctuality
+        final hasAttendance = records.isNotEmpty;
+        final productivityScore = hasAttendance
+            ? (totalWorkMinutes > 0
+                ? (attendanceRate * 0.5 +
+                      punctualityRate * 0.3 +
+                      (totalWorkMinutes / 480).clamp(0.0, 1.0) * 0.2)
+                : (attendanceRate * 0.6 + punctualityRate * 0.4))
             : 0.0;
 
         performers.add({
           ...member,
           'performance_stats': {
             'total_days': records.length, // records found in period
-            'present_days':
-                totalLogs, // Using totalLogs as the "Total Attendance" metric requested
+            'present_days': presentDays > 0 ? presentDays : totalLogs,
             'total_work_minutes': totalWorkMinutes,
             'attendance_rate': attendanceRate,
             'punctuality_rate': punctualityRate,
@@ -583,7 +636,7 @@ class MemberPerformanceService {
       final todayAttendance = await _supabase
           .from('attendance_records')
           .select(
-            'organization_member_id, status, organization_members!inner(organization_id)',
+            'organization_member_id, status, late_minutes, organization_members!inner(organization_id)',
           )
           .eq('organization_members.organization_id', organizationId)
           .eq('attendance_date', today);
@@ -601,12 +654,21 @@ class MemberPerformanceService {
 
       if (todayAttendance.isNotEmpty) {
         final presentCount = todayAttendance
-            .where((r) => r['status'] == 'present')
+            .where((r) => r['status'] == 'present' || r['status'] == 'late')
             .length;
-        attendanceRate = activeMembers > 0 ? presentCount / activeMembers : 0.0;
+        attendanceRate = activeMembers > 0
+            ? (presentCount / activeMembers).clamp(0.0, 1.0)
+            : 0.0;
 
-        // Simple punctuality calculation (assuming most are punctual for demo)
-        punctualityRate = 0.85;
+        final lateCount = todayAttendance
+            .where(
+              (r) => (r['late_minutes'] as int? ?? 0) > 0 || r['status'] == 'late',
+            )
+            .length;
+        final punctualCount = todayAttendance.length - lateCount;
+        punctualityRate = todayAttendance.isNotEmpty
+            ? (punctualCount / todayAttendance.length).clamp(0.0, 1.0)
+            : 1.0;
       }
 
       final summary = {
@@ -826,19 +888,100 @@ class MemberPerformanceService {
     };
   }
 
-  /// Get recent member activities from attendance records for today
+  /// Get recent member activities from attendance_logs (or attendance_records fallback)
   Future<List<Map<String, dynamic>>> getRecentMemberActivities(
     int organizationId, {
     int limit = 10,
     String organizationTimezone = 'Asia/Jakarta',
   }) async {
     try {
-      debugPrint('=== GETTING RECENT TODAY ACTIVITIES ===');
-      debugPrint(
-        'Organization ID: $organizationId | Timezone: $organizationTimezone',
-      );
+      debugPrint('=== GETTING RECENT ACTIVITIES FROM LOGS ===');
 
-      // Get today's date in the organization's timezone
+      // 1. Query attendance_logs table for real-time audit log stream across ALL members
+      try {
+        final logsResponse = await _supabase
+            .from('attendance_logs')
+            .select('''
+              id,
+              event_type,
+              event_time,
+              method,
+              organization_member_id,
+              attendance_record_id,
+              organization_members!inner(
+                id,
+                organization_id,
+                user_profiles(
+                  id,
+                  display_name,
+                  first_name,
+                  last_name,
+                  profile_photo_url
+                )
+              )
+            ''')
+            .order('event_time', ascending: false)
+            .limit(limit * 3);
+
+        if (logsResponse != null && (logsResponse as List).isNotEmpty) {
+          final activities = <Map<String, dynamic>>[];
+          for (final log in logsResponse) {
+            final member =
+                log['organization_members'] as Map<String, dynamic>?;
+            if (member != null && member['organization_id'] == organizationId) {
+              final eventType = log['event_type'] as String? ?? 'check_in';
+              final eventTime = log['event_time'] as String? ?? '';
+              final method = log['method'] as String? ?? '';
+              DateTime? eventDateTime;
+              try {
+                if (eventTime.isNotEmpty) {
+                  eventDateTime = DateTime.parse(eventTime);
+                }
+              } catch (_) {}
+
+              activities.add({
+                'id': log['id'],
+                'organization_member_id': log['organization_member_id'],
+                'event_type': eventType,
+                'event_time': eventTime,
+                'event_datetime': eventDateTime,
+                'method': method,
+                'organization_members': member,
+                'member_info': member,
+                'member_name': _getMemberName(member),
+                'time_ago': _formatTimeAgo(eventTime),
+                'user_profiles': member['user_profiles'],
+              });
+              if (activities.length >= limit) break;
+            }
+          }
+
+          if (activities.isNotEmpty) {
+            // Cache for offline instant load
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              final cacheKey = 'org_recent_activities_$organizationId';
+              final encodableList = activities.map((act) {
+                final copy = Map<String, dynamic>.from(act);
+                copy.remove('event_datetime');
+                return copy;
+              }).toList();
+              await prefs.setString(cacheKey, jsonEncode(encodableList));
+            } catch (cacheErr) {
+              debugPrint('⚠️ Failed to cache recent activities: $cacheErr');
+            }
+
+            debugPrint(
+              'Processed ${activities.length} recent log activities from attendance_logs',
+            );
+            return activities;
+          }
+        }
+      } catch (logsErr) {
+        debugPrint('⚠️ Error querying attendance_logs fallback to records: $logsErr');
+      }
+
+      // 2. Fallback: Query attendance records for THIS organization
       final todayStr = TimezoneHelper.getCurrentDateInOrgTimezone(
         organizationTimezone,
       );
@@ -1575,6 +1718,98 @@ class MemberPerformanceService {
     } catch (e) {
       debugPrint('Error reading offline filtered performance cache: $e');
     }
+    return null;
+  }
+
+  /// Automatically resolve and link a face template photo from Storage if profile_photo_url is empty
+  Future<String?> autoResolveFacePhoto(Map<String, dynamic> member) async {
+    final profile = member['user_profiles'] as Map<String, dynamic>?;
+    String? currentPhoto = profile?['profile_photo_url'] as String? ?? member['profile_photo_url'] as String?;
+
+    if (currentPhoto != null && currentPhoto.trim().isNotEmpty) {
+      return currentPhoto;
+    }
+
+    final memberId = member['id'] as int?;
+    if (memberId == null) return null;
+
+    // Check if member has face biometric data
+    final bioData = member['biometric_data'];
+    bool hasFaceBio = false;
+    if (bioData is List) {
+      hasFaceBio = bioData.any((b) => b['biometric_type'] == 'face_recognition');
+    } else if (bioData is Map) {
+      hasFaceBio = bioData['biometric_type'] == 'face_recognition';
+    }
+
+    if (!hasFaceBio) return null;
+
+    try {
+      String? frontFilePath;
+
+      // 1. Try folder by member ID (e.g., "23")
+      try {
+        final idFolderFiles = await _supabase.storage.from('face-templates').list(path: '$memberId');
+        if (idFolderFiles.isNotEmpty) {
+          final frontFile = idFolderFiles.firstWhere(
+            (f) => f.name.contains('_front_'),
+            orElse: () => idFolderFiles.first,
+          );
+          frontFilePath = '$memberId/${frontFile.name}';
+        }
+      } catch (_) {}
+
+      // 2. Try folder by First Name or Display Name (e.g., "Erlangga") if not found by ID
+      if (frontFilePath == null) {
+        final firstName = (profile?['first_name'] as String?)?.trim();
+        final displayName = (profile?['display_name'] as String?)?.trim();
+        final folderName = (firstName?.isNotEmpty == true)
+            ? firstName!
+            : (displayName?.isNotEmpty == true ? displayName!.split(' ').first : null);
+
+        if (folderName != null) {
+          try {
+            final nameFolderFiles = await _supabase.storage.from('face-templates').list(path: folderName);
+            if (nameFolderFiles.isNotEmpty) {
+              final frontFile = nameFolderFiles.firstWhere(
+                (f) => f.name.contains('_front_') && f.name.contains('${memberId}_'),
+                orElse: () => nameFolderFiles.firstWhere(
+                  (f) => f.name.contains('_front_'),
+                  orElse: () => nameFolderFiles.first,
+                ),
+              );
+              frontFilePath = '$folderName/${frontFile.name}';
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (frontFilePath != null) {
+        final publicUrl = _supabase.storage.from('face-templates').getPublicUrl(frontFilePath);
+
+        // Auto-save to user_profiles if userId exists
+        final userId = profile?['id'] ?? member['user_id'];
+        if (userId != null) {
+          unawaited(
+            _supabase
+                .from('user_profiles')
+                .update({'profile_photo_url': publicUrl})
+                .eq('id', userId)
+                .then((_) => debugPrint('✅ Auto-saved face template photo as profile_photo_url for member $memberId: $publicUrl'))
+                .catchError((e) => debugPrint('⚠️ Error auto-saving profile photo: $e')),
+          );
+        }
+
+        if (profile != null) {
+          profile['profile_photo_url'] = publicUrl;
+        }
+        member['profile_photo_url'] = publicUrl;
+        return publicUrl;
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error resolving face photo template for member $memberId: $e');
+    }
+
     return null;
   }
 }

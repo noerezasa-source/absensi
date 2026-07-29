@@ -119,22 +119,22 @@ class MembersController extends GetxController {
             department,
             position,
             class_name,
-            user_profiles (
+            user_profiles!left (
               display_name,
               first_name,
               last_name,
               profile_photo_url
             ),
-            departments!organization_members_department_id_fkey (
+            departments!left (
               id,
               name
             ),
-            biometric_data (
+            biometric_data!left (
               id,
               is_active,
               biometric_type
             ),
-            rfid_cards (
+            rfid_cards!left (
               id,
               card_number,
               is_active
