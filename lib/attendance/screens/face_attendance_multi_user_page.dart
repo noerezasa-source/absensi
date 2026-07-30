@@ -1501,50 +1501,59 @@ class _FaceAttendanceMultiUserPageState
   }
 
   void _autoSelectCurrentShift() {
-    if (_availableModes.isEmpty) return;
     final now = DateTime.now();
+    final hour = now.hour;
+    final minute = now.minute;
+    final timeInMinutes = hour * 60 + minute;
 
-    for (final mode in _availableModes) {
-      final startTimeStr = mode['start_time'] as String?;
-      final endTimeStr = mode['end_time'] as String?;
-      if (startTimeStr == null || endTimeStr == null) continue;
+    // Time Slots in Minutes:
+    // 11:40 = 11*60 + 40 = 700
+    // 12:45 = 12*60 + 45 = 765
+    // 15:00 = 15*60 + 00 = 900
+    // 15:30 = 15*60 + 30 = 930
+    // 16:30 = 16*60 + 30 = 990
 
-      try {
-        final startParts = startTimeStr.split(':').map(int.parse).toList();
-        final endParts = endTimeStr.split(':').map(int.parse).toList();
+    String targetMode = 'check_in';
+    if (timeInMinutes >= 700 && timeInMinutes < 765) {
+      // 11:40 - 12:45 -> Auto Check-Out (Istirahat 1 - 11:40)
+      targetMode = 'check_out';
+    } else if (timeInMinutes >= 900 && timeInMinutes < 930) {
+      // 15:00 - 15:30 -> Auto Check-Out (Istirahat 2 - 15:00)
+      targetMode = 'check_out';
+    } else if (timeInMinutes >= 990) {
+      // 16:30+ -> Auto Check-Out (Pulang / Selesai Kerja - 16:30)
+      targetMode = 'check_out';
+    } else {
+      // Pagi / Setelah Istirahat 1 / Setelah Istirahat 2 -> Auto Check-In
+      targetMode = 'check_in';
+    }
 
-        final start = DateTime(
-          now.year,
-          now.month,
-          now.day,
-          startParts[0],
-          startParts[1],
-        );
-        final end = DateTime(
-          now.year,
-          now.month,
-          now.day,
-          endParts[0],
-          endParts[1],
-        );
-
-        if (now.isAfter(start.subtract(const Duration(minutes: 30))) &&
-            now.isBefore(end.add(const Duration(minutes: 30)))) {
-          setState(() {
-            _selectedMode = mode;
-            _attendanceMode = mode['key'] as String;
-          });
-          debugPrint('⏰ Auto-selected mode: $_attendanceMode');
-          break;
+    if (_attendanceMode != targetMode) {
+      setState(() {
+        _attendanceMode = targetMode;
+        if (_availableModes.isNotEmpty) {
+          _selectedMode = _availableModes.firstWhere(
+            (m) => m['key'] == targetMode,
+            orElse: () => _availableModes.first,
+          );
         }
-      } catch (_) {}
+      });
+      debugPrint(
+        '⏰ Auto-selected shift mode: $_attendanceMode at ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+      );
     }
   }
 
   void _startScheduleCheck() {
     _scheduleCheckTimer?.cancel();
-    _scheduleCheckTimer = Timer.periodic(const Duration(minutes: 5), (_) {
-      if (mounted) _autoSelectCurrentShift();
+    _scheduleCheckTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) {
+        _autoSelectCurrentShift();
+        _attendanceService.autoCloseOpenSessions(
+          organizationId: widget.organizationId,
+          organizationTimezone: _organizationTimezone,
+        );
+      }
     });
   }
 

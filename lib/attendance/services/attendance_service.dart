@@ -534,10 +534,20 @@ class AttendanceService {
         return AttendanceRecord.fromJson(existingRecord);
       }
 
-      // Calculate work duration
-      final checkInTime = DateTime.parse(existingRecord['actual_check_in']);
-      final diffSeconds = nowUtc.difference(checkInTime).inSeconds;
-      final workDuration = diffSeconds < 60 ? (diffSeconds > 0 ? 1 : 0) : (diffSeconds / 60).round();
+      // Calculate work duration in minutes
+      int workDuration = 0;
+      final checkInStr = existingRecord['actual_check_in'] as String?;
+      if (checkInStr != null && checkInStr.isNotEmpty) {
+        try {
+          final checkInTime = DateTime.parse(checkInStr).toUtc();
+          final diffMinutes = nowUtc.difference(checkInTime).inMinutes;
+          workDuration = diffMinutes > 0
+              ? diffMinutes
+              : (nowUtc.difference(checkInTime).inSeconds > 0 ? 1 : 0);
+        } catch (e) {
+          debugPrint('⚠️ Error parsing checkInTime for work duration: $e');
+        }
+      }
 
       // --- [CALCULATION START] ---
       int earlyLeaveMinutes = 0;
@@ -636,6 +646,146 @@ class AttendanceService {
       debugPrint('❌ AttendanceService: Online Check-Out failed: $e');
       throw Exception('Failed to check out: $e');
     }
+  }
+
+  /// Auto-close any open attendance records for today (or earlier)
+  /// when time passes scheduled exit threshold slots:
+  /// - 11:40 (Istirahat 1)
+  /// - 15:00 (Istirahat 2)
+  /// - 16:30 (Pulang / Selesai Kerja)
+  Future<int> autoCloseOpenSessions({
+    required int organizationId,
+    String organizationTimezone = 'Asia/Jakarta',
+  }) async {
+    int closedCount = 0;
+    try {
+      final nowUtc = DateTime.now().toUtc();
+      final nowOrg = TimezoneHelper.convertUtcToOrgTimezone(
+        nowUtc,
+        organizationTimezone,
+      );
+
+      final openRecords = await _supabase
+          .from('attendance_records')
+          .select('''
+            id,
+            attendance_date,
+            actual_check_in,
+            actual_check_out,
+            organization_member_id,
+            organization_members!inner(organization_id)
+          ''')
+          .eq('organization_members.organization_id', organizationId)
+          .isFilter('actual_check_out', null);
+
+      if (openRecords == null || (openRecords as List).isEmpty) {
+        return 0;
+      }
+
+      for (final rec in openRecords as List<dynamic>) {
+        final record = rec as Map<String, dynamic>;
+        final checkInStr = record['actual_check_in'] as String?;
+        if (checkInStr == null || checkInStr.isEmpty) continue;
+
+        try {
+          final checkInUtc = DateTime.parse(checkInStr).toUtc();
+          final checkInOrg = TimezoneHelper.convertUtcToOrgTimezone(
+            checkInUtc,
+            organizationTimezone,
+          );
+
+          final checkInMinutes = checkInOrg.hour * 60 + checkInOrg.minute;
+          final currentMinutes = nowOrg.hour * 60 + nowOrg.minute;
+
+          // Determine target auto check-out hour and minute in org timezone
+          int? targetHour;
+          int? targetMinute;
+
+          // Thresholds: 11:40 (700m), 15:00 (900m), 16:30 (990m)
+          if (currentMinutes >= 990) {
+            // Past 16:30 (Pulang)
+            if (checkInMinutes < 700) {
+              targetHour = 11;
+              targetMinute = 40;
+            } else if (checkInMinutes < 900) {
+              targetHour = 15;
+              targetMinute = 0;
+            } else {
+              targetHour = 16;
+              targetMinute = 30;
+            }
+          } else if (currentMinutes >= 900) {
+            // Past 15:00 (Istirahat 2)
+            if (checkInMinutes < 700) {
+              targetHour = 11;
+              targetMinute = 40;
+            } else if (checkInMinutes < 900) {
+              targetHour = 15;
+              targetMinute = 0;
+            }
+          } else if (currentMinutes >= 700) {
+            // Past 11:40 (Istirahat 1)
+            if (checkInMinutes < 700) {
+              targetHour = 11;
+              targetMinute = 40;
+            }
+          }
+
+          if (targetHour != null && targetMinute != null) {
+            final targetExitOrg = DateTime.utc(
+              checkInOrg.year,
+              checkInOrg.month,
+              checkInOrg.day,
+              targetHour,
+              targetMinute,
+            );
+
+            final targetExitUtc = TimezoneHelper.convertOrgTimezoneToUtc(
+              targetExitOrg,
+              organizationTimezone,
+            );
+
+            final diffMinutes = targetExitUtc.difference(checkInUtc).inMinutes;
+            final workDuration = diffMinutes > 0 ? diffMinutes : 1;
+
+            final updateData = {
+              'actual_check_out': TimezoneHelper.formatUtcForSupabase(
+                targetExitUtc,
+              ),
+              'check_out_method': 'auto_session_exit',
+              'work_duration_minutes': workDuration,
+              'updated_at': TimezoneHelper.formatUtcForSupabase(nowUtc),
+            };
+
+            await _supabase
+                .from('attendance_records')
+                .update(updateData)
+                .eq('id', record['id']);
+
+            await _createAttendanceLog(
+              organizationMemberId: record['organization_member_id'] as int,
+              attendanceRecordId: record['id'] as int,
+              eventType: 'check_out',
+              method: 'auto_session_exit',
+              rawData: {
+                'auto_closed': true,
+                'threshold': '$targetHour:$targetMinute',
+              },
+            );
+
+            closedCount++;
+            debugPrint(
+              '⏰ Auto-closed open session for member ${record['organization_member_id']} at $targetHour:$targetMinute',
+            );
+          }
+        } catch (e) {
+          debugPrint('Error auto-closing record ${record['id']}: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error in autoCloseOpenSessions: $e');
+    }
+    return closedCount;
   }
 
   // Break Out (Start Break)

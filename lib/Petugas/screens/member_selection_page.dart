@@ -154,6 +154,13 @@ class _MemberSelectionPageState extends State<MemberSelectionPage> {
             _members.addAll(newMembers);
           }
 
+          // Sort A - Z by member name
+          _members.sort((a, b) {
+            final nameA = _getMemberName(a).toLowerCase();
+            final nameB = _getMemberName(b).toLowerCase();
+            return nameA.compareTo(nameB);
+          });
+
           _isLoading = false;
           _isLoadingMore = false;
           _hasMore = newMembers.length == _pageSize;

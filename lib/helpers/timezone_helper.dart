@@ -361,4 +361,39 @@ class TimezoneHelper {
       return 'UTC$sign$hours:$minutes';
     }
   }
+
+  /// Format work duration minutes into human readable text (e.g. "4 jam 10 menit" or "4 jam")
+  /// Calculates dynamically from ISO timestamps if minutes is 0 or null.
+  static String formatWorkDuration(
+    int? minutes, {
+    String? checkInStr,
+    String? checkOutStr,
+  }) {
+    int mins = minutes ?? 0;
+
+    // Fallback: calculate on-the-fly from timestamps if stored minutes is 0 or null
+    if (mins <= 0 && checkInStr != null && checkInStr.isNotEmpty) {
+      try {
+        final inTime = DateTime.parse(checkInStr).toUtc();
+        final outTime = (checkOutStr != null && checkOutStr.isNotEmpty)
+            ? DateTime.parse(checkOutStr).toUtc()
+            : DateTime.now().toUtc();
+        final diff = outTime.difference(inTime).inMinutes;
+        mins = diff > 0 ? diff : 0;
+      } catch (_) {}
+    }
+
+    if (mins <= 0) return '0 jam';
+
+    final hours = mins ~/ 60;
+    final remMinutes = mins % 60;
+
+    if (hours > 0 && remMinutes > 0) {
+      return '$hours jam $remMinutes menit';
+    } else if (hours > 0) {
+      return '$hours jam';
+    } else {
+      return '$remMinutes menit';
+    }
+  }
 }

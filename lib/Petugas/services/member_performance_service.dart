@@ -1730,19 +1730,8 @@ class MemberPerformanceService {
       return currentPhoto;
     }
 
-    final memberId = member['id'] as int?;
+    final memberId = member['id'];
     if (memberId == null) return null;
-
-    // Check if member has face biometric data
-    final bioData = member['biometric_data'];
-    bool hasFaceBio = false;
-    if (bioData is List) {
-      hasFaceBio = bioData.any((b) => b['biometric_type'] == 'face_recognition');
-    } else if (bioData is Map) {
-      hasFaceBio = bioData['biometric_type'] == 'face_recognition';
-    }
-
-    if (!hasFaceBio) return null;
 
     try {
       String? frontFilePath;
@@ -1759,26 +1748,36 @@ class MemberPerformanceService {
         }
       } catch (_) {}
 
-      // 2. Try folder by First Name or Display Name (e.g., "Erlangga") if not found by ID
+      // 2. Try candidate name folders (e.g., "Erlangga", "Raja Bug", "Raja") if not found by ID
       if (frontFilePath == null) {
         final firstName = (profile?['first_name'] as String?)?.trim();
+        final lastName = (profile?['last_name'] as String?)?.trim();
         final displayName = (profile?['display_name'] as String?)?.trim();
-        final folderName = (firstName?.isNotEmpty == true)
-            ? firstName!
-            : (displayName?.isNotEmpty == true ? displayName!.split(' ').first : null);
 
-        if (folderName != null) {
+        final candidateFolders = <String>[];
+        if (firstName != null && firstName.isNotEmpty) candidateFolders.add(firstName);
+        if (displayName != null && displayName.isNotEmpty) {
+          if (!candidateFolders.contains(displayName)) candidateFolders.add(displayName);
+          final firstWord = displayName.split(' ').first;
+          if (!candidateFolders.contains(firstWord)) candidateFolders.add(firstWord);
+        }
+        if (lastName != null && lastName.isNotEmpty && !candidateFolders.contains(lastName)) {
+          candidateFolders.add(lastName);
+        }
+
+        for (final folderName in candidateFolders) {
           try {
             final nameFolderFiles = await _supabase.storage.from('face-templates').list(path: folderName);
             if (nameFolderFiles.isNotEmpty) {
               final frontFile = nameFolderFiles.firstWhere(
-                (f) => f.name.contains('_front_') && f.name.contains('${memberId}_'),
+                (f) => f.name.contains('_front_') && (f.name.contains('${memberId}_') || f.name.startsWith('${memberId}_')),
                 orElse: () => nameFolderFiles.firstWhere(
                   (f) => f.name.contains('_front_'),
                   orElse: () => nameFolderFiles.first,
                 ),
               );
               frontFilePath = '$folderName/${frontFile.name}';
+              break;
             }
           } catch (_) {}
         }

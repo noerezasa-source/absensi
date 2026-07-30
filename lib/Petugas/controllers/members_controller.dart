@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/member_performance_service.dart';
 
 class MembersController extends GetxController {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -51,7 +52,22 @@ class MembersController extends GetxController {
     searchQuery.value = query;
   }
   
-  // Get filtered members based on class filter and search query
+  String _getMemberName(Map<String, dynamic> member) {
+    final profile = member['user_profiles'] as Map<String, dynamic>?;
+    if (profile != null) {
+      final displayName = (profile['display_name'] as String?)?.trim();
+      if (displayName != null && displayName.isNotEmpty) return displayName;
+      final firstName = (profile['first_name'] as String?)?.trim() ?? '';
+      final lastName = (profile['last_name'] as String?)?.trim() ?? '';
+      final fullName = '$firstName $lastName'.trim();
+      if (fullName.isNotEmpty) return fullName;
+    }
+    final empId = (member['employee_id'] as String?)?.trim();
+    if (empId != null && empId.isNotEmpty) return empId;
+    return 'Member ${member['id']}';
+  }
+
+  // Get filtered members based on class filter and search query (Sorted A-Z)
   List<Map<String, dynamic>> get filteredMembers {
     var members = organizationMembers.toList();
     
@@ -80,6 +96,9 @@ class MembersController extends GetxController {
       }).toList();
     }
     
+    // Sort A - Z by member name
+    members.sort((a, b) => _getMemberName(a).toLowerCase().compareTo(_getMemberName(b).toLowerCase()));
+
     return members;
   }
   
@@ -91,6 +110,7 @@ class MembersController extends GetxController {
       if (cachedStr != null) {
         final cachedList = List<Map<String, dynamic>>.from(jsonDecode(cachedStr));
         if (cachedList.isNotEmpty) {
+          cachedList.sort((a, b) => _getMemberName(a).toLowerCase().compareTo(_getMemberName(b).toLowerCase()));
           organizationMembers.value = cachedList;
           isLoading.value = false;
           return true;
@@ -145,6 +165,8 @@ class MembersController extends GetxController {
           .order('id');
       
       final list = List<Map<String, dynamic>>.from(response);
+      final perfService = MemberPerformanceService();
+
       for (final member in list) {
         if (member.containsKey('departments!organization_members_department_id_fkey')) {
           member['departments'] = member['departments!organization_members_department_id_fkey'];
@@ -159,8 +181,18 @@ class MembersController extends GetxController {
             member['rfid_card_id'] = activeCard['id'];
           }
         }
+
+        // Auto-resolve missing profile photo from Storage face-templates bucket if missing
+        final profile = member['user_profiles'] as Map<String, dynamic>?;
+        final photo = profile?['profile_photo_url'] as String? ?? member['profile_photo_url'] as String?;
+        if (photo == null || photo.trim().isEmpty) {
+          await perfService.autoResolveFacePhoto(member);
+        }
       }
       
+      // Sort A - Z by member name
+      list.sort((a, b) => _getMemberName(a).toLowerCase().compareTo(_getMemberName(b).toLowerCase()));
+
       // Update reactive variable with fresh data
       organizationMembers.value = list;
       

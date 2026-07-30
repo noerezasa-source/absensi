@@ -7,6 +7,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'isolate_inference_service.dart';
 import '../../helpers/timezone_helper.dart';
+import '../../services/yolo_face_detector_service.dart';
 
 class FaceRecognitionTFLiteService {
   late final FaceDetector _faceDetector;
@@ -21,6 +22,8 @@ class FaceRecognitionTFLiteService {
   static const double minFaceQualityScore = 0.50;
   static const double minEyeOpenProbability = 0.50;
   static const double maxHeadRotation = 45.0; // Allow side gaze up to 45 degrees
+
+  final YoloFaceDetectorService _yoloDetector = YoloFaceDetectorService();
 
   FaceRecognitionTFLiteService() {
     _faceDetector = FaceDetector(
@@ -41,8 +44,9 @@ class FaceRecognitionTFLiteService {
     try {
       debugPrint('=== Initializing Face Recognition Service ===');
       await _inferenceService.initialize();
+      await _yoloDetector.initialize();
       debugPrint(
-        '✅ Face Recognition Service initialized (matching wajah project)',
+        '✅ Face Recognition Service initialized (YOLOv8-Nano + MobileFaceNet)',
       );
       _isInitialized = true;
     } catch (e) {
@@ -57,6 +61,12 @@ class FaceRecognitionTFLiteService {
   }
 
   Future<List<Face>> detectFacesFromInputImage(InputImage inputImage) async {
+    try {
+      final faces = await _yoloDetector.detectFacesFromInputImage(inputImage);
+      if (faces.isNotEmpty) return faces;
+    } catch (e) {
+      debugPrint('⚠️ YOLO detector fallback to default: $e');
+    }
     return await _faceDetector.processImage(inputImage);
   }
 

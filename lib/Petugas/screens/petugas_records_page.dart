@@ -231,6 +231,12 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
       final formattedStartDate = DateFormat('yyyy-MM-dd').format(startDate);
       final formattedEndDate = DateFormat('yyyy-MM-dd').format(endDate);
 
+      try {
+        await _attendanceService.autoCloseOpenSessions(
+          organizationId: organizationId,
+        );
+      } catch (_) {}
+
       final response = await supabase
           .from('attendance_records')
           .select('''
@@ -1481,45 +1487,114 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildPhotoCircle(memberPhoto, isPresent, size: 50),
-                const SizedBox(width: 16),
+                _buildPhotoCircle(memberPhoto, isPresent, size: 48),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        memberName,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isDarkMode
-                              ? Colors.white
-                              : Colors.black87,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              memberName,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: widget.isDarkMode
+                                    ? Colors.white
+                                    : Colors.black87,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _buildStatusPill(status, isLate, lateMinutes),
+                        ],
                       ),
                       const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 4,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.login_rounded,
+                                size: 13,
+                                color: Color(0xFF10B981),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                checkInTime != null
+                                    ? _formatTime(checkInTime)
+                                    : '--:--',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: widget.isDarkMode
+                                      ? Colors.white70
+                                      : Colors.black87,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.logout_rounded,
+                                size: 13,
+                                color: checkOutTime != null
+                                    ? const Color(0xFFEF4444)
+                                    : Colors.grey,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                checkOutTime != null
+                                    ? _formatTime(checkOutTime)
+                                    : 'Belum Keluar',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: checkOutTime != null
+                                      ? (widget.isDarkMode
+                                          ? Colors.white70
+                                          : Colors.black87)
+                                      : Colors.grey,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       Row(
                         children: [
                           Icon(
-                            Icons.access_time,
-                            size: 14,
+                            Icons.timer_outlined,
+                            size: 13,
                             color: widget.isDarkMode
-                                ? Colors.white54
-                                : Colors.grey.shade500,
+                                ? Colors.white38
+                                : Colors.grey.shade600,
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            checkInTime != null
-                                ? _formatTime(checkInTime)
-                                : '--:--',
+                            TimezoneHelper.formatWorkDuration(
+                              record['work_duration_minutes'] as int?,
+                              checkInStr: checkInTime,
+                              checkOutStr: checkOutTime,
+                            ),
                             style: TextStyle(
-                              fontSize: 13,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
                               color: widget.isDarkMode
                                   ? Colors.white54
-                                  : Colors.grey.shade500,
-                              fontWeight: FontWeight.w500,
+                                  : Colors.grey.shade600,
                             ),
                           ),
                         ],
@@ -1527,7 +1602,6 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                     ],
                   ),
                 ),
-                _buildStatusPill(status, isLate, lateMinutes),
               ],
             ),
           ),
@@ -1944,13 +2018,17 @@ class _PetugasRecordsPageState extends State<PetugasRecordsPage> {
                               lateMinutes != null ||
                               earlyLeaveMinutes != null) ...[
                             const Divider(height: 20),
-                            if (workDurationMinutes != null)
+                            if (workDurationMinutes != null || checkInTime != null)
                               _buildDetailRow(
                                 Icons.work,
                                 AppLanguage.tr(
                                   'Petugas.attendance.work_duration',
                                 ),
-                                '${(workDurationMinutes / 60).toStringAsFixed(1)} ${AppLanguage.tr('Petugas.attendance.hours')}',
+                                TimezoneHelper.formatWorkDuration(
+                                  workDurationMinutes,
+                                  checkInStr: checkInTime,
+                                  checkOutStr: checkOutTime,
+                                ),
                               ),
                             if (lateMinutes != null && lateMinutes > 0)
                               _buildDetailRow(

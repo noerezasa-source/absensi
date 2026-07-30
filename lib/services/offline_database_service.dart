@@ -1502,7 +1502,7 @@ class OfflineDatabaseService {
         where: 'organization_id = ? AND is_active = 1',
         whereArgs: [organizationId],
       );
-      return results.map((row) {
+      final list = results.map((row) {
         return {
           'id': row['organization_member_id'],
           'employee_id': row['employee_id'],
@@ -1515,6 +1515,16 @@ class OfflineDatabaseService {
           },
         };
       }).toList();
+
+      list.sort((a, b) {
+        final profileA = a['user_profiles'] as Map<String, dynamic>? ?? {};
+        final profileB = b['user_profiles'] as Map<String, dynamic>? ?? {};
+        final nameA = (profileA['display_name'] ?? profileA['first_name'] ?? '').toString().toLowerCase();
+        final nameB = (profileB['display_name'] ?? profileB['first_name'] ?? '').toString().toLowerCase();
+        return nameA.compareTo(nameB);
+      });
+
+      return list;
     } catch (e) {
       debugPrint('❌ Error getting cached members: $e');
       return null;

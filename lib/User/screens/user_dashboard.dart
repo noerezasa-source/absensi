@@ -1265,13 +1265,38 @@ class _UserDashboardPageState extends State<UserDashboardPage>
                               AppLanguage.tr('User.dashboard.detail_late'),
                               '${event['late_minutes']} ${AppLanguage.tr('User.dashboard.detail_minutes')}',
                             ),
-                          if (event['work_duration_minutes'] != null)
+                          if (event['actual_check_in'] != null)
+                            _buildDetailRow(
+                              Icons.login_rounded,
+                              'Jam Masuk',
+                              TimezoneHelper.formatToLocalTime(
+                                event['actual_check_in'] as String?,
+                                _userTimezone,
+                                format: 'HH:mm:ss',
+                              ),
+                            ),
+                          if (event['actual_check_out'] != null)
+                            _buildDetailRow(
+                              Icons.logout_rounded,
+                              'Jam Keluar',
+                              TimezoneHelper.formatToLocalTime(
+                                event['actual_check_out'] as String?,
+                                _userTimezone,
+                                format: 'HH:mm:ss',
+                              ),
+                            ),
+                          if (event['work_duration_minutes'] != null ||
+                              event['actual_check_in'] != null)
                             _buildDetailRow(
                               Icons.work,
                               AppLanguage.tr(
                                 'User.dashboard.detail_work_duration',
                               ),
-                              '${(event['work_duration_minutes'] / 60).toStringAsFixed(1)} ${AppLanguage.tr('User.dashboard.detail_hours')}',
+                              TimezoneHelper.formatWorkDuration(
+                                event['work_duration_minutes'] as int?,
+                                checkInStr: event['actual_check_in'] as String?,
+                                checkOutStr: event['actual_check_out'] as String?,
+                              ),
                             ),
                         ],
                       ),

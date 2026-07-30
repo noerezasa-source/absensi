@@ -18,6 +18,7 @@ import '../../attendance/services/biometric_service.dart';
 import '../../services/supabase_storage_service.dart';
 
 import '../../helpers/rfid_mode_helper.dart';
+import '../../helpers/timezone_helper.dart';
 import '../widgets/petugas_bottom_nav.dart';
 import '../controllers/members_controller.dart';
 
@@ -1259,6 +1260,29 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
                         ],
                       ],
                     ),
+                    if (activity['actual_check_in'] != null || activity['actual_check_out'] != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Masuk: ${activity['actual_check_in'] != null ? TimezoneHelper.formatToLocalTime(activity['actual_check_in'] as String?, 'Asia/Jakarta', format: 'HH:mm') : '--:--'}  •  Keluar: ${activity['actual_check_out'] != null ? TimezoneHelper.formatToLocalTime(activity['actual_check_out'] as String?, 'Asia/Jakarta', format: 'HH:mm') : 'Belum Keluar'}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: widget.isDarkMode
+                              ? Colors.white70
+                              : Colors.grey.shade700,
+                        ),
+                      ),
+                      Text(
+                        'Durasi: ${TimezoneHelper.formatWorkDuration(activity['work_duration_minutes'] as int?, checkInStr: activity['actual_check_in'] as String?, checkOutStr: activity['actual_check_out'] as String?)}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: widget.isDarkMode
+                              ? const Color(0xFFA78BFA)
+                              : const Color(0xFF6D28D9),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1622,6 +1646,13 @@ class _PetugasMembersPageState extends State<PetugasMembersPage>
         return deptName == _selectedDepartment;
       }).toList();
     }
+
+    // Always sort filtered members A - Z by member name
+    filteredMembers.sort((a, b) {
+      final nameA = _getMemberName(a).toLowerCase();
+      final nameB = _getMemberName(b).toLowerCase();
+      return nameA.compareTo(nameB);
+    });
 
     final isFiltering =
         _searchController.text.isNotEmpty ||
